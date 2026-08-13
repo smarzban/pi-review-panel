@@ -1,12 +1,14 @@
 ---
 name: pi-review
-description: "Launch Pi and have it run Review panel on a PR or local change. After the report, implement agreed findings in the same Pi session and verify. Use when asked to review a PR, review this diff, run review panel, or /pi-review. In Herdr (HERDR_ENV=1) you MUST open a sibling pane and start Pi there. Do not call review_panel yourself."
+description: "Launch Pi and have it run Review panel on a PR or local change. Pi only reviews and re-reviews. You or the builder implement agreed findings, then ask the same Pi session to verify. Use when asked to review a PR, review this diff, run review panel, or /pi-review. In Herdr (HERDR_ENV=1) you MUST open a sibling pane and start Pi there. Do not call review_panel yourself."
 ---
 
 # Pi-review: ask Pi to run Review panel
 
 You do not run `review_panel`. You start **Pi** and ask it to use its `review-panel` skill.
-Pi owns the tool. You judge keep vs skip. The owner merges.
+Pi owns the tool. Pi only reviews and re-reviews. It never implements.
+You judge keep vs skip. The builder (you if you are the implementer, otherwise the agent
+that wrote the change) implements. The owner merges.
 
 `pi` must be on PATH. Review panel must be installed in Pi (`pi list` shows `pi-review-panel`).
 If either is missing, stop and say so.
@@ -37,7 +39,7 @@ action: review
 base: <base>
 head: <head>
 If this is a PR, put the acceptance criteria (if any) in scopingNote.
-Do not implement. Return the report, coverage, and your keep/skip recommendation.
+Do not implement. You only review. Return the report, coverage, and your keep/skip recommendation.
 ```
 
 ## 3. Herdr path (required when HERDR_ENV=1)
@@ -84,22 +86,30 @@ Read the report. Open the code behind anything you might keep.
 If you kept nothing, tell the owner it looks ready to land. Name coverage and dead seats.
 
 If you kept findings and the user asked for a review that includes fixing (or asked to fix after
-the report), send a **second prompt to the same Pi session**:
+the report):
+
+1. **The builder implements.** That is you if you wrote the change, otherwise hand the keep
+   list to the implementer agent. Do not ask Pi to edit, commit, or fix.
+2. Commit so `head` is a new OID. Uncommitted work is invisible to verify.
+3. Send a **verify prompt to the same Pi session**. Pi reviews only:
 
 ```
-Implement only these kept findings: <ids>.
-Commit so head is a new OID. Uncommitted work is invisible to verify.
-Then call review_panel action verify with priorRunId, the new head, and keptFindingIds.
+Do not implement. Call review_panel action verify.
+Repository: <absolute repo path>
+priorRunId: <run id>
+head: <new HEAD>
+keptFindingIds: <ids>
 Do not start a new discovery panel. Stay in this session.
 ```
 
-Herdr: `herdr agent prompt review-panel "<second prompt>" --wait --timeout 900000`
-Not-Herdr: `pi -p --session-id review-panel --approve "<second prompt>"`
+Herdr: `herdr agent prompt review-panel "<verify prompt>" --wait --timeout 900000`
+Not-Herdr: `pi -p --session-id review-panel --approve "<verify prompt>"`
 
 ## 6. Stop
 
-At most three model passes, then ask the owner. Discovery is pass 1. Fix + verify is pass 2.
-A dirty verify may take one more fix + verify (pass 3). Then stop. Never review-fix-review-fix.
+At most three model passes, then ask the owner. Discovery is pass 1. Builder fix + Pi
+verify is pass 2. A dirty verify may take one more builder fix + Pi verify (pass 3).
+Then stop. Never review-fix-review-fix. Pi never becomes the fixer.
 
 Recommend landing only after a clean verify (or a discovery report with nothing you would keep).
 Name who voted, what you kept or skipped, and lost coverage.
