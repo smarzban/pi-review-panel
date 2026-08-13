@@ -4,9 +4,7 @@ A review panel for pi coding agents. Configured reviewer seats run over one pinn
 change and record evidence under `.review-panel/`. The tool does not compute a
 merge decision. The owner remains the merge gate.
 
-**Status:** 0.1.0. Diagnose, review, and verify are the public path. Extracted
-from the archived `pi-empanel` review surface; the unused repair loop was left
-behind.
+**Status:** 0.1.0. Diagnose, review, and verify are the public path.
 
 ## Supported path
 

@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 function setup(config: unknown): { repoDir: string; configPath: string } {
-	root = mkdtempSync(path.join(tmpdir(), "empanel-readiness-"));
+	root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-"));
 	const repoDir = path.join(root, "repo");
 	const configPath = path.join(root, "config.json");
 	mkdirSync(repoDir, { recursive: true });
@@ -179,7 +179,7 @@ describe("readiness diagnostic", () => {
 	});
 
 	it("reports the configuration failure alone and does not inspect a model", async () => {
-		root = mkdtempSync(path.join(tmpdir(), "empanel-readiness-config-"));
+		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-config-"));
 		const repoDir = path.join(root, "repo");
 		mkdirSync(repoDir, { recursive: true });
 		let modelChecks = 0;

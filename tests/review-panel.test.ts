@@ -41,7 +41,7 @@ function makeRepository(root: string): string {
 function withRepository(
 	test: (repository: string) => Promise<void>,
 ): Promise<void> {
-	const root = mkdtempSync(path.join(tmpdir(), "empanel-review-tool-"));
+	const root = mkdtempSync(path.join(tmpdir(), "review-panel-tool-"));
 	return test(makeRepository(root)).finally(() => {
 		rmSync(root, { recursive: true, force: true });
 	});
@@ -57,7 +57,7 @@ function toolWith(
 ): ReviewTool {
 	return createReviewPanelTool({
 		env: {},
-		home: "/tmp/empanel-review-home",
+		home: "/tmp/review-panel-home",
 		diagnose: async () => ({ ready: true, rows: [] }),
 		loadConfig: () => sampleConfig,
 		...overrides,
