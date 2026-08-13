@@ -728,6 +728,7 @@ function writeVerifyRecord(
 	repository: string,
 	runId: string,
 	resolvedIds: string[],
+	priorRunId = "review-1",
 ): void {
 	const recordPath = path.join(repository, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
@@ -735,7 +736,7 @@ function writeVerifyRecord(
 		path.join(recordPath, "verification.json"),
 		`${JSON.stringify(
 			{
-				priorRunId: "review-1",
+				priorRunId,
 				keptFindingIds: resolvedIds,
 				outcomes: [
 					{
@@ -926,6 +927,39 @@ describe("review_panel comment", () => {
 			expect(body).toContain("- F-2 nit");
 			expect(body).not.toContain("F-1");
 			expect(response.content[0]?.text).toContain("updated");
+		});
+	});
+
+	it("refuses a verify run that belongs to a different review", async () => {
+		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "review-1", {
+				findings: [{ id: "F-1", severity: "high", title: "auth bypass" }],
+			});
+			writeVerifyRecord(repository, "verify-other", ["F-1"], "review-other");
+			let posted = 0;
+			const tool = toolWith({
+				postComment: () => {
+					posted += 1;
+					throw new Error("postComment must not run");
+				},
+			});
+			await expect(
+				tool.execute(
+					"tool-call",
+					{
+						action: "comment",
+						repository,
+						priorRunId: "review-1",
+						verifyRunId: "verify-other",
+						ownerApproved: true,
+						pr: 29,
+					},
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/priorRunId/);
+			expect(posted).toBe(0);
 		});
 	});
 });

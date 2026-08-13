@@ -338,6 +338,7 @@ function executeComment(
 			repoDir,
 			args.verifyRunId,
 			accounted.fixed.map((row) => row.id),
+			facts.run.runId,
 		);
 	}
 	const body = assembleCloseoutComment({

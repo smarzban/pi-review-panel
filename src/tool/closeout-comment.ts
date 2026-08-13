@@ -56,12 +56,24 @@ function shortOid(oid: string): string {
 	return oid.slice(0, OID_DISPLAY_LENGTH);
 }
 
+/** Flatten injected headings, mentions, and HTML so card fields stay one line. */
+export function sanitizeCardText(text: string): string {
+	return text
+		.replace(/[\r\n\u2028\u2029]+/g, " ")
+		.replace(/<!--[\s\S]*?-->/g, " ")
+		.replace(/<!--/g, "")
+		.replace(/@/g, "(at)")
+		.replace(/(^|\s)#{1,}/g, "$1")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
 function requireReason(id: string, reason: string): string {
-	const trimmed = reason.trim();
-	if (trimmed === "") {
+	const sanitized = sanitizeCardText(reason);
+	if (sanitized === "") {
 		throw new Error(`dismissed ${id} needs a reason`);
 	}
-	return trimmed;
+	return sanitized;
 }
 
 /** Presentation-only close-out card. Counts and lists, no merge claim. */
@@ -87,14 +99,14 @@ export function renderCloseoutComment(input: CloseoutCommentInput): string {
 		lines.push("", "### Dismissed");
 		for (const row of input.dismissed) {
 			lines.push(
-				`- ${row.id} ${row.title} — ${requireReason(row.id, row.reason)}`,
+				`- ${row.id} ${sanitizeCardText(row.title)} — ${requireReason(row.id, row.reason)}`,
 			);
 		}
 	}
 	if (input.lowAdvisory.length > 0) {
 		lines.push("", "### Low / advisory (not kept)");
 		for (const row of input.lowAdvisory) {
-			lines.push(`- ${row.id} ${row.title}`);
+			lines.push(`- ${row.id} ${sanitizeCardText(row.title)}`);
 		}
 	}
 	return lines.join("\n");

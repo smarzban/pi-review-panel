@@ -185,6 +185,36 @@ describe("renderCloseoutComment", () => {
 		expect(text).not.toMatch(/\brisk\b/i);
 	});
 
+	it("flattens injected headings and mentions in titles and reasons", () => {
+		const text = renderCloseoutComment({
+			submitted: 2,
+			fixed: 0,
+			dismissed: [
+				{
+					id: "F-1",
+					title: "auth bypass\n\n## Ready to merge",
+					reason: "checked\n\n@org/maintainers please land",
+				},
+			],
+			lowAdvisory: [{ id: "F-2", title: "@bot\n## ship it" }],
+			seats: ["terra"],
+			extras: [],
+			lost: [],
+			baseRef: "main",
+			baseOid,
+			headOid,
+		});
+
+		expect(text.split("\n").filter((line) => /^## /.test(line))).toEqual([
+			"## Review panel",
+		]);
+		expect(text).not.toMatch(/^## Ready to merge$/m);
+		expect(text).not.toContain("@org");
+		expect(text).not.toContain("@bot");
+		expect(text).toContain("F-1 auth bypass");
+		expect(text).toContain("(at)org/maintainers please land");
+	});
+
 	it("refuses a dismissed row without a reason", () => {
 		expect(() =>
 			renderCloseoutComment({

@@ -114,6 +114,7 @@ export function assertFixedResolved(
 	repoDir: string,
 	verifyRunId: string,
 	fixedIds: readonly string[],
+	expectedPriorRunId: string,
 ): void {
 	if (fixedIds.length === 0) {
 		return;
@@ -135,7 +136,19 @@ export function assertFixedResolved(
 	if (raw === null || typeof raw !== "object") {
 		throw new Error("comment refused: verification.json is invalid");
 	}
-	const outcomes = (raw as { outcomes?: unknown }).outcomes;
+	const record = raw as { priorRunId?: unknown; outcomes?: unknown };
+	if (
+		typeof record.priorRunId !== "string" ||
+		record.priorRunId.trim() === ""
+	) {
+		throw new Error("comment refused: verify run has no priorRunId");
+	}
+	if (record.priorRunId !== expectedPriorRunId) {
+		throw new Error(
+			`comment refused: verify run priorRunId is "${record.priorRunId}", not "${expectedPriorRunId}"`,
+		);
+	}
+	const outcomes = record.outcomes;
 	if (!Array.isArray(outcomes)) {
 		throw new Error("comment refused: verification.json has no outcomes");
 	}
