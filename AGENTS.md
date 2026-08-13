@@ -14,15 +14,25 @@ frozen one-line pointer and says so in-file.
 
 ## Project overview
 
-**pi-review-panel** runs multi-model code review as a pi package. A run fans N reviewer *seats* —
-each an exact `provider/model` paired with a review *lens* — over one pinned snapshot of the
-change, as read-only `pi -p` subprocesses that can report findings only through a structured
+**pi-review-panel** runs multi-model code review as a pi package. The public tool is `review_panel`
+(`diagnose` / `review` / `verify`). The shipped skill is `review-panel`. A run fans N reviewer
+*seats* — each an exact `provider/model` paired with a review *lens* — over one pinned snapshot of
+the change, as read-only `pi -p` subprocesses that can report findings only through a structured
 `submit_findings` channel. Seat identity is owner authority: an outside-repository roster config
-selects exact `provider/model` rows and package-owned lens prompts by name; the calling agent
-chooses only among declared names. The output is a presentation-only report: severity-ordered,
-seat-attributed, with seat failures tallied as lost coverage. **The tool never judges.** There is
-no verdict, no agreement arithmetic, and no review-derived semantic stop signal: agents judge,
-and the human is the merge gate.
+(`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
+rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
+Runs record under `<repo>/.review-panel/runs/`. Verify does not read predecessor `.empanel/runs/`
+trees. The output is a presentation-only report: severity-ordered, seat-attributed, with seat
+failures tallied as lost coverage. **The tool never judges.** There is no verdict, no agreement
+arithmetic, and no review-derived semantic stop signal: agents judge, and the human is the merge
+gate.
+
+This tree is the 0.1.0 extract of the live review path from the predecessor `pi-empanel`. There is
+no `src/loop`, no `empanel_review`, and no delete-loop PR to finish. Prompt files under `prompts/`
+have no trailing newline (tests assert that). Extra lenses fire when their trigger matches: `tests`
+means thin or missing coverage including an untested production handoff, not “zero test files”;
+`contracts` means OpenAPI / proto / GraphQL, not app or TOML config. Review seats must name a
+concrete failure and an actual consumer.
 
 ### Review invariants
 
