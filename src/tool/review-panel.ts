@@ -1,0 +1,510 @@
+// biome-ignore format: This import must remain one line for the ts-expect-error directive.
+// @ts-expect-error The initial scaffold has no Node type declarations.
+import { execFileSync } from "node:child_process";
+// biome-ignore format: This import must remain one line for the ts-expect-error directive.
+// @ts-expect-error The initial scaffold has no Node type declarations.
+import { readFileSync, realpathSync } from "node:fs";
+// biome-ignore format: This import must remain one line for the ts-expect-error directive.
+// @ts-expect-error The initial scaffold has no Node type declarations.
+import { homedir } from "node:os";
+// @ts-expect-error The initial scaffold has no Node type declarations.
+import path from "node:path";
+// biome-ignore format: This import must remain one line for the ts-expect-error directive.
+// @ts-expect-error The initial scaffold has no Node type declarations.
+import { env as processEnv } from "node:process";
+
+import { Type } from "typebox";
+import { loadLensTable } from "../config/lenses.js";
+import { type ConfigEnv, loadConfig } from "../config/load.js";
+import { resolvePanel } from "../config/panel.js";
+import {
+	diagnoseReadiness,
+	type ReadinessReport,
+} from "../config/readiness.js";
+import { suggestLenses } from "../run/changeset.js";
+import { discoverPriorRecords } from "../run/prior-records.js";
+import {
+	type RunReviewOptions,
+	type RunReviewResult,
+	resolveCommitOid,
+	runReview,
+} from "../run/run-review.js";
+import {
+	planVerifySeats,
+	type RunVerifyInput,
+	type RunVerifyOptions,
+	type RunVerifyResult,
+	runVerify,
+} from "../run/run-verify.js";
+import type { PlannedSeat, RunConfig, StampedFinding } from "../run/types.js";
+import {
+	compactPanelRoster,
+	progressFromReviewEvent,
+	progressFromVerifyEvent,
+	type ReviewProgressView,
+	renderReadiness,
+	renderReviewProgress,
+	renderReviewResult,
+	renderVerifyResult,
+} from "./review-presentation.js";
+
+const absoluteRepository = Type.String({
+	pattern: "^/",
+	description: "Absolute path to the repository to review.",
+});
+const nonEmpty = Type.String({ minLength: 1 });
+
+/**
+ * Hosts validate before execute. Models often emit array fields as a JSON
+ * string (`"[\"security\"]"`). Accept that string in the declared schema and
+ * coerce it in prepareArguments so the review branch still matches.
+ */
+const stringList = Type.Union([
+	Type.Array(nonEmpty, { minItems: 1 }),
+	Type.String({ minLength: 1 }),
+]);
+
+const parameters = Type.Union([
+	Type.Object(
+		{ action: Type.Literal("diagnose"), repository: absoluteRepository },
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			action: Type.Literal("review"),
+			repository: absoluteRepository,
+			base: nonEmpty,
+			head: nonEmpty,
+			seats: Type.Optional(stringList),
+			lenses: Type.Optional(stringList),
+			scopingNote: Type.Optional(nonEmpty),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			action: Type.Literal("verify"),
+			repository: absoluteRepository,
+			priorRunId: nonEmpty,
+			head: nonEmpty,
+			keptFindingIds: stringList,
+			seats: Type.Optional(stringList),
+			scopingNote: Type.Optional(nonEmpty),
+		},
+		{ additionalProperties: false },
+	),
+	// Hosts validate before execute. Models probe with `{}`; accept it so we
+	// can return copy-paste shapes instead of an anyOf dump.
+	Type.Object({}, { additionalProperties: false }),
+]);
+
+const USAGE =
+	'review_panel needs an action. Never call it with {}. Copy one of: { "action": "diagnose", "repository": "/absolute/path" } | { "action": "review", "repository": "/absolute/path", "base": "main", "head": "HEAD" } | { "action": "verify", "repository": "/absolute/path", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] }';
+
+type ReviewToolArguments = Record<string, unknown>;
+
+type ReviewToolResult = {
+	content: Array<{ type: "text"; text: string }>;
+};
+
+export type ReviewPanelDependencies = {
+	env?: ConfigEnv;
+	home?: string;
+	diagnose?: (input: {
+		repoDir: string;
+		env: ConfigEnv;
+		home: string;
+		mode?: "review-only" | "repair-loop";
+	}) => Promise<ReadinessReport>;
+	loadConfig?: typeof loadConfig;
+	resolvePanel?: typeof resolvePanel;
+	runReview?: (
+		config: RunConfig,
+		options?: RunReviewOptions,
+	) => Promise<RunReviewResult>;
+	resolveCommitOid?: typeof resolveCommitOid;
+	suggestLenses?: typeof suggestLenses;
+	runVerify?: (
+		input: RunVerifyInput,
+		options?: RunVerifyOptions,
+	) => Promise<RunVerifyResult>;
+};
+
+export type ReviewPanelTool = {
+	name: "review_panel";
+	label: string;
+	description: string;
+	parameters: typeof parameters;
+	prepareArguments: (args: unknown) => unknown;
+	execute: (
+		toolCallId: string,
+		params: ReviewToolArguments,
+		signal: AbortSignal | undefined,
+		onUpdate: unknown,
+		context: unknown,
+	) => Promise<ReviewToolResult>;
+};
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.trim().length > 0;
+}
+
+function validateNonEmptyString(raw: unknown, label: string): string {
+	if (!isNonEmptyString(raw)) {
+		throw new Error(`${label} must be a non-empty string`);
+	}
+	return raw;
+}
+
+function coerceStringList(value: unknown): unknown {
+	if (typeof value !== "string") {
+		return value;
+	}
+	const trimmed = value.trim();
+	if (trimmed.startsWith("[")) {
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			return value;
+		}
+	}
+	return trimmed.length > 0 ? [trimmed] : value;
+}
+
+export function prepareReviewArguments(args: unknown): unknown {
+	if (args === null || typeof args !== "object" || Array.isArray(args)) {
+		return args;
+	}
+	const record = args as Record<string, unknown>;
+	const next: Record<string, unknown> = { ...record };
+	for (const key of ["seats", "lenses", "keptFindingIds"] as const) {
+		if (Object.hasOwn(next, key)) {
+			next[key] = coerceStringList(next[key]);
+		}
+	}
+	return next;
+}
+
+function validateStringArray(raw: unknown, label: string): string[] {
+	const coerced = coerceStringList(raw);
+	if (!Array.isArray(coerced) || coerced.length === 0) {
+		throw new Error(`${label} must be a non-empty array of non-empty strings`);
+	}
+	for (const item of coerced) {
+		if (!isNonEmptyString(item)) {
+			throw new Error(`${label} must contain only non-empty strings`);
+		}
+	}
+	return coerced;
+}
+
+function emitProgress(onUpdate: unknown, view: ReviewProgressView): void {
+	if (typeof onUpdate === "function") {
+		(onUpdate as (result: ReviewToolResult) => void)({
+			content: [{ type: "text", text: renderReviewProgress(view) }],
+		});
+	}
+}
+
+function readStampedFindings(recordPath: string): StampedFinding[] | undefined {
+	try {
+		const parsed: unknown = JSON.parse(
+			readFileSync(path.join(recordPath, "findings.json"), "utf8"),
+		);
+		return Array.isArray(parsed) ? (parsed as StampedFinding[]) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function canonicalizeRepository(repository: unknown): string {
+	if (
+		typeof repository !== "string" ||
+		repository.trim() === "" ||
+		!path.isAbsolute(repository)
+	) {
+		throw new Error("repository must be a non-empty absolute path");
+	}
+	let real: string;
+	try {
+		real = realpathSync(repository);
+	} catch (error) {
+		const cause = error instanceof Error ? error.message : String(error);
+		throw new Error(`repository "${repository}" cannot be resolved: ${cause}`);
+	}
+	try {
+		const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+			cwd: real,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return realpathSync(root);
+	} catch {
+		throw new Error(`repository "${repository}" is not a Git repository`);
+	}
+}
+
+export function createReviewPanelTool(
+	deps?: ReviewPanelDependencies,
+): ReviewPanelTool {
+	const diagnose = deps?.diagnose ?? diagnoseReadiness;
+	const load = deps?.loadConfig ?? loadConfig;
+	const panelOf = deps?.resolvePanel ?? resolvePanel;
+	const review = deps?.runReview ?? runReview;
+	const oidOf = deps?.resolveCommitOid ?? resolveCommitOid;
+	const suggest = deps?.suggestLenses ?? suggestLenses;
+	const verify = deps?.runVerify ?? runVerify;
+
+	return {
+		name: "review_panel",
+		label: "Review panel",
+		description:
+			"Diagnose setup, review an explicit base...head change, or verify a fix against a prior run. Never call with {}. Review takes repository, base, and head. The tool writes a report and does not compute a merge decision.",
+		parameters,
+		prepareArguments: prepareReviewArguments,
+		async execute(_toolCallId, args, signal, onUpdate) {
+			const startedAt = Date.now();
+			const runtime = {
+				env: deps?.env ?? processEnv,
+				home: deps?.home ?? homedir(),
+			};
+			if (!isNonEmptyString(args.action)) {
+				throw new Error(USAGE);
+			}
+			const action = validateNonEmptyString(args.action, "action");
+			const repoDir = canonicalizeRepository(args.repository);
+
+			if (action === "diagnose") {
+				for (const key of Reflect.ownKeys(args)) {
+					if (key !== "action" && key !== "repository") {
+						throw new Error(
+							`diagnose does not accept argument "${String(key)}"`,
+						);
+					}
+				}
+				const report = await diagnose({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				return { content: [{ type: "text", text: renderReadiness(report) }] };
+			}
+
+			if (action === "verify") {
+				for (const key of Reflect.ownKeys(args)) {
+					if (
+						key !== "action" &&
+						key !== "repository" &&
+						key !== "priorRunId" &&
+						key !== "head" &&
+						key !== "keptFindingIds" &&
+						key !== "seats" &&
+						key !== "scopingNote"
+					) {
+						throw new Error(`verify does not accept argument "${String(key)}"`);
+					}
+				}
+				const priorRunId = validateNonEmptyString(
+					args.priorRunId,
+					"priorRunId",
+				);
+				const head = validateNonEmptyString(args.head, "head");
+				if (!Array.isArray(args.keptFindingIds)) {
+					throw new Error(
+						"keptFindingIds must be an array of non-empty strings",
+					);
+				}
+				const keptFindingIds = args.keptFindingIds.map((id, index) =>
+					validateNonEmptyString(id, `keptFindingIds[${index}]`),
+				);
+				const seats =
+					args.seats === undefined
+						? undefined
+						: validateStringArray(args.seats, "seats");
+				const scopingNote =
+					args.scopingNote === undefined
+						? undefined
+						: validateNonEmptyString(args.scopingNote, "scopingNote");
+
+				const report = await diagnose({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				if (!report.ready) {
+					throw new Error(renderReadiness(report));
+				}
+				const config = load({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				const headRevision = oidOf(repoDir, head);
+				const panel = planVerifySeats(config, seats);
+				const roster = compactPanelRoster(panel);
+				emitProgress(onUpdate, {
+					phase: "verify",
+					event: "started",
+					elapsedMs: Date.now() - startedAt,
+					total: panel.length,
+					completed: 0,
+					active: 0,
+					roster,
+				});
+				const result = await verify(
+					{
+						repoDir,
+						config,
+						priorRunId,
+						headRevision,
+						keptFindingIds,
+						...(seats === undefined ? {} : { seats }),
+						...(scopingNote === undefined ? {} : { scopingNote }),
+						...(config.defaults.seatBudgetMs === undefined
+							? {}
+							: { seatBudgetMs: config.defaults.seatBudgetMs }),
+					},
+					{
+						...(signal === undefined ? {} : { abortSignal: signal }),
+						onProgress: (event) =>
+							emitProgress(onUpdate, {
+								...progressFromVerifyEvent(event, Date.now() - startedAt),
+								roster,
+							}),
+					},
+				);
+				return {
+					content: [{ type: "text", text: renderVerifyResult(result) }],
+				};
+			}
+
+			if (action !== "review") {
+				throw new Error(
+					`review_panel action must be "diagnose", "review", or "verify", got "${action}"`,
+				);
+			}
+
+			for (const key of Reflect.ownKeys(args)) {
+				if (
+					key !== "action" &&
+					key !== "repository" &&
+					key !== "base" &&
+					key !== "head" &&
+					key !== "seats" &&
+					key !== "lenses" &&
+					key !== "scopingNote"
+				) {
+					throw new Error(`review does not accept argument "${String(key)}"`);
+				}
+			}
+
+			const base = validateNonEmptyString(args.base, "base");
+			const head = validateNonEmptyString(args.head, "head");
+			const baseRevision = oidOf(repoDir, base);
+			const headRevision = oidOf(repoDir, head);
+			if (baseRevision === headRevision) {
+				throw new Error(
+					"Review refused: base and head resolve to the same commit",
+				);
+			}
+
+			const report = await diagnose({
+				repoDir,
+				env: runtime.env,
+				home: runtime.home,
+			});
+			if (!report.ready) {
+				throw new Error(renderReadiness(report));
+			}
+
+			const config = load({
+				repoDir,
+				env: runtime.env,
+				home: runtime.home,
+			});
+			const seats =
+				args.seats === undefined
+					? undefined
+					: validateStringArray(args.seats, "seats");
+			const lenses =
+				args.lenses === undefined
+					? undefined
+					: validateStringArray(args.lenses, "lenses");
+			const scopingNote =
+				args.scopingNote === undefined
+					? undefined
+					: validateNonEmptyString(args.scopingNote, "scopingNote");
+
+			const panel: PlannedSeat[] = panelOf({
+				config,
+				lensTable: loadLensTable(),
+				...(seats === undefined ? {} : { seats }),
+				...(lenses === undefined ? {} : { lenses }),
+			});
+
+			const roster = compactPanelRoster(panel);
+			emitProgress(onUpdate, {
+				phase: "review",
+				event: "started",
+				elapsedMs: Date.now() - startedAt,
+				total: panel.length,
+				completed: 0,
+				active: 0,
+				roster,
+			});
+			const result = await review(
+				{
+					repoDir,
+					baseRef: base,
+					baseRevision,
+					headRevision,
+					revision: headRevision,
+					seats: panel,
+					priorRecordPaths: discoverPriorRecords(repoDir).map(
+						(record) => record.path,
+					),
+					...(scopingNote === undefined ? {} : { scopingNote }),
+					...(config.defaults.seatBudgetMs === undefined
+						? {}
+						: { seatBudgetMs: config.defaults.seatBudgetMs }),
+				},
+				{
+					...(signal === undefined ? {} : { abortSignal: signal }),
+					onProgress: (event) =>
+						emitProgress(onUpdate, {
+							...progressFromReviewEvent(event, Date.now() - startedAt),
+							roster,
+						}),
+				},
+			);
+			const suggestions = suggest(repoDir, baseRevision, headRevision);
+			const findings = readStampedFindings(result.recordPath);
+
+			return {
+				content: [
+					{
+						type: "text",
+						text: renderReviewResult({
+							recordPath: result.recordPath,
+							panel,
+							result,
+							suggestions,
+							...(scopingNote === undefined ? {} : { scopingNote }),
+							...(findings === undefined ? {} : { findings }),
+						}),
+					},
+				],
+			};
+		},
+	};
+}
+
+type ReviewPanelExtensionApi = {
+	registerTool: (tool: ReviewPanelTool) => void;
+};
+
+export default function reviewPanelExtension(
+	pi: ReviewPanelExtensionApi,
+): void {
+	pi.registerTool(createReviewPanelTool());
+}

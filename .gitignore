@@ -1,0 +1,10 @@
+# AGENTS.local.md is the private, per-working-copy overlay — never committed.
+AGENTS.local.md
+
+# HANDOFF.md is the live working-state doc, private by default per the handoff skill's tradeoff.
+HANDOFF.md
+
+node_modules/
+*.log
+.DS_Store
+.review-panel/
