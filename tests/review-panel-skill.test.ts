@@ -54,6 +54,8 @@ describe("review skill required workflow", () => {
 			"Never call the tool with `{}`",
 			"`subtle-correctness`: races",
 			"Uncommitted",
+			"ownerApproved",
+			"close-out comment",
 		]) {
 			expect(body, token).toContain(token);
 		}
@@ -62,6 +64,9 @@ describe("review skill required workflow", () => {
 		expect(body).not.toContain("repairAuthorization");
 		expect(body).not.toMatch(/\bverdict\b/i);
 		expect(body).not.toMatch(/\bquorum\b/i);
+		expect(body).toContain("Do not post until they say yes");
+		expect(body).toContain('"action": "comment"');
+		expect(body).toContain("Never write ready to merge on the comment");
 	});
 });
 

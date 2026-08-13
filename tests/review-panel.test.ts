@@ -632,3 +632,300 @@ describe("review_panel public tool adapter", () => {
 		});
 	});
 });
+
+function writeReviewRecord(
+	repository: string,
+	runId: string,
+	input: {
+		findings: Array<{
+			id: string;
+			severity: "high" | "medium" | "low";
+			title: string;
+		}>;
+		lost?: Array<{ rosterId: string; lens: string }>;
+		extras?: string[];
+	},
+): void {
+	const recordPath = path.join(repository, ".review-panel", "runs", runId);
+	mkdirSync(recordPath, { recursive: true });
+	const seats = [
+		{
+			rosterId: "terra",
+			lens: "holistic",
+			provider: "openai-codex",
+			model: "gpt-5.6-terra",
+		},
+		...(input.extras ?? []).map((lens) => ({
+			rosterId: "terra",
+			lens,
+			provider: "openai-codex",
+			model: "gpt-5.6-terra",
+		})),
+	];
+	writeFileSync(
+		path.join(recordPath, "panel.json"),
+		`${JSON.stringify({ runId, baseRef: "origin/main", seats }, null, 2)}\n`,
+	);
+	writeFileSync(
+		path.join(recordPath, "meta.json"),
+		`${JSON.stringify(
+			{
+				runId,
+				baseRef: "origin/main",
+				baseOid: "a1b2c3dffffffffeeeeeeeeeeeeeeeeeeeeeee",
+				headOid: "e4f5a6bffffffffeeeeeeeeeeeeeeeeeeeeeee",
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	writeFileSync(
+		path.join(recordPath, "findings.json"),
+		`${JSON.stringify(
+			input.findings.map((row) => ({
+				id: row.id,
+				seat: {
+					provider: "openai-codex",
+					model: "gpt-5.6-terra",
+					lens: "holistic",
+				},
+				finding: {
+					file: "src/a.ts",
+					line: 1,
+					severity: row.severity,
+					title: row.title,
+					evidence: "evidence",
+				},
+			})),
+			null,
+			2,
+		)}\n`,
+	);
+	writeFileSync(
+		path.join(recordPath, "execution.json"),
+		`${JSON.stringify(
+			{
+				cancelled: false,
+				lostCoverage: [],
+				outcomes: (input.lost ?? []).map((seat) => ({
+					seat: {
+						...seat,
+						provider: "openai-codex",
+						model: "gpt-5.6-terra",
+						lensPrompt: "review",
+					},
+					outcome: { kind: "failed", class: "no-submit", reason: "silent" },
+				})),
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+}
+
+function writeVerifyRecord(
+	repository: string,
+	runId: string,
+	resolvedIds: string[],
+): void {
+	const recordPath = path.join(repository, ".review-panel", "runs", runId);
+	mkdirSync(recordPath, { recursive: true });
+	writeFileSync(
+		path.join(recordPath, "verification.json"),
+		`${JSON.stringify(
+			{
+				priorRunId: "review-1",
+				keptFindingIds: resolvedIds,
+				outcomes: [
+					{
+						seat: {
+							rosterId: "terra",
+							lens: "fix-verification",
+							provider: "openai-codex",
+							model: "gpt-5.6-terra",
+						},
+						outcome: {
+							kind: "voted",
+							result: {
+								items: resolvedIds.map((id) => ({
+									id,
+									disposition: "resolved",
+									evidence: { file: "src/a.ts", explanation: "fixed" },
+								})),
+								regressions: [],
+							},
+						},
+					},
+				],
+			},
+			null,
+			2,
+		)}\n`,
+	);
+	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+}
+
+describe("review_panel comment", () => {
+	it("turns an empty probe into usage that names comment", async () => {
+		const tool = toolWith();
+		await expect(
+			tool.execute("tool-call", {}, undefined, undefined, {}),
+		).rejects.toThrow(/"action": "comment"/);
+	});
+
+	it("refuses comment until the owner approved posting", async () => {
+		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "review-1", { findings: [] });
+			const tool = toolWith({
+				postComment: () => {
+					throw new Error("postComment must not run");
+				},
+			});
+			await expect(
+				tool.execute(
+					"tool-call",
+					{
+						action: "comment",
+						repository,
+						priorRunId: "review-1",
+					},
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/ownerApproved/);
+		});
+	});
+
+	it("posts a nothing-kept card after owner approval", async () => {
+		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "review-1", {
+				findings: [
+					{ id: "F-1", severity: "high", title: "auth bypass" },
+					{ id: "F-2", severity: "low", title: "rename helper" },
+				],
+				extras: ["security"],
+				lost: [{ rosterId: "deepseek", lens: "holistic" }],
+			});
+			let posted: { body: string; pr?: number | string } | undefined;
+			const tool = toolWith({
+				postComment: (input) => {
+					posted = { body: input.body, pr: input.pr };
+					return {
+						action: "created",
+						commentId: 42,
+						pr: 29,
+						url: "https://github.com/smarzban/demo/pull/29#issuecomment-42",
+					};
+				},
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{
+					action: "comment",
+					repository,
+					priorRunId: "review-1",
+					ownerApproved: true,
+					pr: 29,
+					dismissed: [{ id: "F-1", reason: "checked, not real" }],
+					lowAdvisory: ["F-2"],
+				},
+				undefined,
+				undefined,
+				{},
+			);
+			expect(posted?.pr).toBe(29);
+			expect(posted?.body).toContain("## Review panel");
+			expect(posted?.body).toContain(
+				"2 findings submitted · 0 fixed · 1 dismissed · 1 left as low/advisory",
+			);
+			expect(posted?.body).toContain("Lost: deepseek/holistic");
+			expect(posted?.body).toContain("extras: security");
+			expect(posted?.body).toContain("- F-1 auth bypass — checked, not real");
+			expect(posted?.body).not.toContain("### Fixed");
+			expect(posted?.body).not.toMatch(/ready to merge/i);
+			expect(response.content[0]?.text).toContain("Posted comment on PR #29");
+			expect(response.content[0]?.text).toContain("created");
+			expect(response.content[0]?.text).toContain("## Review panel");
+			expect(response.content[0]?.text).not.toMatch(/\bverdict\b/i);
+		});
+	});
+
+	it("refuses remaining high findings without a verify run", async () => {
+		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "review-1", {
+				findings: [{ id: "F-1", severity: "high", title: "auth bypass" }],
+			});
+			let posted = 0;
+			const tool = toolWith({
+				postComment: () => {
+					posted += 1;
+					throw new Error("postComment must not run");
+				},
+			});
+			await expect(
+				tool.execute(
+					"tool-call",
+					{
+						action: "comment",
+						repository,
+						priorRunId: "review-1",
+						ownerApproved: true,
+						pr: 29,
+					},
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/verifyRunId/);
+			expect(posted).toBe(0);
+		});
+	});
+
+	it("counts verified remaining findings as fixed", async () => {
+		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "review-1", {
+				findings: [
+					{ id: "F-1", severity: "high", title: "auth bypass" },
+					{ id: "F-2", severity: "low", title: "nit" },
+				],
+			});
+			writeVerifyRecord(repository, "verify-1", ["F-1"]);
+			let body = "";
+			const tool = toolWith({
+				postComment: (input) => {
+					body = input.body;
+					return {
+						action: "updated",
+						commentId: 9,
+						pr: 10,
+						url: "https://example.test/9",
+					};
+				},
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{
+					action: "comment",
+					repository,
+					priorRunId: "review-1",
+					verifyRunId: "verify-1",
+					ownerApproved: true,
+					pr: 10,
+					lowAdvisory: ["F-2"],
+				},
+				undefined,
+				undefined,
+				{},
+			);
+			expect(body).toContain(
+				"2 findings submitted · 1 fixed · 0 dismissed · 1 left as low/advisory",
+			);
+			expect(body).not.toContain("### Dismissed");
+			expect(body).toContain("- F-2 nit");
+			expect(body).not.toContain("F-1");
+			expect(response.content[0]?.text).toContain("updated");
+		});
+	});
+});

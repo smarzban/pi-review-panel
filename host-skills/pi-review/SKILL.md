@@ -84,6 +84,7 @@ Read the report. Open the code behind anything you might keep.
 - You may drop a high you checked and believe is wrong. Say why. Do not fix it.
 
 If you kept nothing, tell the owner it looks ready to land. Name coverage and dead seats.
+Then ask whether to post the close-out comment. Do not post until they say yes.
 
 If you kept findings and the user asked for a review that includes fixing (or asked to fix after
 the report):
@@ -113,3 +114,22 @@ Then stop. Never review-fix-review-fix. Pi never becomes the fixer.
 
 Recommend landing only after a clean verify (or a discovery report with nothing you would keep).
 Name who voted, what you kept or skipped, and lost coverage.
+Then ask whether to post the close-out comment. Do not post until they say yes.
+
+If they say yes, send a **comment prompt to the same Pi session**. Do not call `review_panel`
+yourself and do not write ready to merge on the card:
+
+```
+Do not implement. Call review_panel action comment.
+Repository: <absolute repo path>
+priorRunId: <review run id>
+ownerApproved: true
+pr: <number if known>
+dismissed: [{ id, reason }] for every high/medium you dropped
+lowAdvisory: leftover low ids
+verifyRunId: <verify run id if any kept item was fixed>
+Do not start a new discovery panel. Stay in this session.
+```
+
+Herdr: `herdr agent prompt review-panel "<comment prompt>" --wait --timeout 900000`
+Not-Herdr: `pi -p --session-id review-panel --approve "<comment prompt>"`
