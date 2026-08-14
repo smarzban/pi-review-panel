@@ -4,7 +4,7 @@ A review panel for pi coding agents. Configured reviewer seats run over one pinn
 change and record evidence under `.review-panel/`. The tool does not compute a
 merge decision. The owner remains the merge gate.
 
-**Status:** 0.1.0. Diagnose, review, and verify are the public path.
+**Status:** 0.1.0. Diagnose, review, verify, and comment are the public path.
 
 ## Supported path
 
@@ -32,10 +32,18 @@ merge decision. The owner remains the merge gate.
    {"action":"verify","repository":"/absolute/path/to/repository","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
    ```
 
+4. After a first review with nothing kept, or a clean verify, ask the owner
+   before posting. Yes posts or updates one PR comment (`## Review panel`).
+   The tool does not post until `ownerApproved` is true.
+
+   ```json
+   {"action":"comment","repository":"/absolute/path/to/repository","priorRunId":"<run-id>","ownerApproved":true,"pr":29,"dismissed":[{"id":"F-4","reason":"checked, not real"}],"lowAdvisory":["F-8"]}
+   ```
+
 The result is bounded Markdown: coverage, finding counts or dispositions, lost
 seats, and the record path. Judge the report, fix real blockers in your harness,
 then verify. The skill describes when to tell the owner the change looks ready
-to land.
+to land, and when to ask before posting the close-out comment.
 
 ## Setup
 

@@ -38,6 +38,17 @@ import {
 } from "../run/run-verify.js";
 import type { PlannedSeat, RunConfig, StampedFinding } from "../run/types.js";
 import {
+	accountCloseoutFindings,
+	assembleCloseoutComment,
+	type CloseoutJudgmentRow,
+} from "./closeout-comment.js";
+import { assertFixedResolved, loadCloseoutRun } from "./closeout-from-run.js";
+import {
+	type PostCloseoutInput,
+	type PostCloseoutResult,
+	postCloseoutComment,
+} from "./closeout-post.js";
+import {
 	compactPanelRoster,
 	progressFromReviewEvent,
 	progressFromVerifyEvent,
@@ -93,13 +104,27 @@ const parameters = Type.Union([
 		},
 		{ additionalProperties: false },
 	),
+	Type.Object(
+		{
+			action: Type.Literal("comment"),
+			repository: absoluteRepository,
+			priorRunId: nonEmpty,
+			ownerApproved: Type.Optional(Type.Unknown()),
+			pr: Type.Optional(Type.Unknown()),
+			dismissed: Type.Optional(Type.Unknown()),
+			lowAdvisory: Type.Optional(Type.Unknown()),
+			verifyRunId: Type.Optional(nonEmpty),
+			head: Type.Optional(nonEmpty),
+		},
+		{ additionalProperties: false },
+	),
 	// Hosts validate before execute. Models probe with `{}`; accept it so we
 	// can return copy-paste shapes instead of an anyOf dump.
 	Type.Object({}, { additionalProperties: false }),
 ]);
 
 const USAGE =
-	'review_panel needs an action. Never call it with {}. Copy one of: { "action": "diagnose", "repository": "/absolute/path" } | { "action": "review", "repository": "/absolute/path", "base": "main", "head": "HEAD" } | { "action": "verify", "repository": "/absolute/path", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] }';
+	'review_panel needs an action. Never call it with {}. Copy one of: { "action": "diagnose", "repository": "/absolute/path" } | { "action": "review", "repository": "/absolute/path", "base": "main", "head": "HEAD" } | { "action": "verify", "repository": "/absolute/path", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "repository": "/absolute/path", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -128,6 +153,7 @@ export type ReviewPanelDependencies = {
 		input: RunVerifyInput,
 		options?: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
+	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
 };
 
 export type ReviewPanelTool = {
@@ -177,12 +203,35 @@ export function prepareReviewArguments(args: unknown): unknown {
 	}
 	const record = args as Record<string, unknown>;
 	const next: Record<string, unknown> = { ...record };
-	for (const key of ["seats", "lenses", "keptFindingIds"] as const) {
+	for (const key of [
+		"seats",
+		"lenses",
+		"keptFindingIds",
+		"lowAdvisory",
+	] as const) {
 		if (Object.hasOwn(next, key)) {
 			next[key] = coerceStringList(next[key]);
 		}
 	}
+	if (typeof next.dismissed === "string") {
+		next.dismissed = coerceJsonValue(next.dismissed);
+	}
+	if (next.ownerApproved === "true") {
+		next.ownerApproved = true;
+	}
 	return next;
+}
+
+function coerceJsonValue(value: string): unknown {
+	const trimmed = value.trim();
+	if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+		return value;
+	}
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return value;
+	}
 }
 
 function validateStringArray(raw: unknown, label: string): string[] {
@@ -196,6 +245,129 @@ function validateStringArray(raw: unknown, label: string): string[] {
 		}
 	}
 	return coerced;
+}
+
+const COMMENT_KEYS = new Set([
+	"action",
+	"repository",
+	"priorRunId",
+	"ownerApproved",
+	"pr",
+	"dismissed",
+	"lowAdvisory",
+	"verifyRunId",
+	"head",
+]);
+
+function parseDismissed(raw: unknown): CloseoutJudgmentRow[] {
+	if (raw === undefined) {
+		return [];
+	}
+	const value = typeof raw === "string" ? coerceJsonValue(raw) : raw;
+	if (!Array.isArray(value)) {
+		throw new Error("dismissed must be an array of { id, reason }");
+	}
+	return value.map((row, index) => {
+		if (row === null || typeof row !== "object") {
+			throw new Error(`dismissed[${index}] must be an object`);
+		}
+		const record = row as { id?: unknown; reason?: unknown };
+		return {
+			id: validateNonEmptyString(record.id, `dismissed[${index}].id`),
+			reason: validateNonEmptyString(
+				record.reason,
+				`dismissed[${index}].reason`,
+			),
+		};
+	});
+}
+
+function parseLowAdvisory(raw: unknown): string[] {
+	if (raw === undefined) {
+		return [];
+	}
+	const value = typeof raw === "string" ? coerceStringList(raw) : raw;
+	if (!Array.isArray(value)) {
+		throw new Error("lowAdvisory must be an array of finding ids");
+	}
+	return value.map((item, index) => {
+		if (isNonEmptyString(item)) {
+			return item;
+		}
+		if (item !== null && typeof item === "object") {
+			return validateNonEmptyString(
+				(item as { id?: unknown }).id,
+				`lowAdvisory[${index}].id`,
+			);
+		}
+		throw new Error(`lowAdvisory[${index}] must be a finding id`);
+	});
+}
+
+function executeComment(
+	args: ReviewToolArguments,
+	repoDir: string,
+	postComment: (input: PostCloseoutInput) => PostCloseoutResult,
+): ReviewToolResult {
+	for (const key of Reflect.ownKeys(args)) {
+		if (!COMMENT_KEYS.has(String(key))) {
+			throw new Error(`comment does not accept argument "${String(key)}"`);
+		}
+	}
+	if (args.ownerApproved !== true) {
+		throw new Error(
+			"comment refused: ownerApproved must be true after the owner asked to post",
+		);
+	}
+	const priorRunId = validateNonEmptyString(args.priorRunId, "priorRunId");
+	const dismissed = parseDismissed(args.dismissed);
+	const lowAdvisory = parseLowAdvisory(args.lowAdvisory);
+	const facts = loadCloseoutRun(repoDir, priorRunId);
+	const accounted = accountCloseoutFindings({
+		findings: facts.run.findings,
+		dismissed,
+		lowAdvisory,
+	});
+	if (accounted.fixed.length > 0) {
+		if (!isNonEmptyString(args.verifyRunId)) {
+			throw new Error(
+				`comment refused: ${accounted.fixed.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
+			);
+		}
+		assertFixedResolved(
+			repoDir,
+			args.verifyRunId,
+			accounted.fixed.map((row) => row.id),
+			facts.run.runId,
+		);
+	}
+	const body = assembleCloseoutComment({
+		findings: facts.run.findings,
+		panel: facts.panel,
+		lost: facts.lost,
+		meta: facts.run.meta,
+		dismissed,
+		lowAdvisory,
+		...(isNonEmptyString(args.head) ? { headRef: args.head } : {}),
+	});
+	const posted = postComment({
+		repository: repoDir,
+		body,
+		...(args.pr === undefined ? {} : { pr: args.pr as number | string }),
+	});
+	return {
+		content: [
+			{
+				type: "text",
+				text: [
+					`Posted comment on PR #${posted.pr} (${posted.action})`,
+					posted.url,
+					"",
+					body,
+				].join("\n"),
+			},
+		],
+	};
 }
 
 function emitProgress(onUpdate: unknown, view: ReviewProgressView): void {
@@ -254,12 +426,13 @@ export function createReviewPanelTool(
 	const oidOf = deps?.resolveCommitOid ?? resolveCommitOid;
 	const suggest = deps?.suggestLenses ?? suggestLenses;
 	const verify = deps?.runVerify ?? runVerify;
+	const postComment = deps?.postComment ?? postCloseoutComment;
 
 	return {
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, review an explicit base...head change, or verify a fix against a prior run. Never call with {}. Review takes repository, base, and head. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, review an explicit base...head change, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes repository, base, and head. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate) {
@@ -378,9 +551,13 @@ export function createReviewPanelTool(
 				};
 			}
 
+			if (action === "comment") {
+				return executeComment(args, repoDir, postComment);
+			}
+
 			if (action !== "review") {
 				throw new Error(
-					`review_panel action must be "diagnose", "review", or "verify", got "${action}"`,
+					`review_panel action must be "diagnose", "review", "verify", or "comment", got "${action}"`,
 				);
 			}
 
