@@ -59,9 +59,19 @@ import {
 	renderVerifyResult,
 } from "./review-presentation.js";
 
+/** Copy-paste example. Models truncated "/absolute/path" to "/". */
+export const REPOSITORY_EXAMPLE = "/Users/you/the-repo";
+
+const REPOSITORY_PLACEHOLDERS = new Set([
+	"/",
+	"/absolute/path",
+	"/absolute/path/to/repository",
+]);
+
 const absoluteRepository = Type.String({
 	pattern: "^/",
-	description: "Absolute path to the repository to review.",
+	description:
+		"Absolute path to the Git repository to review. Never '/' or a placeholder.",
 });
 const nonEmpty = Type.String({ minLength: 1 });
 
@@ -123,8 +133,7 @@ const parameters = Type.Union([
 	Type.Object({}, { additionalProperties: false }),
 ]);
 
-const USAGE =
-	'review_panel needs an action. Never call it with {}. Copy one of: { "action": "diagnose", "repository": "/absolute/path" } | { "action": "review", "repository": "/absolute/path", "base": "main", "head": "HEAD" } | { "action": "verify", "repository": "/absolute/path", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "repository": "/absolute/path", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
+const USAGE = `review_panel needs an action. Never call it with {}. Copy one of: { "action": "diagnose", "repository": "${REPOSITORY_EXAMPLE}" } | { "action": "review", "repository": "${REPOSITORY_EXAMPLE}", "base": "main", "head": "HEAD" } | { "action": "verify", "repository": "${REPOSITORY_EXAMPLE}", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "repository": "${REPOSITORY_EXAMPLE}", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }`;
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -389,6 +398,16 @@ function readStampedFindings(recordPath: string): StampedFinding[] | undefined {
 	}
 }
 
+function refusePlaceholderRepository(repository: string): void {
+	const trimmed = repository.trim();
+	const resolved = path.resolve(trimmed);
+	if (REPOSITORY_PLACEHOLDERS.has(trimmed) || resolved === "/") {
+		throw new Error(
+			`repository must be the real repo directory, not "${trimmed}". Pass an absolute path such as ${REPOSITORY_EXAMPLE}.`,
+		);
+	}
+}
+
 export function canonicalizeRepository(repository: unknown): string {
 	if (
 		typeof repository !== "string" ||
@@ -397,12 +416,18 @@ export function canonicalizeRepository(repository: unknown): string {
 	) {
 		throw new Error("repository must be a non-empty absolute path");
 	}
+	refusePlaceholderRepository(repository);
 	let real: string;
 	try {
 		real = realpathSync(repository);
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
 		throw new Error(`repository "${repository}" cannot be resolved: ${cause}`);
+	}
+	if (real === "/") {
+		throw new Error(
+			`repository must be the real repo directory, not "${repository}". Pass an absolute path such as ${REPOSITORY_EXAMPLE}.`,
+		);
 	}
 	try {
 		const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {

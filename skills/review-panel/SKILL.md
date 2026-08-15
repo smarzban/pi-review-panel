@@ -11,7 +11,7 @@ Never call the tool with `{}`. Review already diagnoses and refuses when setup i
 
 ## Actions
 
-1. Optional: `{ "action": "diagnose", "repository": "/absolute/path" }` if setup is unknown.
+1. Optional: `{ "action": "diagnose", "repository": "/Users/you/the-repo" }` if setup is unknown. `repository` is the real repo directory, never `/`.
 2. Call `{ "action": "review", "repository", "base", "head" }` with optional `lenses`, `seats`, and `scopingNote`. `lenses` and `seats` must be JSON arrays of strings (for example `["security"]`), never a stringified array.
 3. Read the report and the suggested extra lenses. Open the code behind anything you might keep.
 4. If suggest flagged a lens you skipped and holistic was thin on that dimension, call `review` again with only that lens on the same base/head.

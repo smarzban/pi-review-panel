@@ -13,8 +13,10 @@ import type { Config } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { PlannedSeat, RunConfig } from "../src/run/types.js";
 import reviewPanelExtension, {
+	canonicalizeRepository,
 	createReviewPanelTool,
 	prepareReviewArguments,
+	REPOSITORY_EXAMPLE,
 } from "../src/tool/review-panel.js";
 
 type ReviewTool = ReturnType<typeof createReviewPanelTool>;
@@ -103,6 +105,39 @@ describe("review_panel public tool adapter", () => {
 		await expect(
 			tool.execute("tool-call", {}, undefined, undefined, {}),
 		).rejects.toThrow(/"action": "verify"/);
+		const usage = await tool
+			.execute("tool-call", {}, undefined, undefined, {})
+			.then(
+				() => {
+					throw new Error("empty probe must throw");
+				},
+				(error: unknown) =>
+					error instanceof Error ? error.message : String(error),
+			);
+		expect(usage).toContain(REPOSITORY_EXAMPLE);
+		expect(usage).not.toContain("/absolute/path");
+	});
+
+	it("refuses filesystem root and placeholder repository paths", async () => {
+		const tool = toolWith();
+		for (const repository of [
+			"/",
+			"/absolute/path",
+			"/absolute/path/to/repository",
+		]) {
+			await expect(
+				tool.execute(
+					"tool-call",
+					{ action: "diagnose", repository },
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/real repo directory/);
+			expect(() => canonicalizeRepository(repository)).toThrow(
+				REPOSITORY_EXAMPLE,
+			);
+		}
 	});
 
 	it("registers exactly one tool named review_panel", () => {
