@@ -17,6 +17,7 @@ import reviewPanelExtension, {
 	createReviewPanelTool,
 	prepareReviewArguments,
 	REPOSITORY_EXAMPLE,
+	rejectFilesystemRoot,
 } from "../src/tool/review-panel.js";
 
 type ReviewTool = ReturnType<typeof createReviewPanelTool>;
@@ -138,6 +139,18 @@ describe("review_panel public tool adapter", () => {
 				REPOSITORY_EXAMPLE,
 			);
 		}
+	});
+
+	it("refuses a Git top-level that is the filesystem root", () => {
+		expect(() => rejectFilesystemRoot("/", "/workspace")).toThrow(
+			/real repo directory/,
+		);
+		expect(() => rejectFilesystemRoot("/", "/workspace")).toThrow(
+			REPOSITORY_EXAMPLE,
+		);
+		expect(
+			rejectFilesystemRoot("/Users/you/the-repo", "/Users/you/the-repo"),
+		).toBe("/Users/you/the-repo");
 	});
 
 	it("registers exactly one tool named review_panel", () => {

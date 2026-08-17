@@ -408,6 +408,19 @@ function refusePlaceholderRepository(repository: string): void {
 	}
 }
 
+/** Refuse a resolved path that is the filesystem root (including a Git top-level of /). */
+export function rejectFilesystemRoot(
+	resolved: string,
+	labeled: string,
+): string {
+	if (resolved === "/") {
+		throw new Error(
+			`repository must be the real repo directory, not "${labeled}". Pass an absolute path such as ${REPOSITORY_EXAMPLE}.`,
+		);
+	}
+	return resolved;
+}
+
 export function canonicalizeRepository(repository: unknown): string {
 	if (
 		typeof repository !== "string" ||
@@ -424,19 +437,21 @@ export function canonicalizeRepository(repository: unknown): string {
 		const cause = error instanceof Error ? error.message : String(error);
 		throw new Error(`repository "${repository}" cannot be resolved: ${cause}`);
 	}
-	if (real === "/") {
-		throw new Error(
-			`repository must be the real repo directory, not "${repository}". Pass an absolute path such as ${REPOSITORY_EXAMPLE}.`,
-		);
-	}
+	rejectFilesystemRoot(real, repository);
 	try {
 		const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
 			cwd: real,
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "ignore"],
 		}).trim();
-		return realpathSync(root);
-	} catch {
+		return rejectFilesystemRoot(realpathSync(root), repository);
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			error.message.includes("real repo directory")
+		) {
+			throw error;
+		}
 		throw new Error(`repository "${repository}" is not a Git repository`);
 	}
 }
