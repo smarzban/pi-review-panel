@@ -14,13 +14,13 @@ merge decision. The owner remains the merge gate.
 1. Diagnose setup before review:
 
    ```json
-   {"action":"diagnose","repository":"/absolute/path/to/repository"}
+   {"action":"diagnose","repository":"/Users/you/the-repo"}
    ```
 
 2. Review an explicit change:
 
    ```json
-   {"action":"review","repository":"/absolute/path/to/repository","base":"origin/main","head":"HEAD"}
+   {"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
    ```
 
    Optional `lenses` add specialist extras. Optional `scopingNote` focuses a large
@@ -29,7 +29,7 @@ merge decision. The owner remains the merge gate.
 3. After you fix kept findings, verify the fix range:
 
    ```json
-   {"action":"verify","repository":"/absolute/path/to/repository","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
+   {"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
    ```
 
 4. After a first review with nothing kept, or a clean verify, ask the owner
@@ -37,7 +37,7 @@ merge decision. The owner remains the merge gate.
    The tool does not post until `ownerApproved` is true.
 
    ```json
-   {"action":"comment","repository":"/absolute/path/to/repository","priorRunId":"<run-id>","ownerApproved":true,"pr":29,"dismissed":[{"id":"F-4","reason":"checked, not real"}],"lowAdvisory":["F-8"]}
+   {"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29,"dismissed":[{"id":"F-4","reason":"checked, not real"}],"lowAdvisory":["F-8"]}
    ```
 
 The result is bounded Markdown: coverage, finding counts or dispositions, lost
