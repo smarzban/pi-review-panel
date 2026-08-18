@@ -13,10 +13,11 @@ Save these exact bytes as your config file (the entry below names the file locat
 {
   "roster": [
     {"id":"terra","provider":"openai-codex","model":"gpt-5.6-terra"},
-    {"id":"claude","provider":"anthropic","model":"claude-opus-5","extraExtensionPaths":["/absolute/provider-extension.ts"]}
+    {"id":"claude","provider":"anthropic","model":"claude-opus-5","extraExtensionPaths":["/absolute/provider-extension.ts"]},
+    {"id":"glm","provider":"ollama","model":"glm-5.3"}
   ],
   "defaults": {
-    "seats":["terra","claude"],
+    "seats":["terra","claude","glm"],
     "seatBudgetMs":1200000
   }
 }

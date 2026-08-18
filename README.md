@@ -39,7 +39,19 @@ What you get instead:
 
 ## Install
 
-You need Pi. Add this package to Pi’s `packages` list and restart Pi:
+You need Pi. Install the package, then restart Pi:
+
+```bash
+npm install pi-review-panel
+```
+
+or, from Pi itself:
+
+```bash
+pi install npm:pi-review-panel
+```
+
+Either way, Pi’s `packages` list should contain `npm:pi-review-panel`:
 
 ```json
 {
