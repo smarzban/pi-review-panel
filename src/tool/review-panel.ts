@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 // biome-ignore format: This import must remain one line for the ts-expect-error directive.
 // @ts-expect-error The initial scaffold has no Node type declarations.
-import { env as processEnv } from "node:process";
+import { cwd as processCwd, env as processEnv } from "node:process";
 
 import { Type } from "typebox";
 import { loadLensTable } from "../config/lenses.js";
@@ -66,12 +66,13 @@ const REPOSITORY_PLACEHOLDERS = new Set([
 	"/",
 	"/absolute/path",
 	"/absolute/path/to/repository",
+	REPOSITORY_EXAMPLE,
 ]);
 
 const absoluteRepository = Type.String({
 	pattern: "^/",
 	description:
-		"Absolute path to the Git repository to review. Never '/' or a placeholder.",
+		"Absolute path to the Git repository. Omit it when this process is already in the repo. Never pass '/'.",
 });
 const nonEmpty = Type.String({ minLength: 1 });
 
@@ -87,13 +88,16 @@ const stringList = Type.Union([
 
 const parameters = Type.Union([
 	Type.Object(
-		{ action: Type.Literal("diagnose"), repository: absoluteRepository },
+		{
+			action: Type.Literal("diagnose"),
+			repository: Type.Optional(absoluteRepository),
+		},
 		{ additionalProperties: false },
 	),
 	Type.Object(
 		{
 			action: Type.Literal("review"),
-			repository: absoluteRepository,
+			repository: Type.Optional(absoluteRepository),
 			base: nonEmpty,
 			head: nonEmpty,
 			seats: Type.Optional(stringList),
@@ -105,7 +109,7 @@ const parameters = Type.Union([
 	Type.Object(
 		{
 			action: Type.Literal("verify"),
-			repository: absoluteRepository,
+			repository: Type.Optional(absoluteRepository),
 			priorRunId: nonEmpty,
 			head: nonEmpty,
 			keptFindingIds: stringList,
@@ -117,7 +121,7 @@ const parameters = Type.Union([
 	Type.Object(
 		{
 			action: Type.Literal("comment"),
-			repository: absoluteRepository,
+			repository: Type.Optional(absoluteRepository),
 			priorRunId: nonEmpty,
 			ownerApproved: Type.Optional(Type.Unknown()),
 			pr: Type.Optional(Type.Unknown()),
@@ -133,7 +137,8 @@ const parameters = Type.Union([
 	Type.Object({}, { additionalProperties: false }),
 ]);
 
-const USAGE = `review_panel needs an action. Never call it with {}. Copy one of: { "action": "diagnose", "repository": "${REPOSITORY_EXAMPLE}" } | { "action": "review", "repository": "${REPOSITORY_EXAMPLE}", "base": "main", "head": "HEAD" } | { "action": "verify", "repository": "${REPOSITORY_EXAMPLE}", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "repository": "${REPOSITORY_EXAMPLE}", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }`;
+const USAGE =
+	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -408,6 +413,52 @@ function refusePlaceholderRepository(repository: string): void {
 	}
 }
 
+export function isPlaceholderRepository(repository: unknown): boolean {
+	if (repository === undefined || repository === null) {
+		return true;
+	}
+	if (typeof repository !== "string") {
+		return false;
+	}
+	const trimmed = repository.trim();
+	if (trimmed === "") {
+		return true;
+	}
+	return REPOSITORY_PLACEHOLDERS.has(trimmed) || path.resolve(trimmed) === "/";
+}
+
+function cwdFromContext(context: unknown): string | undefined {
+	if (context === null || typeof context !== "object") {
+		return undefined;
+	}
+	const cwd = (context as { cwd?: unknown }).cwd;
+	if (typeof cwd === "string" && cwd.trim() !== "") {
+		return cwd;
+	}
+	return undefined;
+}
+
+/** Use an explicit repo path, or the git top-level of cwd when the model omitted or faked it. */
+export function resolveReviewRepository(
+	repository: unknown,
+	fallbackCwd: string,
+): string {
+	if (!isPlaceholderRepository(repository) && typeof repository === "string") {
+		return canonicalizeRepository(repository);
+	}
+	try {
+		return canonicalizeRepository(fallbackCwd);
+	} catch {
+		const shown =
+			typeof repository === "string" && repository.trim() !== ""
+				? `"${repository.trim()}"`
+				: "omitted";
+		throw new Error(
+			`repository ${shown} is not a Git repository (cwd: "${fallbackCwd}"). Pass the absolute path to the repo, or run from inside it.`,
+		);
+	}
+}
+
 /** Refuse a resolved path that is the filesystem root (including a Git top-level of /). */
 export function rejectFilesystemRoot(
 	resolved: string,
@@ -472,10 +523,10 @@ export function createReviewPanelTool(
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, review an explicit base...head change, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes repository, base, and head. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, review an explicit base...head change, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
-		async execute(_toolCallId, args, signal, onUpdate) {
+		async execute(_toolCallId, args, signal, onUpdate, context) {
 			const startedAt = Date.now();
 			const runtime = {
 				env: deps?.env ?? processEnv,
@@ -485,7 +536,10 @@ export function createReviewPanelTool(
 				throw new Error(USAGE);
 			}
 			const action = validateNonEmptyString(args.action, "action");
-			const repoDir = canonicalizeRepository(args.repository);
+			const repoDir = resolveReviewRepository(
+				args.repository,
+				cwdFromContext(context) ?? processCwd(),
+			);
 
 			if (action === "diagnose") {
 				for (const key of Reflect.ownKeys(args)) {

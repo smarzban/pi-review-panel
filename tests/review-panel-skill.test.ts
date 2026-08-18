@@ -67,8 +67,9 @@ describe("review skill required workflow", () => {
 		expect(body).toContain("Do not post until they say yes");
 		expect(body).toContain('"action": "comment"');
 		expect(body).toContain("Never write ready to merge on the comment");
-		expect(body).toContain("/Users/you/the-repo");
+		expect(body).toContain("Omit `repository`");
 		expect(body).not.toContain("/absolute/path");
+		expect(body).not.toContain("/Users/you/the-repo");
 	});
 });
 
