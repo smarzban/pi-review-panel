@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 // biome-ignore format: This import must remain one line for the ts-expect-error directive.
 // @ts-expect-error The initial scaffold has no Node type declarations.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 // @ts-expect-error The initial scaffold has no Node type declarations.
 import { tmpdir } from "node:os";
 // @ts-expect-error The initial scaffold has no Node type declarations.
@@ -115,29 +115,78 @@ describe("review_panel public tool adapter", () => {
 				(error: unknown) =>
 					error instanceof Error ? error.message : String(error),
 			);
-		expect(usage).toContain(REPOSITORY_EXAMPLE);
+		expect(usage).toMatch(/already in the repo/i);
 		expect(usage).not.toContain("/absolute/path");
+		expect(usage).not.toContain(REPOSITORY_EXAMPLE);
 	});
 
-	it("refuses filesystem root and placeholder repository paths", async () => {
-		const tool = toolWith();
-		for (const repository of [
-			"/",
-			"/absolute/path",
-			"/absolute/path/to/repository",
-		]) {
-			await expect(
-				tool.execute(
+	it("uses cwd when repository is omitted or a placeholder", async () => {
+		await withRepository(async (repository) => {
+			let seen: string | undefined;
+			const tool = toolWith({
+				diagnose: async ({ repoDir }) => {
+					seen = repoDir;
+					return { ready: true, rows: [] };
+				},
+			});
+			const expected = realpathSync(repository);
+			for (const repositoryArg of ["/", REPOSITORY_EXAMPLE, undefined]) {
+				seen = undefined;
+				const args =
+					repositoryArg === undefined
+						? { action: "diagnose" }
+						: { action: "diagnose", repository: repositoryArg };
+				await tool.execute("tool-call", args, undefined, undefined, {
+					cwd: repository,
+				});
+				expect(seen).toBe(expected);
+			}
+		});
+	});
+
+	it("prefers an explicit repository over cwd", async () => {
+		await withRepository(async (repository) => {
+			const otherRoot = mkdtempSync(path.join(tmpdir(), "review-panel-other-"));
+			try {
+				const other = makeRepository(otherRoot);
+				let seen: string | undefined;
+				const tool = toolWith({
+					diagnose: async ({ repoDir }) => {
+						seen = repoDir;
+						return { ready: true, rows: [] };
+					},
+				});
+				await tool.execute(
 					"tool-call",
 					{ action: "diagnose", repository },
 					undefined,
 					undefined,
-					{},
+					{ cwd: other },
+				);
+				expect(seen).toBe(realpathSync(repository));
+				expect(seen).not.toBe(realpathSync(other));
+			} finally {
+				rmSync(otherRoot, { recursive: true, force: true });
+			}
+		});
+	});
+
+	it("refuses a placeholder when cwd is not a Git repository", async () => {
+		const loose = mkdtempSync(path.join(tmpdir(), "review-panel-loose-"));
+		try {
+			const tool = toolWith();
+			await expect(
+				tool.execute(
+					"tool-call",
+					{ action: "diagnose", repository: "/" },
+					undefined,
+					undefined,
+					{ cwd: loose },
 				),
-			).rejects.toThrow(/real repo directory/);
-			expect(() => canonicalizeRepository(repository)).toThrow(
-				REPOSITORY_EXAMPLE,
-			);
+			).rejects.toThrow(/not a Git repository/i);
+			expect(() => canonicalizeRepository("/")).toThrow(REPOSITORY_EXAMPLE);
+		} finally {
+			rmSync(loose, { recursive: true, force: true });
 		}
 	});
 
