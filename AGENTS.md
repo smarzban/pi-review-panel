@@ -26,6 +26,14 @@ presentation-only report: severity-ordered, seat-attributed, with seat failures 
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
 review-derived semantic stop signal: agents judge, and the human is the merge gate.
 
+Install as a Pi package with `pi install npm:pi-review-panel` (not `npm install`). Omit
+`repository`, or pass `/`, when this process is already in the repo; an explicit real
+path still wins. `comment` posts or updates one PR card after the owner says yes
+(`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
+list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
+run whose `priorRunId` is this review marks them resolved. Host agents use
+`host-skills/pi-review` to start Pi; they do not call `review_panel` themselves.
+
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
 handoff, not “zero test files”; `contracts` means OpenAPI / proto / GraphQL, not app or TOML
@@ -36,6 +44,8 @@ config. Review seats must name a concrete failure and an actual consumer.
 - Repair implementation is orchestrator-owned. The package selects and launches no fixer.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
+- Close-out comments are owner-asked only. The tool does not post when the panel first finishes.
+- `0.1.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Fixed operational bounds may halt work, but they never make a quality claim.
 
 ## Build / test / verify
