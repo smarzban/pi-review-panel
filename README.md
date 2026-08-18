@@ -43,11 +43,11 @@ You need Pi. Add this package to Pi’s `packages` list and restart Pi:
 
 ```json
 {
-  "packages": ["git:github.com/smarzban/pi-review-panel"]
+  "packages": ["npm:pi-review-panel"]
 }
 ```
 
-Or clone this repo and add the local path instead.
+From git instead: `git:github.com/smarzban/pi-review-panel`. A local clone path works too.
 
 Create `~/.pi-review-panel/config.json` with the seats you already have
 authenticated in Pi. Shape and location rules are in the
@@ -89,5 +89,6 @@ or dispositions, and lost seats. It is not a merge decision.
 
 ## Status
 
-0.1.0. Diagnose, review, verify, and comment are the public path. Pi loads the
-TypeScript directly — no `dist/`, no runtime dependencies beyond Pi.
+0.1.0. Install as `npm:pi-review-panel`. Diagnose, review, verify, and comment
+are the public path. Pi loads the TypeScript directly — no `dist/`, no runtime
+dependencies beyond Pi.
