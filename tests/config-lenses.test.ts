@@ -147,8 +147,10 @@ describe("config lens registry", () => {
 			"src/run/run-review.ts",
 			"src/seat/seat-extension.ts",
 			"skills/review-panel/SKILL.md",
+			"host-skills/pi-review/SKILL.md",
 			"package.json",
 			"README.md",
+			"LICENSE",
 		];
 		for (const file of required) {
 			expect(shipped.has(file), `npm package contains ${file}`).toBe(true);

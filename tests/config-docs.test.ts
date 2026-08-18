@@ -91,6 +91,35 @@ describe("owner configuration guide", () => {
 		expect(existsSync(GUIDE_PATH), "the linked guide exists").toBe(true);
 	});
 
+	it("package.json carries the fields npm publish and Pi install need", () => {
+		const pkg = JSON.parse(
+			readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
+		) as {
+			name: string;
+			license?: string;
+			repository?: { url?: string };
+			files?: string[];
+			pi?: { extensions?: string[]; skills?: string[] };
+		};
+		expect(pkg.name).toBe("pi-review-panel");
+		expect(pkg.license).toBe("MIT");
+		expect(pkg.repository?.url).toContain(
+			"github.com/smarzban/pi-review-panel",
+		);
+		expect(pkg.files).toEqual(
+			expect.arrayContaining([
+				"src",
+				"prompts",
+				"skills",
+				"docs/configuration.md",
+				"host-skills",
+				"LICENSE",
+			]),
+		);
+		expect(pkg.pi?.extensions).toContain("src/tool/review-panel.ts");
+		expect(pkg.pi?.skills).toContain("./skills");
+	});
+
 	it("the marked example has no loopPolicy and rejects a fixer field", () => {
 		const docBytes = readFileSync(GUIDE_PATH, "utf8");
 		const parsed = JSON.parse(extractConfigExample(docBytes)) as Record<
