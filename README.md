@@ -1,59 +1,96 @@
-# pi-review-panel
+# Review panel
 
-A review panel for pi coding agents. Configured reviewer seats run over one pinned
-change and record evidence under `.review-panel/`. The tool does not compute a
-merge decision. The owner remains the merge gate.
+One model reviewing your PR is an opinion.
 
-**Status:** 0.1.0. Diagnose, review, verify, and comment are the public path.
+A **panel** is several exact models, on one pinned snapshot, that can report
+findings only through a structured channel — and a tool that is **forbidden**
+from saying the change is good.
 
-## Supported path
+Most AI reviewers try to be the judge. They score the diff. They invent
+agreement. They print “ready to merge.” That is why you stopped trusting them.
 
-`review_panel` is the package's public review tool. Every call names an absolute
-`repository`.
+Review panel does not judge. It seats the models you named, runs the lenses the
+change warrants, and hands you evidence. You keep or skip. You fix. It verifies
+the keep list. **You merge.**
 
-1. Diagnose setup before review:
+## Why this, not another “please review this”
 
-   ```json
-   {"action":"diagnose","repository":"/Users/you/the-repo"}
-   ```
+**Nothing else in this stack is a panel.** A chat review is prose. A
+single-model CLI is one voice plus a correctness score. CI is the suite —
+reviewers here cannot run it, and they must not pretend they did.
 
-2. Review an explicit change:
+What you get instead:
 
-   ```json
-   {"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
-   ```
+- **Several models, not one.** You pin exact `provider/model` seats. A dead
+  seat is lost coverage, never a silent empty pass.
+- **One snapshot.** Every seat sees the same committed `base…head`. Uncommitted
+  work is invisible on purpose.
+- **Findings, not vibes.** A finding exists only if a seat submitted it. The
+  tool never parses a paragraph into a bug.
+- **Lenses when the change earns them.** Holistic always runs. Security, tests,
+  contracts, and the rest fire only when a trigger matches. No hardcoded “always
+  pick these two.”
+- **No verdict.** No risk score. No “patch is correct.” Severity is an opinion
+  you may drop or promote.
+- **Verify the keep list.** After you fix, a new HEAD is checked against the
+  ids you kept — not a second full discovery circus.
+- **One owner-asked PR comment.** Counts, dismissals with reasons, leftover
+  lows. No Fixed list. No “ready to merge.” You have to say yes before it posts.
 
-   Optional `lenses` add specialist extras. Optional `scopingNote` focuses a large
-   diff. Holistic seats always run. The result includes advisory lens suggestions.
+An earlier attempt tried to make a mechanical verdict trustworthy. It failed
+at exactly that. The rule is now a constitution, not a preference.
 
-3. After you fix kept findings, verify the fix range:
+## Install
 
-   ```json
-   {"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
-   ```
+You need Pi. Add this package to Pi’s `packages` list and restart Pi:
 
-4. After a first review with nothing kept, or a clean verify, ask the owner
-   before posting. Yes posts or updates one PR comment (`## Review panel`).
-   The tool does not post until `ownerApproved` is true.
+```json
+{
+  "packages": ["git:github.com/smarzban/pi-review-panel"]
+}
+```
 
-   ```json
-   {"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29,"dismissed":[{"id":"F-4","reason":"checked, not real"}],"lowAdvisory":["F-8"]}
-   ```
+Or clone this repo and add the local path instead.
 
-The result is bounded Markdown: coverage, finding counts or dispositions, lost
-seats, and the record path. Judge the report, fix real blockers in your harness,
-then verify. The skill describes when to tell the owner the change looks ready
-to land, and when to ask before posting the close-out comment.
-
-## Setup
-
-Create the owner-controlled configuration outside the repository
-(`~/.pi-review-panel/config.json`), then run `diagnose`. See the
+Create `~/.pi-review-panel/config.json` with the seats you already have
+authenticated in Pi. Shape and location rules are in the
 [owner configuration guide](docs/configuration.md).
 
-Point Pi's `packages` list at this repository and restart Pi.
+Then, in Pi:
 
-## Package surface
+```
+Use the review-panel skill. Review this change.
+```
 
-The package ships TypeScript source, package-owned prompts, the review-panel
-skill, and public configuration documentation. Pi loads the extension directly.
+From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
+`/pi-review`. That starts Pi. Pi owns the tool. The host does not call
+`review_panel` itself.
+
+## How a run goes
+
+```json
+{"action":"diagnose","repository":"/Users/you/the-repo"}
+```
+
+```json
+{"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
+```
+
+```json
+{"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
+```
+
+```json
+{"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29}
+```
+
+`repository` is the real repo path, never `/`. Holistic seats always run.
+Optional `lenses` add extras. Optional `scopingNote` focuses a large diff.
+
+Records land under `.review-panel/runs/`. The public card is coverage, findings
+or dispositions, and lost seats. It is not a merge decision.
+
+## Status
+
+0.1.0. Diagnose, review, verify, and comment are the public path. Pi loads the
+TypeScript directly — no `dist/`, no runtime dependencies beyond Pi.
