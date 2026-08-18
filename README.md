@@ -37,9 +37,6 @@ What you get instead:
 - **One owner-asked PR comment.** Counts, dismissals with reasons, leftover
   lows. No Fixed list. No “ready to merge.” You have to say yes before it posts.
 
-An earlier attempt tried to make a mechanical verdict trustworthy. It failed
-at exactly that. The rule is now a constitution, not a preference.
-
 ## Install
 
 You need Pi. Add this package to Pi’s `packages` list and restart Pi:
@@ -84,8 +81,8 @@ From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 {"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29}
 ```
 
-`repository` is the real repo path, never `/`. Holistic seats always run.
-Optional `lenses` add extras. Optional `scopingNote` focuses a large diff.
+Holistic seats always run. Optional `lenses` add extras. Optional `scopingNote`
+focuses a large diff.
 
 Records land under `.review-panel/runs/`. The public card is coverage, findings
 or dispositions, and lost seats. It is not a merge decision.
