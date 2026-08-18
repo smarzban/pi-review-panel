@@ -39,7 +39,14 @@ What you get instead:
 
 ## Install
 
-You need Pi. Add this package to Pi’s `packages` list and restart Pi:
+You need Pi. Install from npm and restart Pi:
+
+```bash
+pi install npm:pi-review-panel
+```
+
+That adds `npm:pi-review-panel` to Pi’s `packages` list. You can also put the
+source there yourself:
 
 ```json
 {
@@ -47,7 +54,8 @@ You need Pi. Add this package to Pi’s `packages` list and restart Pi:
 }
 ```
 
-From git instead: `git:github.com/smarzban/pi-review-panel`. A local clone path works too.
+From git instead: `pi install git:github.com/smarzban/pi-review-panel`. A local
+clone path works too.
 
 Create `~/.pi-review-panel/config.json` with the seats you already have
 authenticated in Pi. Shape and location rules are in the
