@@ -1,6 +1,6 @@
 ---
 name: review-panel
-description: Use when asked to review a PR or diff. Call review_panel with action review (or diagnose/verify/comment). Never call it with {}. Holistic is implicit; add extras only when a trigger matches. Judge, fix in the harness, verify kept ids, ask before posting the close-out comment, stop after three model passes.
+description: Use when asked to review a PR or diff, or audit a repository. Call review_panel with review, audit, diagnose, verify, or comment. Never call it with {}. Judge findings and keep repair in the harness.
 ---
 
 # review
@@ -20,6 +20,16 @@ Never call the tool with `{}`. Review already diagnoses and refuses when setup i
 7. If you fixed something, commit it so `head` is a new OID. Uncommitted work is invisible: verify pins a committed snapshot and refuses when head matches the prior run. Then call `{ "action": "verify", "repository", "priorRunId", "head", "keptFindingIds" }`. Pass `seats` with one roster alias from the config (the first `defaults.seats` row is fine) unless the kept item is high-stakes; then at most two. Do not replay the whole discovery roster. `priorRunId` is the run directory name from the review record path, or that full record path. `keptFindingIds` is your list, including any promoted low.
 8. Recommend landing only when every kept item is resolved, there is no new high/medium regression on the fix, and lost coverage is named. Then ask whether to post the close-out comment. Do not post until they say yes.
 9. After a yes, call `{ "action": "comment", "repository", "priorRunId", "ownerApproved": true }` with `pr` when you know the number, `dismissed` as `[{ "id", "reason" }]` for every high/medium you dropped, `lowAdvisory` as the leftover low ids, and `verifyRunId` when any kept item was fixed. The tool finds the one comment whose author is you and whose body has heading `## Review panel`, then updates it. Never open a second thread. Never write ready to merge on the comment.
+
+## Repository audit
+
+Use audit for a periodic, advisory sweep of the whole pinned repository, not a PR or a merge check. It has no base/head range. Seats explore with `read`, `grep`, `find`, and `ls`, then record findings only through `submit_findings`.
+
+Call `{ "action": "audit", "repository": "<absolute repo path>" }`. Omit `repository` when already in the repository. The default sweep runs `code-health`, `docs`, `tests`, and `security` across the first two owner-default roster seats. Pass `passes` as a JSON array to choose a targeted menu instead, for example `{"action":"audit","passes":["security","operability"]}`.
+
+Add a situational pass only when the repository warrants it: `over-engineering`, `observability`, `operability`, or `ux`. Use the default two seats per pass. Select a third exact roster seat only when the scope gives a concrete reason, and put that reason in `scopingNote`. Lost seats are lost coverage.
+
+Read the report and the code behind any finding you might keep. The tool presents a backlog with counts, affected file areas, lost seats, and the record path. It does not write `AUDIT.md`, repair files, run CI, or post a GitHub comment for an audit. After you judge the findings, you may write `AUDIT.md` yourself as an owner-facing backlog. Do not ask the tool to do that.
 
 ## Lenses
 

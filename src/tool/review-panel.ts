@@ -14,6 +14,8 @@ import path from "node:path";
 import { cwd as processCwd, env as processEnv } from "node:process";
 
 import { Type } from "typebox";
+import { resolveAuditPanel } from "../config/audit-panel.js";
+import { loadAuditPassTable } from "../config/audit-passes.js";
 import { loadLensTable } from "../config/lenses.js";
 import { type ConfigEnv, loadConfig } from "../config/load.js";
 import { resolvePanel } from "../config/panel.js";
@@ -23,6 +25,12 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import {
+	type RunAuditInput,
+	type RunAuditOptions,
+	type RunAuditResult,
+	runAudit,
+} from "../run/run-audit.js";
 import {
 	type RunReviewOptions,
 	type RunReviewResult,
@@ -50,9 +58,11 @@ import {
 } from "./closeout-post.js";
 import {
 	compactPanelRoster,
+	progressFromAuditEvent,
 	progressFromReviewEvent,
 	progressFromVerifyEvent,
 	type ReviewProgressView,
+	renderAuditResult,
 	renderReadiness,
 	renderReviewProgress,
 	renderReviewResult,
@@ -108,6 +118,16 @@ const parameters = Type.Union([
 	),
 	Type.Object(
 		{
+			action: Type.Literal("audit"),
+			repository: Type.Optional(absoluteRepository),
+			seats: Type.Optional(stringList),
+			passes: Type.Optional(stringList),
+			scopingNote: Type.Optional(nonEmpty),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
 			action: Type.Literal("verify"),
 			repository: Type.Optional(absoluteRepository),
 			priorRunId: nonEmpty,
@@ -138,7 +158,7 @@ const parameters = Type.Union([
 ]);
 
 const USAGE =
-	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
+	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -161,6 +181,10 @@ export type ReviewPanelDependencies = {
 		config: RunConfig,
 		options?: RunReviewOptions,
 	) => Promise<RunReviewResult>;
+	runAudit?: (
+		input: RunAuditInput,
+		options?: RunAuditOptions,
+	) => Promise<RunAuditResult>;
 	resolveCommitOid?: typeof resolveCommitOid;
 	suggestLenses?: typeof suggestLenses;
 	runVerify?: (
@@ -220,6 +244,7 @@ export function prepareReviewArguments(args: unknown): unknown {
 	for (const key of [
 		"seats",
 		"lenses",
+		"passes",
 		"keptFindingIds",
 		"lowAdvisory",
 	] as const) {
@@ -514,6 +539,7 @@ export function createReviewPanelTool(
 	const load = deps?.loadConfig ?? loadConfig;
 	const panelOf = deps?.resolvePanel ?? resolvePanel;
 	const review = deps?.runReview ?? runReview;
+	const audit = deps?.runAudit ?? runAudit;
 	const oidOf = deps?.resolveCommitOid ?? resolveCommitOid;
 	const suggest = deps?.suggestLenses ?? suggestLenses;
 	const verify = deps?.runVerify ?? runVerify;
@@ -523,7 +549,7 @@ export function createReviewPanelTool(
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, review an explicit base...head change, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {
@@ -555,6 +581,93 @@ export function createReviewPanelTool(
 					home: runtime.home,
 				});
 				return { content: [{ type: "text", text: renderReadiness(report) }] };
+			}
+
+			if (action === "audit") {
+				for (const key of Reflect.ownKeys(args)) {
+					if (
+						key !== "action" &&
+						key !== "repository" &&
+						key !== "seats" &&
+						key !== "passes" &&
+						key !== "scopingNote"
+					) {
+						throw new Error(`audit does not accept argument "${String(key)}"`);
+					}
+				}
+				const seats =
+					args.seats === undefined
+						? undefined
+						: validateStringArray(args.seats, "seats");
+				const passes =
+					args.passes === undefined
+						? undefined
+						: validateStringArray(args.passes, "passes");
+				const scopingNote =
+					args.scopingNote === undefined
+						? undefined
+						: validateNonEmptyString(args.scopingNote, "scopingNote");
+				const report = await diagnose({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				if (!report.ready) {
+					throw new Error(renderReadiness(report));
+				}
+				const config = load({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				const panel = resolveAuditPanel({
+					config,
+					passTable: loadAuditPassTable(),
+					...(seats === undefined ? {} : { seats }),
+					...(passes === undefined ? {} : { passes }),
+				});
+				const revision = oidOf(repoDir, "HEAD");
+				const roster = compactPanelRoster(panel);
+				emitProgress(onUpdate, {
+					phase: "audit",
+					event: "started",
+					elapsedMs: Date.now() - startedAt,
+					total: panel.length,
+					completed: 0,
+					active: 0,
+					roster,
+				});
+				const result = await audit(
+					{
+						repoDir,
+						revision,
+						seats: panel,
+						...(scopingNote === undefined ? {} : { scopingNote }),
+						...(config.defaults.seatBudgetMs === undefined
+							? {}
+							: { seatBudgetMs: config.defaults.seatBudgetMs }),
+					},
+					{
+						...(signal === undefined ? {} : { abortSignal: signal }),
+						onProgress: (event) =>
+							emitProgress(onUpdate, {
+								...progressFromAuditEvent(event, Date.now() - startedAt),
+								roster,
+							}),
+					},
+				);
+				return {
+					content: [
+						{
+							type: "text",
+							text: renderAuditResult({
+								recordPath: result.recordPath,
+								panel,
+								result,
+							}),
+						},
+					],
+				};
 			}
 
 			if (action === "verify") {
@@ -651,7 +764,7 @@ export function createReviewPanelTool(
 
 			if (action !== "review") {
 				throw new Error(
-					`review_panel action must be "diagnose", "review", "verify", or "comment", got "${action}"`,
+					`review_panel action must be "diagnose", "review", "audit", "verify", or "comment", got "${action}"`,
 				);
 			}
 
