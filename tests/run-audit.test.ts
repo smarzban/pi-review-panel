@@ -65,6 +65,9 @@ describe("runAudit", () => {
 			expect(sdk.runs[0]?.input.tools.map((tool) => tool.name)).not.toContain(
 				"submit_audit",
 			);
+			expect(sdk.runs[0]?.input.tools.map((tool) => tool.name)).not.toContain(
+				"git_diff",
+			);
 			expect(sdk.runs[0]?.input.spec.profile?.tools).toEqual([
 				"read",
 				"grep",
