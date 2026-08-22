@@ -40,7 +40,7 @@ function truncateUtf8(text: string, maxChars: number): string {
 }
 
 export type ReviewProgressView = {
-	phase: "diagnose" | "review" | "verify";
+	phase: "diagnose" | "review" | "verify" | "audit";
 	event: string;
 	elapsedMs: number;
 	seat?: string;
@@ -127,6 +127,16 @@ export function progressFromReviewEvent(
 		...(event.attempts === undefined ? {} : { attempts: event.attempts }),
 		...(event.tokens === undefined ? {} : { tokens: event.tokens }),
 		...(event.lastTool === undefined ? {} : { lastTool: event.lastTool }),
+	};
+}
+
+export function progressFromAuditEvent(
+	event: ReviewProgressEvent,
+	elapsedMs: number,
+): ReviewProgressView {
+	return {
+		...progressFromReviewEvent(event, elapsedMs),
+		phase: "audit",
 	};
 }
 
@@ -332,6 +342,55 @@ export function renderReviewResult(input: {
 	const suggestions = input.suggestions ?? [];
 	if (suggestions.length > 0) {
 		lines.push("", `Suggest: ${suggestions.map((row) => row.lens).join(", ")}`);
+	}
+	if (input.result.cleanupError !== undefined) {
+		lines.push("", input.result.cleanupError);
+	}
+	lines.push("", "Not a merge decision.");
+	return fitPresentation(lines);
+}
+
+export function renderAuditResult(input: {
+	recordPath: string;
+	panel: PlannedSeat[];
+	result: RunReviewResult;
+}): string {
+	const voted = input.result.outcomes.filter(
+		(facts) => facts.outcome.kind === "voted",
+	);
+	const failed = input.result.outcomes.filter(
+		(facts) => facts.outcome.kind === "failed",
+	);
+	const findings = voted.flatMap((facts) =>
+		facts.outcome.kind === "voted" ? facts.outcome.findings : [],
+	);
+	const areas = [
+		...new Set(findings.map((finding) => finding.file.split("/")[0] ?? ".")),
+	].sort();
+	const lines = [
+		"# Repository audit",
+		`${voted.length}/${input.result.outcomes.length} voted · ${findings.length} finding${findings.length === 1 ? "" : "s"}`,
+		...(areas.length === 0 ? [] : [`Areas: ${areas.join(", ")}`]),
+	];
+	if (failed.length > 0) {
+		lines.push(
+			`Lost: ${failed
+				.map((facts) => {
+					const failure =
+						facts.outcome.kind === "failed" ? facts.outcome.class : "failed";
+					return `${facts.seat.rosterId}/${facts.seat.lens} (${failure})`;
+				})
+				.join(", ")}`,
+		);
+	}
+	lines.push(`Record: \`${input.recordPath}\``, "");
+	for (const finding of findings) {
+		lines.push(
+			`- [${finding.severity}] ${finding.title} (${finding.file}:${finding.line})`,
+		);
+	}
+	if (findings.length === 0) {
+		lines.push("None submitted.");
 	}
 	if (input.result.cleanupError !== undefined) {
 		lines.push("", input.result.cleanupError);

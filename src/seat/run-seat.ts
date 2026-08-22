@@ -5,6 +5,7 @@ import {
 	type AuditProfile,
 	DEFAULT_SEAT_PROFILE,
 	type FindingsProfile,
+	type FindingsSeatProfile,
 	type SeatProfile,
 	type VerificationProfile,
 } from "./channel-profile.js";
@@ -336,15 +337,15 @@ export async function runSeatForReplay(
 	return runSeatInternal(spec, options);
 }
 
-/** Runs one findings reviewer through an isolated embedded SDK session. */
-export async function runSeat(
-	spec: SeatSpec<FindingsProfile>,
+/** Runs one findings reporter through an isolated embedded SDK session. */
+export async function runSeat<P extends FindingsSeatProfile = FindingsProfile>(
+	spec: SeatSpec<P>,
 	options: RunSeatOptions = {},
-): Promise<SeatRunResult> {
+): Promise<SeatRunResult<P>> {
 	return (await runSeatInternal(
 		spec as SeatSpec<SeatProfile>,
 		options,
-	)) as SeatRunResult;
+	)) as SeatRunResult<P>;
 }
 
 /** Runs one claim-audit or fix-verification reviewer through the same SDK lifecycle. */

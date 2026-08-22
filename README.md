@@ -3,8 +3,9 @@
 One model reviewing your PR is an opinion.
 
 A **panel** is several exact models, on one pinned snapshot, that can report
-findings only through a structured channel — and a tool that is **forbidden**
-from saying the change is good.
+findings only through a structured channel, and a tool that is **forbidden**
+from saying the change is good. It reviews a committed change or runs an
+advisory whole-repository audit.
 
 Most AI reviewers try to be the judge. They score the diff. They invent
 agreement. They print “ready to merge.” That is why you stopped trusting them.
@@ -23,8 +24,8 @@ What you get instead:
 
 - **Several models, not one.** You pin exact `provider/model` seats. A dead
   seat is lost coverage, never a silent empty pass.
-- **One snapshot.** Every seat sees the same committed `base…head`. Uncommitted
-  work is invisible on purpose.
+- **One snapshot.** Review seats see the same committed `base…head`; audit
+  seats see one committed `HEAD` tree. Uncommitted work is invisible on purpose.
 - **Findings, not vibes.** A finding exists only if a seat submitted it. The
   tool never parses a paragraph into a bug.
 - **Lenses when the change earns them.** Holistic always runs. Security, tests,
@@ -67,6 +68,12 @@ Then, in Pi:
 Use the review-panel skill. Review this change.
 ```
 
+For a periodic repository sweep instead:
+
+```
+Use the review-panel skill. Audit this repository.
+```
+
 From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 `/pi-review`. That starts Pi. Pi owns the tool. The host does not call
 `review_panel` itself.
@@ -80,6 +87,16 @@ From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 ```json
 {"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
 ```
+
+```json
+{"action":"audit","repository":"/Users/you/the-repo"}
+```
+
+An audit pins the whole `HEAD` tree. Its baseline passes are code health, docs,
+tests, and security across two owner-default seats. Pass `passes` for a
+situational sweep such as observability or operability. It reports an advisory
+backlog only: counts, file areas, lost seats, and a record path. The tool does
+not write `AUDIT.md` or post an audit comment.
 
 ```json
 {"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
@@ -97,6 +114,6 @@ or dispositions, and lost seats. It is not a merge decision.
 
 ## Status
 
-0.1.0. Install as `npm:pi-review-panel`. Diagnose, review, verify, and comment
-are the public path. Pi loads the TypeScript directly — no `dist/`, no runtime
-dependencies beyond Pi.
+0.1.0. Install as `npm:pi-review-panel`. Diagnose, review, audit, verify, and
+comment are the public path. Pi loads the TypeScript directly, no `dist/`, no
+runtime dependencies beyond Pi.

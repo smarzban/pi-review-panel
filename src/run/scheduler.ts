@@ -1,7 +1,10 @@
 // biome-ignore format: This import must remain one line for the ts-expect-error directive.
 // @ts-expect-error The initial scaffold has no Node type declarations.
 import { performance } from "node:perf_hooks";
-import type { FindingsProfile } from "../seat/channel-profile.js";
+import {
+	type FindingsProfile,
+	SEAT_PROFILES,
+} from "../seat/channel-profile.js";
 import {
 	runSeat as defaultRunSeat,
 	type LiveSeatProbe,
@@ -163,6 +166,8 @@ export type ScheduleInput = {
 	/** Frozen base commit OID, never a symbolic ref. */
 	baseRef: string;
 	scopingNote?: string;
+	/** Whole-tree audit seats omit the diff-oriented base from their prompt. */
+	audit?: true;
 };
 
 /**
@@ -342,7 +347,7 @@ function seatSpecFor(
 	seat: PlannedSeat,
 	input: ScheduleInput,
 ): SeatSpec<FindingsProfile> {
-	return {
+	const spec: SeatSpec<FindingsProfile> = {
 		provider: seat.provider,
 		model: seat.model,
 		lens: seat.lens,
@@ -356,6 +361,13 @@ function seatSpecFor(
 			? {}
 			: { scopingNote: input.scopingNote }),
 	};
+	if (input.audit) {
+		return {
+			...spec,
+			profile: SEAT_PROFILES["repo-audit"],
+		} as unknown as SeatSpec<FindingsProfile>;
+	}
+	return spec;
 }
 
 function outcomeFactsFor(
