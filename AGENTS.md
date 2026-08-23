@@ -15,10 +15,10 @@ frozen one-line pointer and says so in-file.
 ## Project overview
 
 **pi-review-panel** runs multi-model code review as a pi package. The public tool is `review_panel`
-(`diagnose` / `review` / `verify` / `comment`). The shipped skill is `review-panel`. A run fans N reviewer
-*seats* — each an exact `provider/model` paired with a review *lens* — over one pinned snapshot of
-the change, as read-only `pi -p` subprocesses that can report findings only through a structured
-`submit_findings` channel. Seat identity is owner authority: an outside-repository roster config
+(`diagnose` / `review` / `audit` / `verify` / `comment`). The shipped skill is `review-panel`. A run
+fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned lens — over
+one pinned snapshot, as read-only `pi -p` subprocesses that can report findings only through
+`submit_findings`. Seat identity is owner authority: an outside-repository roster config
 (`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
 rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
 Runs record under `<repo>/.review-panel/runs/`. Verify only reads those trees. The output is a
@@ -28,7 +28,10 @@ review-derived semantic stop signal: agents judge, and the human is the merge ga
 
 Install as a Pi package with `pi install npm:pi-review-panel` (not `npm install`). Omit
 `repository`, or pass `/`, when this process is already in the repo; an explicit real
-path still wins. `comment` posts or updates one PR card after the owner says yes
+path still wins. `audit` is a periodic whole-repository advisory sweep against one pinned `HEAD`
+snapshot (no base/head range). Default passes are code-health, docs, tests, and security across
+the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
+GitHub comment. `comment` posts or updates one PR card after the owner says yes
 (`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
 list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
 run whose `priorRunId` is this review marks them resolved. Host agents use
