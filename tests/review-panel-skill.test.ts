@@ -73,6 +73,22 @@ describe("review skill required workflow", () => {
 	});
 });
 
+describe("repository audit workflow", () => {
+	it("keeps audit advisory, whole-tree, and separate from review close-out", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).toContain('"action": "audit"');
+		expect(body).toContain("whole pinned repository");
+		expect(body).toContain("code-health");
+		expect(body).toContain("over-engineering");
+		expect(body).toContain("submit_findings");
+		expect(body).toContain("AUDIT.md");
+		expect(body).not.toContain("submit_audit");
+		expect(body).toContain(
+			"does not write `AUDIT.md`, repair files, run CI, or post",
+		);
+	});
+});
+
 describe("review skill extra-lens triggers", () => {
 	it("fires every matching extra and does not cap extras at two", () => {
 		const { frontmatter, body } = splitFrontmatter(readSkill());

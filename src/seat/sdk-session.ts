@@ -8,7 +8,8 @@ export type SeatSpec<P extends SeatProfile = typeof DEFAULT_SEAT_PROFILE> = {
 	model: string;
 	lens: string;
 	lensPrompt: string;
-	baseRef: string;
+	/** Diff base for change review. Repository audits omit it. */
+	baseRef?: string;
 	scopingNote?: string;
 	/** Untrusted records rendered after the role prompt, never in the binding scope. */
 	dataAppendix?: string;

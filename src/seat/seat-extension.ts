@@ -502,5 +502,8 @@ export function createSeatTools({
 		return { tools: [readOnly, tool], channel };
 	}
 	const { tool, channel } = createSubmitFindingsTool({});
+	if (profile.kind === "repo-audit") {
+		return { tools: [tool], channel };
+	}
 	return { tools: [readOnly, tool], channel };
 }
