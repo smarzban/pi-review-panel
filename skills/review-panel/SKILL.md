@@ -25,9 +25,9 @@ Never call the tool with `{}`. Review already diagnoses and refuses when setup i
 
 Use audit for a periodic, advisory sweep of the whole pinned repository, not a PR or a merge check. It has no base/head range. Seats explore with `read`, `grep`, `find`, and `ls`, then record findings only through `submit_findings`.
 
-Call `{ "action": "audit", "repository": "<absolute repo path>" }`. Omit `repository` when already in the repository. The default sweep runs `code-health`, `docs`, `tests`, and `security` across the first two owner-default roster seats. Pass `passes` as a JSON array to choose a targeted menu instead, for example `{"action":"audit","passes":["security","operability"]}`.
+Call `{ "action": "audit", "repository": "<absolute repo path>" }`. Omit `repository` when already in the repository. The default sweep runs `code-health`, `over-engineering`, `tests`, and `security` across the first two owner-default roster seats. Pass `passes` as a JSON array to choose a targeted menu instead, for example `{"action":"audit","passes":["docs","operability"]}`.
 
-Add a situational pass only when the repository warrants it: `over-engineering`, `observability`, `operability`, or `ux`. Use the default two seats per pass. Select a third exact roster seat only when the scope gives a concrete reason, and put that reason in `scopingNote`. Lost seats are lost coverage.
+Add a situational pass only when the repository warrants it: `docs`, `observability`, `operability`, or `ux`. Use the default two seats per pass. Select a third exact roster seat only when the scope gives a concrete reason, and put that reason in `scopingNote`. Lost seats are lost coverage.
 
 Read the report and the code behind any finding you might keep. The tool presents a backlog with counts, affected file areas, lost seats, and the record path. It does not write `AUDIT.md`, repair files, run CI, or post a GitHub comment for an audit. After you judge the findings, you may write `AUDIT.md` yourself as an owner-facing backlog. Do not ask the tool to do that.
 
