@@ -29,8 +29,8 @@ review-derived semantic stop signal: agents judge, and the human is the merge ga
 Install as a Pi package with `pi install npm:pi-review-panel` (not `npm install`). Omit
 `repository`, or pass `/`, when this process is already in the repo; an explicit real
 path still wins. `audit` is a periodic whole-repository advisory sweep against one pinned `HEAD`
-snapshot (no base/head range). Default passes are code-health, docs, tests, and security across
-the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
+snapshot (no base/head range). Default passes are code-health, over-engineering, tests, and security
+across the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
 GitHub comment. `comment` posts or updates one PR card after the owner says yes
 (`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
 list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify

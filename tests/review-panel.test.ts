@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 // @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
 import type { Config } from "../src/config/schema.js";
@@ -68,31 +69,57 @@ function toolWith(
 }
 
 describe("review_panel public tool adapter", () => {
-	it("prepares a stringified lenses list before host schema validation", () => {
-		expect(
-			prepareReviewArguments({
-				action: "review",
-				repository: "/tmp/repo",
-				base: "main",
-				head: "HEAD",
-				lenses: '["subtle-correctness"]\n',
-			}),
-		).toEqual({
+	it("prepares stringified arrays before host schema validation", () => {
+		const tool = toolWith();
+		const jsonEncoded = prepareReviewArguments({
+			action: "review",
+			repository: "/tmp/repo",
+			base: "main",
+			head: "HEAD",
+			lenses: '["subtle-correctness"]\n',
+		});
+		expect(jsonEncoded).toEqual({
 			action: "review",
 			repository: "/tmp/repo",
 			base: "main",
 			head: "HEAD",
 			lenses: ["subtle-correctness"],
 		});
-		expect(
-			prepareReviewArguments({
-				action: "review",
-				repository: "/tmp/repo",
-				base: "main",
-				head: "HEAD",
-				lenses: "security",
-			}),
-		).toMatchObject({ lenses: ["security"] });
+		expect(Value.Check(tool.parameters, jsonEncoded)).toBe(true);
+
+		const scalar = prepareReviewArguments({
+			action: "review",
+			repository: "/tmp/repo",
+			base: "main",
+			head: "HEAD",
+			lenses: "security",
+		});
+		expect(scalar).toMatchObject({ lenses: ["security"] });
+		expect(Value.Check(tool.parameters, scalar)).toBe(true);
+	});
+
+	it("accepts every documented object argument shape without schema branches", () => {
+		const tool = toolWith();
+		const args = {
+			action: "comment",
+			repository: "/tmp/repo",
+			priorRunId: "review-run",
+			ownerApproved: true,
+			pr: 42,
+			dismissed: [
+				{ id: "F-1", reason: "not reproducible", title: "finding title" },
+			],
+			lowAdvisory: [],
+			verifyRunId: "verify-run",
+			head: "HEAD",
+		};
+
+		expect(Value.Check(tool.parameters, tool.prepareArguments(args))).toBe(
+			true,
+		);
+		const schema = JSON.stringify(tool.parameters);
+		expect(schema).not.toContain('"anyOf"');
+		expect(schema).not.toContain('"oneOf"');
 	});
 
 	it("turns an empty probe into a copy-paste usage error", async () => {

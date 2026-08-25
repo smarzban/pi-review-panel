@@ -29,15 +29,15 @@ describe("resolveAuditPanel", () => {
 
 		expect(AUDIT_DEFAULT_PASSES).toEqual([
 			"code-health",
-			"docs",
+			"over-engineering",
 			"tests",
 			"security",
 		]);
 		expect(panel.map((seat) => [seat.lens, seat.rosterId])).toEqual([
 			["code-health", "terra"],
 			["code-health", "claude"],
-			["docs", "terra"],
-			["docs", "claude"],
+			["over-engineering", "terra"],
+			["over-engineering", "claude"],
 			["tests", "terra"],
 			["tests", "claude"],
 			["security", "terra"],

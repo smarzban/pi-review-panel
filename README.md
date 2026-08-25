@@ -92,9 +92,9 @@ From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 {"action":"audit","repository":"/Users/you/the-repo"}
 ```
 
-An audit pins the whole `HEAD` tree. Its baseline passes are code health, docs,
-tests, and security across two owner-default seats. Pass `passes` for a
-situational sweep such as observability or operability. It reports an advisory
+An audit pins the whole `HEAD` tree. Its baseline passes are code health,
+over-engineering, tests, and security across two owner-default seats. Pass
+`passes` for a situational sweep such as docs, observability, or operability. It reports an advisory
 backlog only: counts, file areas, lost seats, and a record path. The tool does
 not write `AUDIT.md` or post an audit comment.
 

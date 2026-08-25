@@ -25,7 +25,7 @@ export type AuditPass = (typeof AUDIT_PASSES)[number];
 /** Baseline passes for an unscoped periodic sweep. Situational passes are opt-in. */
 export const AUDIT_DEFAULT_PASSES = [
 	"code-health",
-	"docs",
+	"over-engineering",
 	"tests",
 	"security",
 ] as const satisfies readonly AuditPass[];
