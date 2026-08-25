@@ -92,13 +92,6 @@ const nonEmpty = Type.String({ minLength: 1 });
  * union can be serialized as an empty object by some provider transports.
  */
 const stringArray = Type.Array(nonEmpty, { minItems: 1 });
-const dismissedRow = Type.Object(
-	{
-		id: nonEmpty,
-		reason: nonEmpty,
-	},
-	{ additionalProperties: false },
-);
 
 const parameters = Type.Object(
 	{
@@ -119,8 +112,8 @@ const parameters = Type.Object(
 		keptFindingIds: Type.Optional(stringArray),
 		ownerApproved: Type.Optional(Type.Boolean()),
 		pr: Type.Optional(Type.Any()),
-		dismissed: Type.Optional(Type.Array(dismissedRow)),
-		lowAdvisory: Type.Optional(stringArray),
+		dismissed: Type.Optional(Type.Any()),
+		lowAdvisory: Type.Optional(Type.Any()),
 		verifyRunId: Type.Optional(nonEmpty),
 	},
 	{ additionalProperties: true },

@@ -69,31 +69,33 @@ function toolWith(
 }
 
 describe("review_panel public tool adapter", () => {
-	it("prepares a stringified lenses list before host schema validation", () => {
-		expect(
-			prepareReviewArguments({
-				action: "review",
-				repository: "/tmp/repo",
-				base: "main",
-				head: "HEAD",
-				lenses: '["subtle-correctness"]\n',
-			}),
-		).toEqual({
+	it("prepares stringified arrays before host schema validation", () => {
+		const tool = toolWith();
+		const jsonEncoded = prepareReviewArguments({
+			action: "review",
+			repository: "/tmp/repo",
+			base: "main",
+			head: "HEAD",
+			lenses: '["subtle-correctness"]\n',
+		});
+		expect(jsonEncoded).toEqual({
 			action: "review",
 			repository: "/tmp/repo",
 			base: "main",
 			head: "HEAD",
 			lenses: ["subtle-correctness"],
 		});
-		expect(
-			prepareReviewArguments({
-				action: "review",
-				repository: "/tmp/repo",
-				base: "main",
-				head: "HEAD",
-				lenses: "security",
-			}),
-		).toMatchObject({ lenses: ["security"] });
+		expect(Value.Check(tool.parameters, jsonEncoded)).toBe(true);
+
+		const scalar = prepareReviewArguments({
+			action: "review",
+			repository: "/tmp/repo",
+			base: "main",
+			head: "HEAD",
+			lenses: "security",
+		});
+		expect(scalar).toMatchObject({ lenses: ["security"] });
+		expect(Value.Check(tool.parameters, scalar)).toBe(true);
 	});
 
 	it("accepts every documented object argument shape without schema branches", () => {
@@ -104,8 +106,10 @@ describe("review_panel public tool adapter", () => {
 			priorRunId: "review-run",
 			ownerApproved: true,
 			pr: 42,
-			dismissed: [{ id: "F-1", reason: "not reproducible" }],
-			lowAdvisory: ["F-2"],
+			dismissed: [
+				{ id: "F-1", reason: "not reproducible", title: "finding title" },
+			],
+			lowAdvisory: [],
 			verifyRunId: "verify-run",
 			head: "HEAD",
 		};
