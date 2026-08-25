@@ -87,75 +87,44 @@ const absoluteRepository = Type.String({
 const nonEmpty = Type.String({ minLength: 1 });
 
 /**
- * Hosts validate before execute. Models often emit array fields as a JSON
- * string (`"[\"security\"]"`). Accept that string in the declared schema and
- * coerce it in prepareArguments so the review branch still matches.
+ * Pi validates tool arguments before execute. Keep this a flat, permissive
+ * envelope: action-specific validation happens in execute, while a root-level
+ * union can be serialized as an empty object by some provider transports.
  */
-const stringList = Type.Union([
-	Type.Array(nonEmpty, { minItems: 1 }),
-	Type.String({ minLength: 1 }),
-]);
+const stringArray = Type.Array(nonEmpty, { minItems: 1 });
+const dismissedRow = Type.Object(
+	{
+		id: nonEmpty,
+		reason: nonEmpty,
+	},
+	{ additionalProperties: false },
+);
 
-const parameters = Type.Union([
-	Type.Object(
-		{
-			action: Type.Literal("diagnose"),
-			repository: Type.Optional(absoluteRepository),
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			action: Type.Literal("review"),
-			repository: Type.Optional(absoluteRepository),
-			base: nonEmpty,
-			head: nonEmpty,
-			seats: Type.Optional(stringList),
-			lenses: Type.Optional(stringList),
-			scopingNote: Type.Optional(nonEmpty),
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			action: Type.Literal("audit"),
-			repository: Type.Optional(absoluteRepository),
-			seats: Type.Optional(stringList),
-			passes: Type.Optional(stringList),
-			scopingNote: Type.Optional(nonEmpty),
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			action: Type.Literal("verify"),
-			repository: Type.Optional(absoluteRepository),
-			priorRunId: nonEmpty,
-			head: nonEmpty,
-			keptFindingIds: stringList,
-			seats: Type.Optional(stringList),
-			scopingNote: Type.Optional(nonEmpty),
-		},
-		{ additionalProperties: false },
-	),
-	Type.Object(
-		{
-			action: Type.Literal("comment"),
-			repository: Type.Optional(absoluteRepository),
-			priorRunId: nonEmpty,
-			ownerApproved: Type.Optional(Type.Unknown()),
-			pr: Type.Optional(Type.Unknown()),
-			dismissed: Type.Optional(Type.Unknown()),
-			lowAdvisory: Type.Optional(Type.Unknown()),
-			verifyRunId: Type.Optional(nonEmpty),
-			head: Type.Optional(nonEmpty),
-		},
-		{ additionalProperties: false },
-	),
-	// Hosts validate before execute. Models probe with `{}`; accept it so we
-	// can return copy-paste shapes instead of an anyOf dump.
-	Type.Object({}, { additionalProperties: false }),
-]);
+const parameters = Type.Object(
+	{
+		action: Type.Optional(
+			Type.String({
+				description:
+					'Required action: "diagnose", "review", "audit", "verify", or "comment".',
+			}),
+		),
+		repository: Type.Optional(absoluteRepository),
+		base: Type.Optional(nonEmpty),
+		head: Type.Optional(nonEmpty),
+		seats: Type.Optional(stringArray),
+		lenses: Type.Optional(stringArray),
+		passes: Type.Optional(stringArray),
+		scopingNote: Type.Optional(nonEmpty),
+		priorRunId: Type.Optional(nonEmpty),
+		keptFindingIds: Type.Optional(stringArray),
+		ownerApproved: Type.Optional(Type.Boolean()),
+		pr: Type.Optional(Type.Any()),
+		dismissed: Type.Optional(Type.Array(dismissedRow)),
+		lowAdvisory: Type.Optional(stringArray),
+		verifyRunId: Type.Optional(nonEmpty),
+	},
+	{ additionalProperties: true },
+);
 
 const USAGE =
 	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
