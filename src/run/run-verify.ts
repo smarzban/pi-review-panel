@@ -26,6 +26,8 @@ import { pinSnapshot } from "./snapshot.js";
 import type { PlannedSeat, StampedFinding } from "./types.js";
 
 const VERIFY_LENS = "fix-verification";
+export const DEFAULT_VERIFY_SEATS = 1;
+export const MAX_VERIFY_SEATS = 2;
 
 export type VerifySeatOutcome = {
 	seat: PlannedSeat;
@@ -98,6 +100,7 @@ function resolveAliases(
 	return rows;
 }
 
+/** Default to one independent check; high-stakes callers can select a second. */
 export function planVerifySeats(
 	config: Config,
 	seats?: string[],
@@ -106,7 +109,12 @@ export function planVerifySeats(
 	if (prompt === undefined) {
 		throw new Error("Verify refused: fix-verification prompt is missing");
 	}
-	const aliases = seats ?? config.defaults.seats;
+	if (seats !== undefined && seats.length > MAX_VERIFY_SEATS) {
+		throw new Error(
+			`Verify selects ${seats.length} seats; expected at most two`,
+		);
+	}
+	const aliases = seats ?? config.defaults.seats.slice(0, DEFAULT_VERIFY_SEATS);
 	return resolveAliases(aliases, config.roster).map((row) => {
 		const seat: PlannedSeat = {
 			rosterId: row.id,
