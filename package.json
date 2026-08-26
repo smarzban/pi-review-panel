@@ -1,6 +1,6 @@
 {
 	"name": "pi-review-panel",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Multi-model review panel for pi coding agents",
 	"license": "MIT",
 	"author": "Saeed Marzban",

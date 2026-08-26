@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-26
+
 ### Added
 
 - Added the advisory whole-repository `audit` action, with package-owned passes for code health, documentation, tests, security, over-engineering, observability, operability, and UX.
@@ -32,5 +34,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Owner-controlled reviewer rosters, package-owned lenses, pinned review snapshots, structured findings, and persisted run records.
 - The `review-panel` skill and owner configuration guide.
 
-[Unreleased]: https://github.com/smarzban/pi-review-panel/compare/v0.1.0...main
+[Unreleased]: https://github.com/smarzban/pi-review-panel/compare/v0.2.0...main
+[0.2.0]: https://github.com/smarzban/pi-review-panel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/smarzban/pi-review-panel/releases/tag/v0.1.0

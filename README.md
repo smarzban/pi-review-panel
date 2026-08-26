@@ -114,6 +114,6 @@ or dispositions, and lost seats. It is not a merge decision.
 
 ## Status
 
-0.1.0. Install as `npm:pi-review-panel`. Diagnose, review, audit, verify, and
+0.2.0. Install as `npm:pi-review-panel`. Diagnose, review, audit, verify, and
 comment are the public path. Pi loads the TypeScript directly, no `dist/`, no
 runtime dependencies beyond Pi.

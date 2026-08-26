@@ -48,7 +48,7 @@ config. Review seats must name a concrete failure and an actual consumer.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Close-out comments are owner-asked only. The tool does not post when the panel first finishes.
-- `0.1.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
+- `0.2.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Fixed operational bounds may halt work, but they never make a quality claim.
 
 ## Build / test / verify
