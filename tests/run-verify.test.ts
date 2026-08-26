@@ -11,7 +11,11 @@ import { describe, expect, it } from "vitest";
 
 import type { Config } from "../src/config/schema.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
-import { buildVerifyScope, runVerify } from "../src/run/run-verify.js";
+import {
+	buildVerifyScope,
+	planVerifySeats,
+	runVerify,
+} from "../src/run/run-verify.js";
 import type { StampedFinding } from "../src/run/types.js";
 
 function git(cwd: string, args: string[]): string {
@@ -70,6 +74,34 @@ const config: Config = {
 	roster: [{ id: "terra", provider: "openai-codex", model: "gpt-5.6-terra" }],
 	defaults: { seats: ["terra"] },
 };
+
+describe("planVerifySeats", () => {
+	const multiSeatConfig: Config = {
+		roster: [
+			{ id: "terra", provider: "openai-codex", model: "gpt-5.6-terra" },
+			{ id: "claude", provider: "anthropic", model: "claude-opus-5" },
+			{ id: "qwen", provider: "qwen", model: "qwen-3.8-max" },
+		],
+		defaults: { seats: ["terra", "claude", "qwen"] },
+	};
+
+	it("uses the first owner-default seat unless the caller selects seats", () => {
+		expect(
+			planVerifySeats(multiSeatConfig).map((seat) => seat.rosterId),
+		).toEqual(["terra"]);
+		expect(
+			planVerifySeats(multiSeatConfig, ["claude", "qwen"]).map(
+				(seat) => seat.rosterId,
+			),
+		).toEqual(["claude", "qwen"]);
+	});
+
+	it("refuses more than two explicit verification seats", () => {
+		expect(() =>
+			planVerifySeats(multiSeatConfig, ["terra", "claude", "qwen"]),
+		).toThrow(/at most two/i);
+	});
+});
 
 describe("buildVerifyScope", () => {
 	it("lists kept ids without interpolating finding prose into the binding scope", () => {
