@@ -12,13 +12,14 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up toolchain
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 26
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Install
         run: npm ci
@@ -27,6 +28,4 @@ jobs:
         run: npm run typecheck && npm test && npm run check
 
       - name: Publish
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
