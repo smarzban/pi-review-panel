@@ -59,9 +59,6 @@ const SECURITY_RE = new RegExp(
 const SOURCE_FILE_RE =
 	/\.([cm]?[jt]sx?|py|go|rb|java|rs|php|cs|kt|swift|scala|c|cc|cpp|h|hpp)$/i;
 
-const TEST_FILE_RE =
-	/\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\/|(^|\/)tests?\/|_test\.go$|(^|\/)test_[^/]+\.py$|_test\.rs$/i;
-
 const CI_WORKFLOW_RE = /(^|\/)\.github\/workflows\//;
 const TERRAFORM_RE = /\.tf(vars)?$/i;
 const DOCKERFILE_RE = /(^|\/)Dockerfile$|\.Dockerfile$|(^|\/)Dockerfile\./;
@@ -78,10 +75,6 @@ function isMigrationPath(file: string): boolean {
 		MIGRATE_DIR_RE.test(file) ||
 		SQL_FILE_RE.test(file)
 	);
-}
-
-function isTestFile(file: string): boolean {
-	return TEST_FILE_RE.test(file);
 }
 
 const migrationRule: Rule = (changeset) => {
@@ -114,19 +107,15 @@ const securityRule: Rule = (changeset) => {
 };
 
 const testsRule: Rule = (changeset) => {
-	const testAddedLines = changeset.addedLines.filter((added) =>
-		isTestFile(added.file),
-	);
-	const nonTestSource = changeset.files.filter(
-		(file) => !isTestFile(file) && SOURCE_FILE_RE.test(file),
-	);
-	if (nonTestSource.length === 0 || testAddedLines.length > 0) {
+	const code = changeset.files.filter((file) => SOURCE_FILE_RE.test(file));
+	if (code.length === 0) {
 		return null;
 	}
 	return {
 		lens: "tests",
-		reason: "source changed with no added lines in recognized test files",
-		evidence: nonTestSource.map((file) => ({ file })),
+		reason:
+			"code or test file(s) changed: check coverage and that each test can fail",
+		evidence: code.map((file) => ({ file })),
 	};
 };
 

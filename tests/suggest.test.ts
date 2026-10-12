@@ -34,48 +34,30 @@ describe("computeSuggestions", () => {
 		expect(suggestions.map((row) => row.lens)).toContain("security");
 	});
 
-	it("suggests tests when source changes with no recognized test additions", () => {
+	it("suggests tests when a code file changes", () => {
 		const suggestions = computeSuggestions(changeset(["src/run.ts"]));
 		expect(suggestions.map((row) => row.lens)).toContain("tests");
 	});
 
-	it("does not suggest tests when Rust tests/** files gain lines", () => {
-		const suggestions = computeSuggestions(
-			changeset(
-				["src/lib.rs", "tests/pinned_preview.rs"],
-				[
-					{
-						file: "tests/pinned_preview.rs",
-						line: 1,
-						text: "fn it_works() {}",
-					},
-				],
-			),
-		);
-		expect(suggestions.map((row) => row.lens)).not.toContain("tests");
+	it("suggests tests when a change only adds or deletes test files", () => {
+		for (const file of [
+			"tests/pinned_preview.rs",
+			"pkg/api_test.go",
+			"test_mod.py",
+		]) {
+			const suggestions = computeSuggestions(changeset([file]));
+			expect(
+				suggestions.map((row) => row.lens),
+				file,
+			).toContain("tests");
+		}
 	});
 
-	it("does not suggest tests when Go or Python test files gain lines", () => {
-		const go = computeSuggestions(
-			changeset(
-				["pkg/api.go", "pkg/api_test.go"],
-				[
-					{
-						file: "pkg/api_test.go",
-						line: 1,
-						text: "func TestX(t *testing.T) {}",
-					},
-				],
-			),
+	it("does not suggest tests for docs or fixture-only changes", () => {
+		const suggestions = computeSuggestions(
+			changeset(["README.md", "tests/fixtures/run.json"]),
 		);
-		const py = computeSuggestions(
-			changeset(
-				["mod.py", "test_mod.py"],
-				[{ file: "test_mod.py", line: 1, text: "def test_ok(): pass" }],
-			),
-		);
-		expect(go.map((row) => row.lens)).not.toContain("tests");
-		expect(py.map((row) => row.lens)).not.toContain("tests");
+		expect(suggestions.map((row) => row.lens)).not.toContain("tests");
 	});
 
 	it("suggests infrastructure, contracts, privacy, and specification paths", () => {
