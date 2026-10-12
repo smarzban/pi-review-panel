@@ -39,8 +39,9 @@ run whose `priorRunId` is this review marks them resolved. Host agents use
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
-handoff, not “zero test files”; `contracts` means OpenAPI / proto / GraphQL, not app or TOML
-config. Review seats must name a concrete failure and an actual consumer.
+handoff, not “zero test files”, and also any added, rewritten, or deleted test, which the lens
+checks for tests that cannot fail or are not worth keeping; `contracts` means OpenAPI / proto /
+GraphQL, not app or TOML config. Review seats must name a concrete failure and an actual consumer.
 
 ### Review invariants
 

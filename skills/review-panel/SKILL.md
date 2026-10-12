@@ -33,12 +33,12 @@ Read the report and the code behind any finding you might keep. The tool present
 
 ## Lenses
 
-Holistic seats always run. Extra lenses are optional. The holistic lens is implicit. Most PRs fire 0 extras. Fire every extra whose trigger matches, and none that do not.
+Holistic seats always run. Extra lenses are optional. The holistic lens is implicit. Most PRs fire at most `tests`, which covers any code or test change. Fire every extra whose trigger matches, and none that do not.
 
 Pass an extra only when you can point at the matching file, or at a concrete race, cache, or clock:
 
 - `security`: new auth, crypto, subprocess, or a trust/path boundary.
-- `tests`: a behavior change with thin or missing coverage, including an untested production handoff. Added test files are not enough if the new wiring is untested.
+- `tests`: a behavior change with thin or missing coverage, including an untested production handoff. Added test files are not enough if the new wiring is untested. Also fire it when the change adds, rewrites, or deletes tests, so the lens can check that each one can fail and is worth keeping.
 - `contracts`: OpenAPI, proto, or GraphQL files. A TOML or app config schema is not a contract.
 - `privacy`: privacy/PII-named paths.
 - `migrations`: SQL or migration paths.
