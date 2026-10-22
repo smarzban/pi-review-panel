@@ -16,6 +16,7 @@ export const EXAMPLE_CONFIG = `{
   ],
   "defaults": {
     "seats":["terra","claude","glm"],
+    "lenses":["tests"],
     "seatBudgetMs":1200000
   }
 }`;

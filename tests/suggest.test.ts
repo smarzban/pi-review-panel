@@ -53,6 +53,37 @@ describe("computeSuggestions", () => {
 		}
 	});
 
+	it("suggests tests when only a snapshot file changes", () => {
+		const suggestions = computeSuggestions(
+			changeset(["src/__snapshots__/render.test.ts.snap"]),
+		);
+		expect(suggestions.map((row) => row.lens)).toContain("tests");
+	});
+
+	it("says whether code changed without test additions or tests changed", () => {
+		const reasonFor = (files: string[], added: Changeset["addedLines"] = []) =>
+			computeSuggestions(changeset(files, added)).find(
+				(row) => row.lens === "tests",
+			)?.reason;
+		expect(reasonFor(["src/run.ts"])).toBe(
+			"code changed with no test file changes: check coverage",
+		);
+		expect(
+			reasonFor(
+				["src/run.ts", "tests/run.test.ts"],
+				[{ file: "tests/run.test.ts", line: 1, text: "it('x', () => {})" }],
+			),
+		).toBe(
+			"tests added, changed, or deleted: check each can fail and is worth keeping",
+		);
+		expect(reasonFor(["src/__snapshots__/render.test.ts.snap"])).toBe(
+			"tests added, changed, or deleted: check each can fail and is worth keeping",
+		);
+		expect(reasonFor(["tests/old.test.ts"])).toBe(
+			"tests added, changed, or deleted: check each can fail and is worth keeping",
+		);
+	});
+
 	it("does not suggest tests for docs or fixture-only changes", () => {
 		const suggestions = computeSuggestions(
 			changeset(["README.md", "tests/fixtures/run.json"]),

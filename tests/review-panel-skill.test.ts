@@ -115,6 +115,17 @@ describe("review skill extra-lens triggers", () => {
 		);
 	});
 
+	it("points owners at defaults.lenses to run tests on every review", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).toContain('`"defaults": { "lenses": ["tests"] }`');
+	});
+
+	it("documents the audit cleanup loop through a reviewed PR", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).toContain("Verify does not accept an audit run");
+		expect(body).toContain('`{"action":"audit","passes":["tests"]}`');
+	});
+
 	it("keeps contracts to OpenAPI, proto, or GraphQL, not app config", () => {
 		const body = splitFrontmatter(readSkill()).body;
 		expect(body).toContain("`contracts`: OpenAPI, proto, or GraphQL files");

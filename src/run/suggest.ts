@@ -59,6 +59,11 @@ const SECURITY_RE = new RegExp(
 const SOURCE_FILE_RE =
 	/\.([cm]?[jt]sx?|py|go|rb|java|rs|php|cs|kt|swift|scala|c|cc|cpp|h|hpp)$/i;
 
+const SNAPSHOT_FILE_RE = /\.snap$/;
+
+const TEST_FILE_RE =
+	/\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\/|(^|\/)tests?\/|_test\.go$|(^|\/)test_[^/]+\.py$|_test\.rs$/i;
+
 const CI_WORKFLOW_RE = /(^|\/)\.github\/workflows\//;
 const TERRAFORM_RE = /\.tf(vars)?$/i;
 const DOCKERFILE_RE = /(^|\/)Dockerfile$|\.Dockerfile$|(^|\/)Dockerfile\./;
@@ -107,14 +112,19 @@ const securityRule: Rule = (changeset) => {
 };
 
 const testsRule: Rule = (changeset) => {
-	const code = changeset.files.filter((file) => SOURCE_FILE_RE.test(file));
+	const code = changeset.files.filter(
+		(file) => SOURCE_FILE_RE.test(file) || SNAPSHOT_FILE_RE.test(file),
+	);
 	if (code.length === 0) {
 		return null;
 	}
 	return {
 		lens: "tests",
-		reason:
-			"code or test file(s) changed: check coverage and that each test can fail",
+		reason: code.some(
+			(file) => TEST_FILE_RE.test(file) || SNAPSHOT_FILE_RE.test(file),
+		)
+			? "tests added, changed, or deleted: check each can fail and is worth keeping"
+			: "code changed with no test file changes: check coverage",
 		evidence: code.map((file) => ({ file })),
 	};
 };

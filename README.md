@@ -29,8 +29,8 @@ What you get instead:
 - **Findings, not vibes.** A finding exists only if a seat submitted it. The
   tool never parses a paragraph into a bug.
 - **Lenses when the change earns them.** Holistic always runs. Security, tests,
-  contracts, and the rest fire only when a trigger matches. No hardcoded “always
-  pick these two.”
+  contracts, and the rest fire when a trigger matches, or when the owner names them in `defaults.lenses`.
+  The example config names `tests`, so every review checks test value.
 - **No verdict.** No risk score. No “patch is correct.” Severity is an opinion
   you may drop or promote.
 - **Verify the keep list.** After you fix, a new HEAD is checked against the

@@ -120,6 +120,21 @@ describe("owner configuration guide", () => {
 		expect(pkg.pi?.skills).toContain("./skills");
 	});
 
+	it("the marked example runs the tests lens on every review", () => {
+		const parsed = JSON.parse(EXAMPLE_CONFIG) as {
+			defaults: { lenses?: string[] };
+		};
+		expect(parsed.defaults.lenses).toEqual(["tests"]);
+	});
+
+	it("README says owner-default lenses run without a trigger", () => {
+		const readme = readFileSync(README_PATH, "utf8");
+		expect(readme).not.toContain("No hardcoded");
+		expect(readme).toContain(
+			"or when the owner names them in `defaults.lenses`",
+		);
+	});
+
 	it("the marked example has no loopPolicy and rejects a fixer field", () => {
 		const docBytes = readFileSync(GUIDE_PATH, "utf8");
 		const parsed = JSON.parse(extractConfigExample(docBytes)) as Record<
