@@ -60,27 +60,15 @@ describe("computeSuggestions", () => {
 		expect(suggestions.map((row) => row.lens)).toContain("tests");
 	});
 
-	it("says whether code changed without test additions or tests changed", () => {
-		const reasonFor = (files: string[], added: Changeset["addedLines"] = []) =>
-			computeSuggestions(changeset(files, added)).find(
-				(row) => row.lens === "tests",
-			)?.reason;
-		expect(reasonFor(["src/run.ts"])).toBe(
-			"code changed with no test file changes: check coverage",
-		);
-		expect(
-			reasonFor(
-				["src/run.ts", "tests/run.test.ts"],
-				[{ file: "tests/run.test.ts", line: 1, text: "it('x', () => {})" }],
+	it("gives a reason that holds when tests live inside source files", () => {
+		const row = computeSuggestions(
+			changeset(
+				["src/lib.rs"],
+				[{ file: "src/lib.rs", line: 40, text: "#[cfg(test)]" }],
 			),
-		).toBe(
-			"tests added, changed, or deleted: check each can fail and is worth keeping",
-		);
-		expect(reasonFor(["src/__snapshots__/render.test.ts.snap"])).toBe(
-			"tests added, changed, or deleted: check each can fail and is worth keeping",
-		);
-		expect(reasonFor(["tests/old.test.ts"])).toBe(
-			"tests added, changed, or deleted: check each can fail and is worth keeping",
+		).find((suggestion) => suggestion.lens === "tests");
+		expect(row?.reason).toBe(
+			"code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping",
 		);
 	});
 

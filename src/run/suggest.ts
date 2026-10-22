@@ -61,9 +61,6 @@ const SOURCE_FILE_RE =
 
 const SNAPSHOT_FILE_RE = /\.snap$/;
 
-const TEST_FILE_RE =
-	/\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)__tests__\/|(^|\/)tests?\/|_test\.go$|(^|\/)test_[^/]+\.py$|_test\.rs$/i;
-
 const CI_WORKFLOW_RE = /(^|\/)\.github\/workflows\//;
 const TERRAFORM_RE = /\.tf(vars)?$/i;
 const DOCKERFILE_RE = /(^|\/)Dockerfile$|\.Dockerfile$|(^|\/)Dockerfile\./;
@@ -120,11 +117,8 @@ const testsRule: Rule = (changeset) => {
 	}
 	return {
 		lens: "tests",
-		reason: code.some(
-			(file) => TEST_FILE_RE.test(file) || SNAPSHOT_FILE_RE.test(file),
-		)
-			? "tests added, changed, or deleted: check each can fail and is worth keeping"
-			: "code changed with no test file changes: check coverage",
+		reason:
+			"code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping",
 		evidence: code.map((file) => ({ file })),
 	};
 };
