@@ -87,4 +87,32 @@ describe("audit pass prompt registry", () => {
 			expect(table.get(pass)?.endsWith("\n")).toBe(false);
 		}
 	});
+
+	it("gates tests-pass removal candidates on remaining proof", () => {
+		const prompt = loadAuditPassTable().get("tests");
+		expect(prompt).toContain("[action: fix|merge|remove]");
+		expect(prompt).toContain("name the test that still proves the contract");
+		expect(prompt).toContain("Without that evidence, do not report it.");
+		expect(prompt).toContain("every third-kind finding is low");
+		expect(prompt).toContain("Put the [action: ...] tag in the title.");
+		expect(prompt).toContain(
+			"Mark it fix, because it may expose a product bug.",
+		);
+	});
+
+	it("lists unreachable edge cases as tests-pass candidates but keeps trust-boundary ones", () => {
+		const prompt = loadAuditPassTable().get("tests");
+		expect(prompt).toContain(
+			"no real caller, spec, or input boundary can produce",
+		);
+		expect(prompt).toContain("reachable at a trust boundary");
+	});
+
+	it("marks flaky-by-construction tests fix and names the deterministic replacement", () => {
+		const prompt = loadAuditPassTable().get("tests");
+		expect(prompt).toContain("Second, tests flaky by construction");
+		expect(prompt).toContain("a fixed sleep followed by an assert");
+		expect(prompt).toContain("Name the race and the deterministic replacement");
+		expect(prompt).toContain("Mark each [action: fix], never remove");
+	});
 });

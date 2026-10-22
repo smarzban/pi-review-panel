@@ -536,6 +536,49 @@ describe("review_panel public tool adapter", () => {
 		});
 	});
 
+	it("drops a suggestion for a lens the panel already ran", async () => {
+		await withRepository(async (repository) => {
+			const tool = toolWith({
+				suggestLenses: () => [
+					{
+						lens: "tests",
+						reason: "code changed",
+						evidence: [{ file: "src/a.ts" }],
+					},
+					{
+						lens: "security",
+						reason: "added subprocess line",
+						evidence: [{ file: "src/a.ts", line: 1 }],
+					},
+				],
+				runReview: async (config: RunConfig) =>
+					({
+						recordPath: path.join(repository, ".review-panel", "runs", "run-5"),
+						outcomes: config.seats.map((seat) => ({
+							seat,
+							outcome: { kind: "voted" as const, findings: [] },
+						})),
+					}) as unknown as RunReviewResult,
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{
+					action: "review",
+					repository,
+					base: "HEAD~1",
+					head: "HEAD",
+					lenses: ["tests"],
+				},
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text).toContain("Suggest: security");
+			expect(text).not.toContain("Suggest: tests");
+		});
+	});
+
 	it("verify requires a prior run and kept ids", async () => {
 		await withRepository(async (repository) => {
 			const tool = toolWith();

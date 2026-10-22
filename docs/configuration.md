@@ -18,6 +18,7 @@ Save these exact bytes as your config file (the entry below names the file locat
   ],
   "defaults": {
     "seats":["terra","claude","glm"],
+    "lenses":["tests"],
     "seatBudgetMs":1200000
   }
 }
@@ -71,7 +72,10 @@ provider or authentication extension, name it there.
 
 Holistic review is implicit: a bare review runs `holistic` on every `defaults.seats` alias.
 `defaults.lenses` is optional and names always-on specialist extras only (`security`, `tests`,
-`contracts`, and the other shipped extras). Omit it. The caller may add extras per review. The
+`contracts`, and the other shipped extras). The example names `tests`, so every review checks that
+new tests can fail and are worth keeping, and that deleted tests leave their contract proven. Each
+default extra adds up to two seats per review; drop it to save them. The caller may add extras per
+review. The
 package owns every prompt file; the config cannot add or override prompt text.
 
 Public callers select no provider, model, prompt, or extension path. They choose only declared

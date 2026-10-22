@@ -823,7 +823,10 @@ export function createReviewPanelTool(
 						}),
 				},
 			);
-			const suggestions = suggest(repoDir, baseRevision, headRevision);
+			const plannedLenses = new Set(panel.map((seat) => seat.lens));
+			const suggestions = suggest(repoDir, baseRevision, headRevision).filter(
+				(row) => !plannedLenses.has(row.lens),
+			);
 			const findings = readStampedFindings(result.recordPath);
 
 			return {

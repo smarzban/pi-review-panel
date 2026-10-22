@@ -34,48 +34,49 @@ describe("computeSuggestions", () => {
 		expect(suggestions.map((row) => row.lens)).toContain("security");
 	});
 
-	it("suggests tests when source changes with no recognized test additions", () => {
+	it("suggests tests when a code file changes", () => {
 		const suggestions = computeSuggestions(changeset(["src/run.ts"]));
 		expect(suggestions.map((row) => row.lens)).toContain("tests");
 	});
 
-	it("does not suggest tests when Rust tests/** files gain lines", () => {
-		const suggestions = computeSuggestions(
-			changeset(
-				["src/lib.rs", "tests/pinned_preview.rs"],
-				[
-					{
-						file: "tests/pinned_preview.rs",
-						line: 1,
-						text: "fn it_works() {}",
-					},
-				],
-			),
-		);
-		expect(suggestions.map((row) => row.lens)).not.toContain("tests");
+	it("suggests tests when a change only adds or deletes test files", () => {
+		for (const file of [
+			"tests/pinned_preview.rs",
+			"pkg/api_test.go",
+			"test_mod.py",
+		]) {
+			const suggestions = computeSuggestions(changeset([file]));
+			expect(
+				suggestions.map((row) => row.lens),
+				file,
+			).toContain("tests");
+		}
 	});
 
-	it("does not suggest tests when Go or Python test files gain lines", () => {
-		const go = computeSuggestions(
-			changeset(
-				["pkg/api.go", "pkg/api_test.go"],
-				[
-					{
-						file: "pkg/api_test.go",
-						line: 1,
-						text: "func TestX(t *testing.T) {}",
-					},
-				],
-			),
+	it("suggests tests when only a snapshot file changes", () => {
+		const suggestions = computeSuggestions(
+			changeset(["src/__snapshots__/render.test.ts.snap"]),
 		);
-		const py = computeSuggestions(
+		expect(suggestions.map((row) => row.lens)).toContain("tests");
+	});
+
+	it("gives a reason that holds when tests live inside source files", () => {
+		const row = computeSuggestions(
 			changeset(
-				["mod.py", "test_mod.py"],
-				[{ file: "test_mod.py", line: 1, text: "def test_ok(): pass" }],
+				["src/lib.rs"],
+				[{ file: "src/lib.rs", line: 40, text: "#[cfg(test)]" }],
 			),
+		).find((suggestion) => suggestion.lens === "tests");
+		expect(row?.reason).toBe(
+			"code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping",
 		);
-		expect(go.map((row) => row.lens)).not.toContain("tests");
-		expect(py.map((row) => row.lens)).not.toContain("tests");
+	});
+
+	it("does not suggest tests for docs or fixture-only changes", () => {
+		const suggestions = computeSuggestions(
+			changeset(["README.md", "tests/fixtures/run.json"]),
+		);
+		expect(suggestions.map((row) => row.lens)).not.toContain("tests");
 	});
 
 	it("suggests infrastructure, contracts, privacy, and specification paths", () => {

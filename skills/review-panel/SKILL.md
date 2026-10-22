@@ -31,14 +31,16 @@ Add a situational pass only when the repository warrants it: `docs`, `observabil
 
 Read the report and the code behind any finding you might keep. The tool presents a backlog with counts, affected file areas, lost seats, and the record path. It does not write `AUDIT.md`, repair files, run CI, or post a GitHub comment for an audit. After you judge the findings, you may write `AUDIT.md` yourself as an owner-facing backlog. Do not ask the tool to do that.
 
+To clean up low-value or flaky tests in an existing repository, run `{"action":"audit","passes":["tests"]}`. On a large repository, run it once per directory with that directory in `scopingNote`. Verify does not accept an audit run. Apply the fix, merge, and remove items you keep on a branch, open a PR, and run `review` on it: the `tests` lens checks that each deleted test leaves its contract proven.
+
 ## Lenses
 
-Holistic seats always run. Extra lenses are optional. The holistic lens is implicit. Most PRs fire 0 extras. Fire every extra whose trigger matches, and none that do not.
+Holistic seats always run. Extra lenses are optional. The holistic lens is implicit. Owner-default extras in `defaults.lenses` run on every review; the example config sets `"defaults": { "lenses": ["tests"] }`. Do not pass a default extra again. Fire every extra whose trigger matches, and none that do not.
 
 Pass an extra only when you can point at the matching file, or at a concrete race, cache, or clock:
 
 - `security`: new auth, crypto, subprocess, or a trust/path boundary.
-- `tests`: a behavior change with thin or missing coverage, including an untested production handoff. Added test files are not enough if the new wiring is untested.
+- `tests`: a behavior change with thin or missing coverage, including an untested production handoff. Added test files are not enough if the new wiring is untested. Also fire it when the change adds, rewrites, or deletes tests, so the lens can check that each one can fail, is not flaky by construction, and is worth keeping, and that each deleted test leaves its contract proven.
 - `contracts`: OpenAPI, proto, or GraphQL files. A TOML or app config schema is not a contract.
 - `privacy`: privacy/PII-named paths.
 - `migrations`: SQL or migration paths.
