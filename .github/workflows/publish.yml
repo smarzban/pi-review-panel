@@ -9,7 +9,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v6
@@ -21,6 +21,20 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      - name: Check tag matches package version
+        run: test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
+
+      - name: Prepare release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes="$RUNNER_TEMP/release-notes.md"
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 {on=1; next} on && /^## \[/ {exit} on && /^\[[^]]+\]: / {exit} on {print}' CHANGELOG.md | sed '/./,$!d' > "$notes"
+          if ! grep -q . "$notes"; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          printf '\nSee [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md) for the complete release history.\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> "$notes"
+
       - name: Install
         run: npm ci
 
@@ -29,3 +43,13 @@ jobs:
 
       - name: Publish
         run: npm publish --access public
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --latest --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
