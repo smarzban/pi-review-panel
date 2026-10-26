@@ -50,7 +50,7 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Close-out comments are owner-asked only. The tool does not post when the panel first finishes.
-- `0.2.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
+- `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Fixed operational bounds may halt work, but they never make a quality claim.
 
 ## Build / test / verify
