@@ -51,6 +51,9 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Close-out comments are owner-asked only. The tool does not post when the panel first finishes.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
+- Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
+  `publish.yml` checks the tag matches the version, publishes to npm, and creates the GitHub release
+  from that CHANGELOG section.
 - Fixed operational bounds may halt work, but they never make a quality claim.
 
 ## Build / test / verify
