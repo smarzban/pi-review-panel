@@ -16,7 +16,7 @@
  * GitHub's comment limit, and goes to `gh` on stdin, never as an argument.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import type { PrCommentMode } from "../config/schema.js";
@@ -57,6 +57,10 @@ const TITLE_CHARS = 300;
 const EVIDENCE_CHARS = 1_000;
 const FILE_CHARS = 200;
 const OID_DISPLAY_LENGTH = 7;
+/** A stalled `gh` must not hold the run: each call gets this long. */
+const GH_TIMEOUT_MS = 30_000;
+/** Room for a paginated comment listing that holds several full round comments. */
+const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
 export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
 
@@ -76,6 +80,8 @@ export type RoundContext = {
 	headOid: string;
 	request: RoundRequest;
 	mode: PrCommentMode;
+	/** An interrupted run posts nothing. */
+	signal?: AbortSignal;
 };
 
 /** A reason not to post, said in the reply as `not posted (<reason>)`. */
@@ -91,6 +97,8 @@ export function defaultRunGh(
 		cwd: options?.cwd,
 		input: options?.input,
 		stdio: ["pipe", "pipe", "pipe"],
+		timeout: GH_TIMEOUT_MS,
+		maxBuffer: GH_MAX_BUFFER,
 	});
 }
 
@@ -112,7 +120,9 @@ function neutralize(text: string): string {
  */
 export function githubSafe(text: string, maxChars = TITLE_CHARS): string {
 	return neutralize(
-		inert(truncateCodePoints(oneLine(text), maxChars)).replace(/</g, "&lt;"),
+		inert(truncateCodePoints(oneLine(text), maxChars))
+			.replace(/&/g, "&amp;")
+			.replace(/</g, "&lt;"),
 	);
 }
 
@@ -234,10 +244,20 @@ function resolveTarget(gh: Gh, ctx: RoundContext): PrTarget {
 	if (ctx.request.pr !== undefined) {
 		return { repo, pr: ctx.request.pr, author };
 	}
-	const pulls = parseJson(
-		gh(["api", `repos/${repo}/commits/${ctx.headOid}/pulls`]),
-		"pull requests",
-	);
+	let listed: string;
+	try {
+		listed = gh(["api", `repos/${repo}/commits/${ctx.headOid}/pulls`]);
+	} catch (error) {
+		// GitHub answers 422 for a commit it does not have, such as an
+		// unpushed head.
+		if (/HTTP 422|No commit found/.test(errorText(error))) {
+			throw new RoundSkip(
+				"no open PR has this head; GitHub does not have this commit",
+			);
+		}
+		throw error;
+	}
+	const pulls = parseJson(listed, "pull requests");
 	const open = (Array.isArray(pulls) ? pulls : [])
 		.filter(
 			(row): row is { number: number } =>
@@ -293,7 +313,11 @@ function notPosted(label: string, reason: string): string {
 }
 
 /** Why this call may not post at all, before any `gh` call. */
-function gateReason(request: RoundRequest, mode: PrCommentMode) {
+function gateReason(ctx: RoundContext) {
+	const { request, mode } = ctx;
+	if (ctx.signal?.aborted) {
+		return "the run was interrupted";
+	}
 	if (request.prComment === false) {
 		return "turned off for this run";
 	}
@@ -312,7 +336,7 @@ function postOne(
 	build: () => string,
 ): { line: string; target?: PrTarget; gh: Gh } {
 	const gh = ghOf(ctx);
-	const gate = gateReason(ctx.request, ctx.mode);
+	const gate = gateReason(ctx);
 	if (gate !== undefined) {
 		return { line: notPosted("PR comment", gate), gh };
 	}
@@ -427,13 +451,15 @@ export function verifyRoundNumber(
 	let earlier = 0;
 	for (const record of discoverPriorRecords(repoDir)) {
 		const name = path.basename(record.path);
-		if (name >= verifyRunId) {
+		const metaPath = path.join(record.path, "meta.json");
+		if (name >= verifyRunId || !isRealFile(metaPath)) {
 			continue;
 		}
 		try {
-			const meta = JSON.parse(
-				readFileSync(path.join(record.path, "meta.json"), "utf8"),
-			) as { kind?: unknown; priorRunId?: unknown };
+			const meta = JSON.parse(readFileSync(metaPath, "utf8")) as {
+				kind?: unknown;
+				priorRunId?: unknown;
+			};
 			if (meta.kind === "verify" && meta.priorRunId === reviewRunId) {
 				earlier += 1;
 			}
@@ -454,6 +480,15 @@ export type VerifyRoundFacts = {
 	/** The review record's findings, for titles; absent when unreadable. */
 	reviewFindings?: readonly StampedFinding[];
 };
+
+/** Records are untrusted: never follow a symlink or open a FIFO in one. */
+function isRealFile(target: string): boolean {
+	try {
+		return lstatSync(target).isFile();
+	} catch {
+		return false;
+	}
+}
 
 function runIdOf(recordPath: string): string {
 	return path.basename(recordPath);
@@ -624,8 +659,22 @@ function buildCloseout(
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}
+	// The card's list items are its rows; a section heading goes with the
+	// first item under it, so a cut never leaves a heading without items.
 	const lines = card.split("\n").map((line) => inert(line));
-	return { body: fitCommentBody(lines, [], [], "row") };
+	const blank = lines.indexOf("");
+	const head = blank === -1 ? lines : lines.slice(0, blank);
+	const rows: string[][] = [];
+	let pending: string[] = [];
+	for (const line of blank === -1 ? [] : lines.slice(blank)) {
+		if (line.startsWith("- ")) {
+			rows.push([...pending, line]);
+			pending = [];
+		} else {
+			pending.push(line);
+		}
+	}
+	return { body: fitCommentBody(head, rows, [], "row") };
 }
 
 /** Is a close-out for this review already on the PR, by this author? */
@@ -678,7 +727,7 @@ export function postVerifyRound(
 		return lines;
 	}
 	if (verify.target === undefined) {
-		lines.push(notPosted("PR close-out", "the verify comment was not posted"));
+		// The `PR comment:` line already says why nothing was posted.
 		return lines;
 	}
 	const card = buildCloseout(ctx, facts);

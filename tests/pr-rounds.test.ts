@@ -1049,3 +1049,92 @@ describe("the default runner sends the body to a real gh process on stdin", () =
 		}
 	});
 });
+
+describe("edge cases of the lookup and the run", () => {
+	it("an unpushed head (GitHub answers 422) reads as no open PR", async () => {
+		await withRepository(async (repo) => {
+			const gh = fakeGh();
+			const runGh: GhRunner = (args, options) => {
+				if (args.join(" ").includes("/pulls")) {
+					throw Object.assign(new Error("Command failed: gh api"), {
+						stderr: "gh: No commit found for SHA: 0123 (HTTP 422)\n",
+					});
+				}
+				return gh.runGh(args, options);
+			};
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{ deps: deps(runGh, { runReview: reviewRun(repo, "r-1", []) }) },
+			);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR comment: not posted (no open PR has this head; GitHub does not have this commit)",
+			);
+		});
+	});
+
+	it("a run that returns after it was interrupted posts nothing", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const controller = new AbortController();
+			const run = reviewRun(repo, "r-1", []);
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					signal: controller.signal,
+					deps: deps(gh.runGh, {
+						runReview: async (config) => {
+							controller.abort();
+							return run(config);
+						},
+					}),
+				},
+			);
+			expect(gh.calls).toEqual([]);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR comment: not posted (the run was interrupted)",
+			);
+		});
+	});
+
+	it("a clean verify that could not post says so once", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, REVIEW_ID, [{ id: "F-1", severity: "high" }]);
+			const result = await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps(fakeGh({ pulls: [] }).runGh, {
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[{ id: "F-1", severity: "high" }],
+							[
+								{
+									id: "F-1",
+									disposition: "resolved",
+									evidence: { file: "src/a.ts", explanation: "ok" },
+								},
+							],
+						),
+					}),
+				},
+			);
+			const text = textOf(result);
+			expect(text).not.toContain("PR close-out");
+			expect(text.split("\n").at(-1)).toBe(
+				"PR comment: not posted (no open PR has this head)",
+			);
+		});
+	});
+
+	it("escapes & so no HTML entity reaches GitHub", () => {
+		const safe = githubSafe("&#64;octocat &lt;x");
+		expect(safe).not.toMatch(/&#|&lt;x/);
+		expect(safe.startsWith("&amp;#")).toBe(true);
+	});
+});

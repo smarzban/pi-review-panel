@@ -724,8 +724,10 @@ function roundContext(
 	headOid: string,
 	input: RoundInput,
 	config: { defaults: { prComment?: "auto" | "ownerApproved" } },
+	signal: AbortSignal | undefined,
 ): RoundContext {
 	return {
+		...(signal === undefined ? {} : { signal }),
 		runGh: resolved.runGh,
 		repoDir,
 		headOid,
@@ -906,7 +908,14 @@ export async function verifyAction(
 	);
 	const report = renderVerifyResult(result, panel, ROUND_REPLY_RESERVE);
 	const roundLines = postVerifyRound(
-		roundContext(resolved, repoDir, result.headOid, valid, config),
+		roundContext(
+			resolved,
+			repoDir,
+			result.headOid,
+			valid,
+			config,
+			context.signal,
+		),
 		{
 			result,
 			panel,
@@ -1125,7 +1134,14 @@ export async function reviewAction(
 		reserveBytes: ROUND_REPLY_RESERVE,
 	});
 	const roundLines = postReviewRound(
-		roundContext(resolved, repoDir, headRevision, valid, config),
+		roundContext(
+			resolved,
+			repoDir,
+			headRevision,
+			valid,
+			config,
+			context.signal,
+		),
 		{
 			runId: path.basename(result.recordPath),
 			baseRef: base,
