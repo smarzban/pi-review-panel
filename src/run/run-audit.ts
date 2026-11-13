@@ -5,6 +5,7 @@ import { collectFindings } from "./collect.js";
 import {
 	acquireRunLock,
 	complete,
+	projectSeat,
 	reserve,
 	writeExecution,
 	writePanel,
@@ -174,10 +175,7 @@ export async function executeAudit(
 				...(input.scopingNote === undefined
 					? {}
 					: { scopingNote: input.scopingNote }),
-				...(input.seatBudgetMs === undefined
-					? {}
-					: { seatBudgetMs: input.seatBudgetMs }),
-				seats: input.seats,
+				seats: input.seats.map(projectSeat),
 			});
 		}
 		stage = "pin";
@@ -239,7 +237,9 @@ export async function executeAudit(
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined
 					? {}
-					: { resume: resumeSummary(input.seats, missing) }),
+					: {
+							resume: resumeSummary(input.seats, missing, resume?.lost ?? []),
+						}),
 			}),
 		);
 		writeFileSync(record.findingsPath, renderAuditFindingsJson(stamped));

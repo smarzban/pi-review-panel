@@ -29,9 +29,10 @@ export const EXECUTION_FILE = "execution.json";
 export const COMPLETE_MARKER = "COMPLETE";
 
 /**
- * Everything `resume` needs to finish an interrupted run: kind, frozen
- * commits, and the full planned seats. Like execution.json's replay specs it
- * carries prompt bytes, so it is a replay artifact, never presentation.
+ * What `resume` needs to finish an interrupted run: kind, frozen commits, the
+ * scoping note, and the planned seat identities. No prompt text and no
+ * extension paths: resume rebuilds those from the owner config and the
+ * package's own lens tables.
  */
 export const PLAN_FILE = "plan.json";
 
@@ -135,7 +136,7 @@ export function writePanel(
 }
 
 /** Projects one planned seat to its durable 4-key panel row, byte-for-byte. */
-function projectSeat(seat: PlannedSeat): PanelRecord["seats"][number] {
+export function projectSeat(seat: PlannedSeat): PanelRecord["seats"][number] {
 	return {
 		rosterId: seat.rosterId,
 		lens: seat.lens,
@@ -241,7 +242,7 @@ export function writeSeatOutcome(
  */
 export function readSettledOutcomes(
 	recordPath: string,
-	seats: readonly PlannedSeat[],
+	seats: ReadonlyArray<{ provider: string; model: string; lens: string }>,
 ): Array<SeatOutcomeFacts | undefined> {
 	return seats.map((seat, index) => {
 		const file = path.join(recordPath, SEATS_DIR, `${index}.json`);
@@ -264,7 +265,7 @@ export function readSettledOutcomes(
 			) {
 				return undefined;
 			}
-			return { ...facts, seat: { ...seat } };
+			return facts;
 		} catch {
 			return undefined;
 		}

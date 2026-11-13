@@ -743,7 +743,17 @@ export function createReviewPanelTool(
 				);
 				// Seats, lenses and commits all come from the record itself.
 				const run = loadResumable(repoDir, priorRunId);
-				const panel = run.plan.seats;
+				// Models, extension paths and prompts come from the owner config and
+				// the package, never from the record inside the reviewed repository.
+				const config = load({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				const panel: PlannedSeat[] = run.plan.seats.map((seat) => ({
+					...seat,
+					lensPrompt: "",
+				}));
 				const roster = compactPanelRoster(panel);
 				const progressOf =
 					run.plan.kind === "audit"
@@ -759,6 +769,7 @@ export function createReviewPanelTool(
 					roster,
 				});
 				const result = await resume(run, {
+					config,
 					...(signal === undefined ? {} : { abortSignal: signal }),
 					onProgress: (event) =>
 						emitProgress(onUpdate, {

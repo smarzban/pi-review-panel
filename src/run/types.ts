@@ -136,8 +136,9 @@ export type RunPlan = {
 	/** Frozen head commit the snapshot pins. */
 	headOid: string;
 	scopingNote?: string;
-	seatBudgetMs?: number;
-	/** Review only: prior records consulted for persistence flags. */
-	priorRecordPaths?: string[];
-	seats: PlannedSeat[];
+	/**
+	 * Seat identities only, as in panel.json. The record lives in the reviewed
+	 * repository, so resume never takes prompts or extension paths from it.
+	 */
+	seats: PanelRecord["seats"];
 };

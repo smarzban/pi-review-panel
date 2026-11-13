@@ -44,6 +44,7 @@ function removeFixture(...paths: string[]): void {
 	for (const fixture of paths) {
 		if (fixture !== "") {
 			rmSync(fixture, { recursive: true, force: true });
+			rmSync(snapshotOwnerPath(fixture), { force: true });
 		}
 	}
 }

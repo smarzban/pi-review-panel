@@ -120,14 +120,17 @@ credentials, or endpoints. Because it is written before the work begins, an abor
 ## Interrupted runs and `resume`
 
 A review or audit also writes `plan.json` before pinning: its kind, the frozen base and head
-commits, the scoping note, the seat budget, and the full planned seats. Like the replay specs in
-`execution.json`, it holds lens prompt text and extension paths, so treat it as a replay artifact.
-Each seat's outcome is written to `seats/<planned index>.json` the moment that seat settles, by a
+commits, the scoping note, and the planned seat rows (`rosterId`, `lens`, `provider`, `model`, as in
+`panel.json`). It holds no prompt text and no extension paths. Each seat's outcome is written to `seats/<planned index>.json` the moment that seat settles, by a
 temp file and a rename. A seat torn down because the run was cancelled is not written there. While
 a run is going, `run.lock` names its process; the run removes it when it ends.
 
 `{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It takes no
-seats, lenses, or commits: those come from `plan.json`. It pins the recorded head commit, runs only
+seats, lenses, or commits: those come from `plan.json`. The record lives in the reviewed repository,
+so resume trusts it only for names. Each seat is rebuilt from the owner config: the roster row with
+that `rosterId` must still name the same `provider` and `model`, and `extraExtensionPaths` and the
+seat budget come from the config. The prompt comes from the package's own lens or audit-pass table.
+A seat that cannot be rebuilt does not run; it is reported as lost coverage. It pins the recorded head commit, runs only
 the planned seats with no settled outcome, then writes `execution.json`, `report.md`,
 `findings.json`, `meta.json`, and `COMPLETE` as a first run would. The report has a "Resumed run"
 section naming the seats kept and the seats run again, and `execution.json` lists the re-run seats

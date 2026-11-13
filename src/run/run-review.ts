@@ -7,13 +7,18 @@ import { flagPersistence } from "./flag.js";
 import {
 	acquireRunLock,
 	complete,
+	projectSeat,
 	reserve,
 	writeExecution,
 	writePanel,
 	writePlan,
 	writeSeatOutcome,
 } from "./record.js";
-import { renderFindingsJson, renderReport } from "./render.js";
+import {
+	type ResumeFacts,
+	renderFindingsJson,
+	renderReport,
+} from "./render.js";
 import {
 	type ReviewProgressEvent,
 	RunCancelledError,
@@ -54,9 +59,15 @@ export type ReviewExecution = {
 	priorRecordPaths?: string[];
 };
 
-/** Seats that settled before an interruption, by planned index. */
+/** What a resume starts from, by planned index. */
 export type ResumeState = {
+	/**
+	 * Outcomes that need no run: seats settled before the interruption, and
+	 * failed outcomes for seats that could not be rebuilt (listed in `lost`).
+	 */
 	settled: Array<SeatOutcomeFacts | undefined>;
+	/** Planned indexes whose seat could not be rebuilt: lost coverage. */
+	lost: number[];
 };
 
 export type RunReviewOptions = {
@@ -201,13 +212,7 @@ export async function executeReview(
 				...(config.scopingNote === undefined
 					? {}
 					: { scopingNote: config.scopingNote }),
-				...(config.seatBudgetMs === undefined
-					? {}
-					: { seatBudgetMs: config.seatBudgetMs }),
-				...(config.priorRecordPaths === undefined
-					? {}
-					: { priorRecordPaths: config.priorRecordPaths }),
-				seats: config.seats,
+				seats: config.seats.map(projectSeat),
 			});
 		}
 		stage = "pin";
@@ -275,7 +280,9 @@ export async function executeReview(
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined
 					? {}
-					: { resume: resumeSummary(config.seats, missing) }),
+					: {
+							resume: resumeSummary(config.seats, missing, resume?.lost ?? []),
+						}),
 			}),
 		);
 		writeFileSync(record.findingsPath, renderFindingsJson(stamped));
@@ -350,10 +357,14 @@ export function settledOnly(
 export function resumeSummary(
 	seats: readonly PlannedSeat[],
 	missing: readonly number[],
-): { rerun: PlannedSeat[]; kept: PlannedSeat[] } {
+	lost: readonly number[],
+): ResumeFacts {
 	return {
 		rerun: missing.map((index) => seats[index]),
-		kept: seats.filter((_, index) => !missing.includes(index)),
+		kept: seats.filter(
+			(_, index) => !missing.includes(index) && !lost.includes(index),
+		),
+		lost: lost.map((index) => seats[index]),
 	};
 }
 

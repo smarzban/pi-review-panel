@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import { loadAuditPassTable } from "../config/audit-passes.js";
+import { loadLensTable } from "../config/lenses.js";
+import type { Config } from "../config/schema.js";
 import { isProcessAlive } from "./liveness.js";
+import { discoverPriorRecords } from "./prior-records.js";
 import { resolvePriorRunId } from "./prior-run.js";
 import {
 	COMPLETE_MARKER,
@@ -33,8 +37,8 @@ export type ResumableRun = {
 	plan: RunPlan;
 	/** Settled outcomes by planned index; undefined where a seat must run again. */
 	settled: Array<SeatOutcomeFacts | undefined>;
-	/** The planned seats that will run again, in planned order. */
-	missing: PlannedSeat[];
+	/** The planned seat identities that have no settled outcome, in order. */
+	missing: RunPlan["seats"];
 };
 
 export type ResumeResult = (RunReviewResult | RunAuditResult) & {
@@ -44,7 +48,17 @@ export type ResumeResult = (RunReviewResult | RunAuditResult) & {
 	resumedSeats: PlannedSeat[];
 };
 
-export type ResumeOptions = RunReviewOptions & RunAuditOptions;
+export type ResumeOptions = RunReviewOptions &
+	RunAuditOptions & {
+		/**
+		 * The owner config. Seat models, extension paths and the seat budget come
+		 * from it, never from the record in the reviewed repository.
+		 */
+		config: Config;
+		/** Package prompt tables; injectable for tests only. */
+		lensTable?: Map<string, string>;
+		passTable?: Map<string, string>;
+	};
 
 const VERIFY_RUN_SUFFIX = `-${sanitizeBaseRef("verify")}-${digestBaseRef("verify")}`;
 
@@ -111,11 +125,49 @@ export function loadResumable(
  */
 export async function resumeRun(
 	run: ResumableRun,
-	options: ResumeOptions = {},
+	options: ResumeOptions,
 ): Promise<ResumeResult> {
 	const record = recordAt(run.recordPath);
 	const { plan } = run;
-	const resume = { settled: run.settled };
+	const { config, lensTable, passTable, ...runOptions } = options;
+	const prompts =
+		plan.kind === "review"
+			? (lensTable ?? loadLensTable())
+			: (passTable ?? loadAuditPassTable());
+	const rows = new Map(config.roster.map((row) => [row.id, row]));
+	const settled = [...run.settled];
+	const lost: number[] = [];
+	const seats = plan.seats.map((identity, index): PlannedSeat => {
+		const row = rows.get(identity.rosterId);
+		const prompt = prompts.get(identity.lens);
+		// Only the four identity keys cross from the record; anything else a
+		// planted plan carries is dropped here.
+		const seat: PlannedSeat = {
+			rosterId: identity.rosterId,
+			provider: identity.provider,
+			model: identity.model,
+			lens: identity.lens,
+			lensPrompt: prompt ?? "",
+			...(row?.extraExtensionPaths === undefined
+				? {}
+				: { extraExtensionPaths: [...row.extraExtensionPaths] }),
+		};
+		const reason =
+			row === undefined
+				? `roster row "${identity.rosterId}" is not in the owner config`
+				: row.provider !== identity.provider || row.model !== identity.model
+					? `roster row "${identity.rosterId}" is now ${row.provider}/${row.model}, not ${identity.provider}/${identity.model}`
+					: prompt === undefined
+						? `"${identity.lens}" is not a ${plan.kind === "review" ? "lens" : "audit pass"} this package ships`
+						: undefined;
+		if (settled[index] === undefined && reason !== undefined) {
+			lost.push(index);
+			settled[index] = unrecoverable(seat, plan, reason);
+		}
+		return seat;
+	});
+	const resume = { settled, lost };
+	const seatBudgetMs = config.defaults.seatBudgetMs;
 	const result =
 		plan.kind === "review"
 			? await executeReview(
@@ -125,18 +177,16 @@ export async function resumeRun(
 						baseRef: plan.baseRef,
 						baseOid: plan.baseOid,
 						headOid: plan.headOid,
-						seats: plan.seats,
+						seats,
 						...(plan.scopingNote === undefined
 							? {}
 							: { scopingNote: plan.scopingNote }),
-						...(plan.seatBudgetMs === undefined
-							? {}
-							: { seatBudgetMs: plan.seatBudgetMs }),
-						...(plan.priorRecordPaths === undefined
-							? {}
-							: { priorRecordPaths: plan.priorRecordPaths }),
+						...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
+						priorRecordPaths: discoverPriorRecords(run.repoDir).map(
+							(entry) => entry.path,
+						),
 					},
-					options,
+					runOptions,
 					resume,
 				)
 			: await executeAudit(
@@ -144,15 +194,13 @@ export async function resumeRun(
 					{
 						repoDir: run.repoDir,
 						revision: plan.headOid,
-						seats: plan.seats,
+						seats,
 						...(plan.scopingNote === undefined
 							? {}
 							: { scopingNote: plan.scopingNote }),
-						...(plan.seatBudgetMs === undefined
-							? {}
-							: { seatBudgetMs: plan.seatBudgetMs }),
+						...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
 					},
-					options,
+					runOptions,
 					resume,
 				);
 	return {
@@ -161,6 +209,40 @@ export async function resumeRun(
 		runId: run.runId,
 		plan,
 		resumedSeats: result.resumedSeats ?? [],
+	};
+}
+
+/** A failed outcome for a seat resume could not rebuild; it never runs. */
+function unrecoverable(
+	seat: PlannedSeat,
+	plan: RunPlan,
+	reason: string,
+): SeatOutcomeFacts {
+	const now = Date.now();
+	return {
+		seat,
+		replay: {
+			provider: seat.provider,
+			model: seat.model,
+			lens: seat.lens,
+			lensPrompt: seat.lensPrompt,
+			baseRef: plan.baseOid,
+			worktree: "",
+		},
+		lifecycle: {
+			startedAtMs: now,
+			settledAtMs: now,
+			durationMs: 0,
+			attempts: 1,
+			aborted: false,
+			tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			cost: 0,
+		},
+		outcome: {
+			kind: "failed",
+			class: "spawn-failure",
+			reason: `resume could not rebuild this seat: ${reason}`,
+		},
 	};
 }
 
@@ -203,8 +285,7 @@ function isRunPlan(value: unknown): value is RunPlan {
 				typeof seat.rosterId === "string" &&
 				typeof seat.provider === "string" &&
 				typeof seat.model === "string" &&
-				typeof seat.lens === "string" &&
-				typeof seat.lensPrompt === "string",
+				typeof seat.lens === "string",
 		)
 	);
 }

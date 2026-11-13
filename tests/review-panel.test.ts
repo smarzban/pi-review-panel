@@ -1234,9 +1234,17 @@ describe("review_panel resume action", () => {
 			const fake = createSdkSeatFake();
 			const updates: string[] = [];
 			const tool = toolWith({
+				loadConfig: () => ({
+					roster: threeSeats().map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: ["seat-0"] },
+				}),
 				resumeRun: (run, options) =>
 					resumeRun(run, {
-						...options,
+						...(options as NonNullable<typeof options>),
 						sessionFactory: async (input) => {
 							sessions.push(input.spec.lens);
 							return fake.factory(input);

@@ -59,8 +59,15 @@ export type RenderInput = {
 	resume?: ResumeFacts;
 };
 
-/** Which planned seats a resume ran again, and which it kept as recorded. */
-export type ResumeFacts = { rerun: PlannedSeat[]; kept: PlannedSeat[] };
+/**
+ * Which planned seats a resume ran again, which it kept as recorded, and
+ * which it could not rebuild from the owner config (lost coverage).
+ */
+export type ResumeFacts = {
+	rerun: PlannedSeat[];
+	kept: PlannedSeat[];
+	lost: PlannedSeat[];
+};
 
 /**
  * States plainly that the record was finished by a resume and which seats
@@ -80,6 +87,10 @@ export function renderResumeSection(resume: ResumeFacts | undefined): string[] {
 			(seat) => `- Kept from the interrupted run: ${seatLabel(seat)}`,
 		),
 		...resume.rerun.map((seat) => `- Re-run: ${seatLabel(seat)}`),
+		...resume.lost.map(
+			(seat) =>
+				`- Not run, could not be rebuilt from the owner config: ${seatLabel(seat)}`,
+		),
 		"",
 	];
 }
