@@ -1,4 +1,5 @@
 import type { PanelRecord, StampedFinding } from "../run/types.js";
+import { postedCode, postedText } from "./posted-text.js";
 
 const OID_DISPLAY_LENGTH = 7;
 
@@ -21,6 +22,8 @@ export type CloseoutCommentInput = {
 	seats: string[];
 	extras: string[];
 	lost: string[];
+	/** Verify seats that were lost, listed after the review's on `Lost:`. */
+	verifyLost?: string[];
 	baseRef: string;
 	baseOid: string;
 	headRef?: string;
@@ -40,6 +43,11 @@ export type AccountCloseoutInput = {
 	findings: readonly StampedFinding[];
 	dismissed: readonly CloseoutJudgmentRow[];
 	lowAdvisory: readonly string[];
+	/**
+	 * Ids a verify kept, of any severity. They count as fixed, and are left
+	 * out of the dismissed and low/advisory accounting.
+	 */
+	kept?: readonly string[];
 };
 
 export type AccountedCloseout = {
@@ -52,6 +60,7 @@ export type AccountedCloseout = {
 export type AssembleCloseoutInput = AccountCloseoutInput & {
 	panel: PanelRecord;
 	lost: readonly string[];
+	verifyLost?: readonly string[];
 	meta: { baseRef: string; baseOid: string; headOid: string };
 	headRef?: string;
 	heading?: string;
@@ -62,61 +71,87 @@ function shortOid(oid: string): string {
 	return oid.slice(0, OID_DISPLAY_LENGTH);
 }
 
-/** Flatten injected headings, mentions, and HTML so card fields stay one line. */
-export function sanitizeCardText(text: string): string {
-	return text
-		.replace(/[\r\n\u2028\u2029]+/g, " ")
-		.replace(/<!--[\s\S]*?-->/g, " ")
-		.replace(/<!--/g, "")
-		.replace(/@/g, "(at)")
-		.replace(/(^|\s)#{1,}/g, "$1")
-		.replace(/\s+/g, " ")
-		.trim();
+/** True when a dismissed reason has no visible text. */
+function isBlank(text: string): boolean {
+	return text.replace(/[\s\u0085]+/gu, "") === "";
 }
 
 function requireReason(id: string, reason: string): string {
-	const sanitized = sanitizeCardText(reason);
-	if (sanitized === "") {
+	if (isBlank(reason)) {
 		throw new Error(`dismissed ${id} needs a reason`);
 	}
-	return sanitized;
+	return reason;
 }
 
-/** Presentation-only close-out card. Counts and lists, no merge claim. */
-export function renderCloseoutComment(input: CloseoutCommentInput): string {
+/** One close-out card as its head lines and its list rows. */
+export type CloseoutCardParts = {
+	/** The heading, run line, counts, `Seats:`, `Lost:` and the range. */
+	head: string[];
+	/**
+	 * One row per list item. A section heading goes with the first item
+	 * under it, so a cut never leaves a heading without items.
+	 */
+	rows: string[][];
+};
+
+/**
+ * Presentation-only close-out card, as parts. Counts and lists, no merge
+ * claim. Every field that came from a seat, a record or a ref goes through
+ * the posted-text sanitizer here, once.
+ */
+export function closeoutCardParts(
+	input: CloseoutCommentInput,
+): CloseoutCardParts {
 	for (const row of input.dismissed) {
 		requireReason(row.id, row.reason);
 	}
 
 	const findingWord = input.submitted === 1 ? "finding" : "findings";
 	const extras =
-		input.extras.length === 0 ? "" : ` · extras: ${input.extras.join(", ")}`;
-	const lost = input.lost.length === 0 ? "none" : input.lost.join(", ");
+		input.extras.length === 0
+			? ""
+			: ` · extras: ${input.extras.map((name) => postedText(name)).join(", ")}`;
+	const lostNames = [
+		...input.lost.map((name) => postedText(name)),
+		...(input.verifyLost ?? []).map((name) => `${postedText(name)} (verify)`),
+	];
+	const lost = lostNames.length === 0 ? "none" : lostNames.join(", ");
 	const headRef = input.headRef ?? "HEAD";
-	const lines = [
+	const head = [
 		input.heading ?? "## Review panel",
 		...(input.runLine === undefined ? [] : [input.runLine]),
 		"",
 		`${input.submitted} ${findingWord} submitted · ${input.fixed} fixed · ${input.dismissed.length} dismissed · ${input.lowAdvisory.length} left as low/advisory`,
-		`Seats: ${input.seats.join(", ")} (holistic)${extras}`,
+		`Seats: ${input.seats.map((name) => postedText(name)).join(", ")} (holistic)${extras}`,
 		`Lost: ${lost}`,
-		`\`${input.baseRef}\` (\`${shortOid(input.baseOid)}\`) → \`${headRef}\` (\`${shortOid(input.headOid)}\`)`,
+		`${postedCode(input.baseRef)} (${postedCode(shortOid(input.baseOid))}) → ${postedCode(headRef)} (${postedCode(shortOid(input.headOid))})`,
 	];
-	if (input.dismissed.length > 0) {
-		lines.push("", "### Dismissed");
-		for (const row of input.dismissed) {
-			lines.push(
-				`- ${row.id} ${sanitizeCardText(row.title)} — ${requireReason(row.id, row.reason)}`,
-			);
+	const rows: string[][] = [];
+	const section = (title: string, items: string[]) => {
+		for (const [index, item] of items.entries()) {
+			rows.push(index === 0 ? ["", title, item] : [item]);
 		}
-	}
-	if (input.lowAdvisory.length > 0) {
-		lines.push("", "### Low / advisory (not kept)");
-		for (const row of input.lowAdvisory) {
-			lines.push(`- ${row.id} ${sanitizeCardText(row.title)}`);
-		}
-	}
-	return lines.join("\n");
+	};
+	section(
+		"### Dismissed",
+		input.dismissed.map(
+			(row) =>
+				`- ${postedText(row.id, 40)} ${postedText(row.title)} — ${postedText(row.reason, 1_000)}`,
+		),
+	);
+	section(
+		"### Low / advisory (not kept)",
+		input.lowAdvisory.map(
+			(row) => `- ${postedText(row.id, 40)} ${postedText(row.title)}`,
+		),
+	);
+	return { head, rows };
+}
+
+/** Presentation-only close-out card. Counts and lists, no merge claim. */
+export function renderCloseoutComment(input: CloseoutCommentInput): string {
+	const { head, rows } = closeoutCardParts(input);
+	return [...head, ...rows.flat()].join("\n");
 }
 
 function uniqueInOrder(
@@ -157,10 +192,11 @@ export function accountCloseoutFindings(
 	input: AccountCloseoutInput,
 ): AccountedCloseout {
 	const byId = new Map(input.findings.map((row) => [row.id, row]));
+	const kept = new Set(input.kept ?? []);
 	const claimed = new Set<string>();
 
 	const dismissed: CloseoutDismissed[] = [];
-	for (const row of input.dismissed) {
+	for (const row of input.dismissed.filter((entry) => !kept.has(entry.id))) {
 		const entry = byId.get(row.id);
 		if (entry === undefined) {
 			throw new Error(`dismissed ${row.id} is not in the review record`);
@@ -177,7 +213,7 @@ export function accountCloseoutFindings(
 	}
 
 	const lowAdvisory: CloseoutLow[] = [];
-	for (const id of input.lowAdvisory) {
+	for (const id of input.lowAdvisory.filter((entry) => !kept.has(entry))) {
 		const entry = byId.get(id);
 		if (entry === undefined) {
 			throw new Error(`low/advisory ${id} is not in the review record`);
@@ -199,7 +235,7 @@ export function accountCloseoutFindings(
 		if (claimed.has(entry.id)) {
 			continue;
 		}
-		if (entry.finding.severity !== "low") {
+		if (kept.has(entry.id) || entry.finding.severity !== "low") {
 			fixed.push(entry);
 			continue;
 		}
@@ -216,11 +252,13 @@ export function accountCloseoutFindings(
 	};
 }
 
-/** Derive the close-out card from a review record plus orchestrator judgment. */
-export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
+/** The close-out card's parts, from a review record plus orchestrator judgment. */
+export function assembleCloseoutParts(
+	input: AssembleCloseoutInput,
+): CloseoutCardParts {
 	const accounted = accountCloseoutFindings(input);
 	const { seats, extras } = seatsFromPanel(input.panel);
-	return renderCloseoutComment({
+	return closeoutCardParts({
 		submitted: accounted.submitted,
 		fixed: accounted.fixed.length,
 		dismissed: accounted.dismissed,
@@ -228,6 +266,9 @@ export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
 		seats,
 		extras,
 		lost: [...input.lost],
+		...(input.verifyLost === undefined
+			? {}
+			: { verifyLost: [...input.verifyLost] }),
 		baseRef: input.meta.baseRef,
 		baseOid: input.meta.baseOid,
 		headOid: input.meta.headOid,
@@ -235,4 +276,10 @@ export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
 		...(input.heading === undefined ? {} : { heading: input.heading }),
 		...(input.runLine === undefined ? {} : { runLine: input.runLine }),
 	});
+}
+
+/** Derive the close-out card from a review record plus orchestrator judgment. */
+export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
+	const { head, rows } = assembleCloseoutParts(input);
+	return [...head, ...rows.flat()].join("\n");
 }

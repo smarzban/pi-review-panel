@@ -62,16 +62,86 @@ function parsePositiveInt(raw: unknown, label: string): number {
 	return value;
 }
 
-function parseComments(raw: string): IssueComment[] {
-	const trimmed = trimOutput(raw);
-	if (trimmed === "") {
+/** Splits text into its top-level JSON values, or undefined if it is not one. */
+function splitJsonValues(text: string): string[] | undefined {
+	const values: string[] = [];
+	let depth = 0;
+	let start = -1;
+	let inString = false;
+	let escaped = false;
+	for (let index = 0; index < text.length; index += 1) {
+		const char = text[index] as string;
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+			} else if (char === "\\") {
+				escaped = true;
+			} else if (char === '"') {
+				inString = false;
+			}
+			continue;
+		}
+		if (char === '"') {
+			inString = true;
+		} else if (char === "[" || char === "{") {
+			if (depth === 0) {
+				start = index;
+			}
+			depth += 1;
+		} else if (char === "]" || char === "}") {
+			depth -= 1;
+			if (depth < 0) {
+				return undefined;
+			}
+			if (depth === 0) {
+				values.push(text.slice(start, index + 1));
+			}
+		} else if (depth === 0 && !/\s/.test(char)) {
+			return undefined;
+		}
+	}
+	return depth === 0 && !inString ? values : undefined;
+}
+
+/**
+ * The rows of a `gh api --paginate` listing. gh prints each page as its own
+ * JSON array, one after another; `--slurp` wraps them in one outer array.
+ * Both, and a single page, come back as one flat list. Anything else is
+ * undefined.
+ */
+export function parseJsonPages(raw: string): unknown[] | undefined {
+	const text = trimOutput(raw);
+	if (text === "") {
 		return [];
 	}
-	const parsed: unknown = JSON.parse(trimmed);
-	if (!Array.isArray(parsed)) {
+	const pages = splitJsonValues(text);
+	if (pages === undefined) {
+		return undefined;
+	}
+	const rows: unknown[] = [];
+	for (const page of pages) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(page);
+		} catch {
+			return undefined;
+		}
+		if (!Array.isArray(parsed)) {
+			return undefined;
+		}
+		const slurped =
+			parsed.length > 0 && parsed.every((row) => Array.isArray(row));
+		rows.push(...(slurped ? (parsed as unknown[][]).flat() : parsed));
+	}
+	return rows;
+}
+
+function parseComments(raw: string): IssueComment[] {
+	const rows = parseJsonPages(raw);
+	if (rows === undefined) {
 		throw new Error("comment refused: gh comment list was not an array");
 	}
-	return parsed as IssueComment[];
+	return rows as IssueComment[];
 }
 
 function hasCloseoutHeading(body: string | undefined): boolean {
@@ -132,7 +202,11 @@ export function postCloseoutComment(
 	}
 
 	const comments = parseComments(
-		call(["api", `repos/${repo}/issues/${pr}/comments`, "--paginate"]),
+		call([
+			"api",
+			`repos/${repo}/issues/${pr}/comments?per_page=100`,
+			"--paginate",
+		]),
 	);
 	const existing = comments.find(
 		(comment) =>

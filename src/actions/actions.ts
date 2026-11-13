@@ -94,7 +94,6 @@ import {
 	loadCloseoutRun,
 } from "../tool/closeout-from-run.js";
 import {
-	type GhRunner,
 	type PostCloseoutInput,
 	type PostCloseoutResult,
 	postCloseoutComment,
@@ -121,6 +120,7 @@ import {
 	postVerifyRound,
 	ROUND_REPLY_RESERVE,
 	type RoundContext,
+	type RoundGhRunner,
 	type RoundRequest,
 } from "../tool/round-post.js";
 import { canonicalizeRepository } from "./repository.js";
@@ -159,7 +159,7 @@ export type ActionDependencies = {
 	 * Runs `gh` for posting each review and verify round to the open PR. By
 	 * default it runs the real `gh`.
 	 */
-	runGh?: GhRunner;
+	runGh?: RoundGhRunner;
 	resumeRun?: (
 		run: ResumableRun,
 		options?: ResumeOptions,
@@ -907,7 +907,7 @@ export async function verifyAction(
 		},
 	);
 	const report = renderVerifyResult(result, panel, ROUND_REPLY_RESERVE);
-	const roundLines = postVerifyRound(
+	const roundLines = await postVerifyRound(
 		roundContext(
 			resolved,
 			repoDir,
@@ -1133,7 +1133,7 @@ export async function reviewAction(
 		...(findings === undefined ? {} : { findings }),
 		reserveBytes: ROUND_REPLY_RESERVE,
 	});
-	const roundLines = postReviewRound(
+	const roundLines = await postReviewRound(
 		roundContext(
 			resolved,
 			repoDir,

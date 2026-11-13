@@ -25,9 +25,9 @@ import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import { createReviewPanelTool } from "../src/tool/review-panel.js";
 import {
+	type RoundGhRunner as GhRunner,
 	GITHUB_COMMENT_LIMIT,
 	githubSafe,
-	type RoundGhRunner as GhRunner,
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
 import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
@@ -1291,7 +1291,7 @@ function outsideCodeSpans(line: string): string {
 
 /**
  * Every hostile string a seat or a ref can carry has come out as plain text:
- * no HTML, image, link, emphasis or block marker, every `@`, `＠` and `#`
+ * no HTML, image, link, emphasis or block marker, every `@`, `\uFF20` and `#`
  * followed by a joiner, and no line our own renderer did not start.
  */
 function expectInert(body: string): void {
@@ -1308,11 +1308,11 @@ function expectInert(body: string): void {
 		expect(outside).not.toMatch(/(?<!\\)[<>!*_~|&`]/);
 		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low)\])/);
 		expect(outside).not.toMatch(/(?<!\\)\]\(/);
-		expect(outside).not.toMatch(/#(?!‍)/);
-		expect(outside).not.toMatch(/GH-(?!‍)/i);
+		expect(outside).not.toMatch(/#(?!\u200D)/);
+		expect(outside).not.toMatch(/GH-(?!\u200D)/i);
 		expect(outside).not.toMatch(/:\/\//);
-		expect(line).not.toMatch(/[@＠](?!‍)/);
-		expect(line.replace(/[@＠#:-]‍/g, "")).not.toMatch(/\p{Cf}/u);
+		expect(line).not.toMatch(/[@\uFF20](?!\u200D)/);
+		expect(line.replace(/[@\uFF20#:.-]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
 	}
 }
 
@@ -1328,7 +1328,7 @@ const HOSTILE = [
 	"\n```\n",
 	"@user",
 	"@org/team",
-	"＠x",
+	"\uFF20x",
 	"fixes #1",
 	"owner/repo#2",
 	"GH-3",
@@ -1412,7 +1412,7 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 				expectInert(bodyOf(call));
 			}
 			const card = bodyOf(posted[1]);
-			expect(card).toContain("``x`@‍octocat`x``");
+			expect(card).toContain("``x`@\u200Doctocat`x``");
 		});
 	});
 
@@ -1479,7 +1479,7 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 			headRef: HOSTILE_REF,
 		});
 		expectInert(card);
-		expect(card).toContain("``x`@‍octocat`x``");
+		expect(card).toContain("``x`@\u200Doctocat`x``");
 	});
 
 	it("code spans hold file names unescaped; seat code in titles shows no entity", () => {

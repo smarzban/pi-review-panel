@@ -6,7 +6,7 @@ import {
 	resolveSeatRuntime,
 	type SeatServicesSdk,
 } from "../seat/seat-runtime.js";
-import { type ConfigEnv, loadConfig } from "./load.js";
+import { type ConfigEnv, ConfigInvalidError, loadConfig } from "./load.js";
 import type { Config } from "./schema.js";
 
 /** One concrete setup prerequisite that prevents model work. */
@@ -147,14 +147,16 @@ export async function diagnoseReadiness(
 			env: input.env,
 			home: input.home,
 		});
-	} catch {
+	} catch (error) {
 		return {
 			ready: false,
 			rows: [
 				{
 					prerequisite: "configuration",
 					remediation:
-						"Create the outside-repository config shown in the configuration guide.",
+						error instanceof ConfigInvalidError
+							? `Fix the owner config: ${error.causes}.`
+							: "Create the outside-repository config shown in the configuration guide.",
 				},
 			],
 		};
