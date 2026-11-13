@@ -7,8 +7,19 @@ import {
 	type SuggestionsUnavailable,
 } from "./suggest.js";
 
-/** How much `git diff` output the rules read before giving up: 256 MiB. */
-export const MAX_DIFF_BYTES = 256 * 1024 * 1024;
+/**
+ * How much `git diff` output the rules read before giving up: 32 MiB. The
+ * panel runs inside the host's process, so the diff and its parse must stay
+ * small enough never to exhaust that process's memory.
+ */
+export const MAX_DIFF_BYTES = 32 * 1024 * 1024;
+
+/**
+ * How many added lines the rules hold. Memory grows with the line count, not
+ * the byte count (a file of short lines is small in git but huge as records),
+ * so a diff over this is reported as unavailable instead of parsed whole.
+ */
+export const MAX_ADDED_LINES = 200_000;
 
 /** The diff could not be read; the message is the cause, for the reply. */
 class DiffUnreadable extends Error {}
@@ -137,7 +148,11 @@ export function parseAddedLines(diff: string): Changeset["addedLines"] {
 	let file = "";
 	let inHeader = false;
 	let newLine = 0;
-	for (const line of diff.split("\n")) {
+	let start = 0;
+	while (start <= diff.length) {
+		const end = diff.indexOf("\n", start);
+		const line = diff.slice(start, end === -1 ? diff.length : end);
+		start = end === -1 ? diff.length + 1 : end + 1;
 		if (line.startsWith("diff --git ")) {
 			inHeader = true;
 			file = "";
@@ -162,6 +177,11 @@ export function parseAddedLines(diff: string): Changeset["addedLines"] {
 			continue;
 		}
 		if (line.startsWith("+")) {
+			if (added.length >= MAX_ADDED_LINES) {
+				throw new DiffUnreadable(
+					`the diff adds over ${MAX_ADDED_LINES.toLocaleString("en-US")} lines`,
+				);
+			}
 			added.push({ file, line: newLine, text: line.slice(1) });
 			newLine += 1;
 			continue;

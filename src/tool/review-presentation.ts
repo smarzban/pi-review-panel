@@ -221,11 +221,15 @@ export function renderReadiness(
 /**
  * Text that reaches a terminal or a model with no control character, no
  * invisible format character (bidi controls, zero-width characters, U+FEFF,
- * Unicode tag characters) and no line or paragraph separator: each shows as
- * U+FFFD.
+ * Unicode tag characters), no other default-ignorable character (variation
+ * selectors, Hangul fillers, the combining grapheme joiner) and no line or
+ * paragraph separator: each shows as U+FFFD.
  */
 function inert(text: string): string {
-	return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "\uFFFD");
+	return text.replace(
+		/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
+		"\uFFFD",
+	);
 }
 
 /** The one line that says no rule ran because the diff could not be read. */

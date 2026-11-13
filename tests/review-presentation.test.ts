@@ -608,6 +608,9 @@ describe("suggest block", () => {
 		["a line separator", "\u2028"],
 		["a paragraph separator", "\u2029"],
 		["a C1 control", "\u0085"],
+		["a Hangul filler", "\u3164"],
+		["a variation selector", "\uFE0F"],
+		["a combining grapheme joiner", "\u034F"],
 	])("replaces %s in a file name", (_label, hidden) => {
 		const line = formatSuggestion({
 			lens: "security",

@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { buildChangeset, suggestLenses } from "../src/run/changeset.js";
+import {
+	buildChangeset,
+	MAX_DIFF_BYTES,
+	suggestLenses,
+} from "../src/run/changeset.js";
 import type { Suggestion } from "../src/run/suggest.js";
 
 /**
@@ -257,6 +261,24 @@ describe("a diff the parser cannot read is reported, never read as no match", ()
 				}),
 			).toEqual({ unavailable: "the diff is over 16 bytes" });
 		});
+	});
+
+	it("reports a diff with too many added lines as unavailable, instead of holding them all", () => {
+		withRange(
+			{
+				"fixtures/many.txt": "x\n".repeat(200_001),
+				"src/a.ts": 'require("child_process");\n',
+			},
+			(range) => {
+				expect(suggestLenses(range.repo, range.base, range.head)).toEqual({
+					unavailable: "the diff adds over 200,000 lines",
+				});
+			},
+		);
+	});
+
+	it("bounds the diff text it reads at 32 MiB", () => {
+		expect(MAX_DIFF_BYTES).toBe(32 * 1024 * 1024);
 	});
 
 	it("reports a git failure as unavailable, with the cause", () => {
