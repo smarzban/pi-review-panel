@@ -116,7 +116,8 @@ function releaseSnapshot(
  * Removes snapshots of this repository that no live run uses: those whose
  * owner process has exited, and owner-less ones older than
  * {@link OWNERLESS_SNAPSHOT_MAX_AGE_MS}. A snapshot owned by a live process,
- * or by another repository, is never touched. Ends with `git worktree prune`.
+ * or by another repository, is never touched, and nothing else in the
+ * repository's worktree list is (no repo-wide `git worktree prune`).
  */
 export function sweepStaleSnapshots(
 	repoDir: string,
@@ -167,20 +168,19 @@ export function sweepStaleSnapshots(
 		}
 		if (listedPath !== undefined) {
 			try {
+				// Also drops the registration when the folder is already gone.
 				git(repoDir, ["worktree", "remove", "--force", listedPath]);
 			} catch {
-				// The folder may already be gone; prune below drops the entry.
+				// Best effort; the next sweep tries again.
 			}
 		}
 		rmSync(path.join(realRoot, name), { recursive: true, force: true });
 		rmSync(ownerPath, { force: true });
 		removed.push(worktreePath);
 	}
-	try {
-		git(repoDir, ["worktree", "prune"]);
-	} catch {
-		// Pruning is best effort.
-	}
+	// No `git worktree prune`: it would also drop the registration of any
+	// unrelated worktree whose folder is away at this moment. Each snapshot is
+	// removed above by its own exact path only.
 	return { removed, kept };
 }
 
