@@ -1,12 +1,17 @@
 import { execFileSync } from "node:child_process";
 import {
+	closeSync,
+	constants,
+	fstatSync,
 	lstatSync,
 	mkdtempSync,
+	openSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
-	writeFileSync,
+	type Stats,
+	writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,21 +28,26 @@ export type PinnedSnapshot = {
 };
 
 const SNAPSHOT_PREFIX = "review-panel-snapshot-";
-const OWNER_SUFFIX = ".owner.json";
+const OWNER_FILE = "owner.json";
 
 /**
- * Fixed operational bound for a snapshot with no owner file (one made before
- * owner files existed). It is removed only once it is older than this, since
- * nothing can tell whether its run is still alive.
+ * Fixed operational bound for a snapshot with no trusted owner file (one made
+ * before owner files existed). It is removed only once it is older than this,
+ * since nothing can tell whether its run is still alive.
  */
 export const OWNERLESS_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60_000;
 
 /** Who made a snapshot: the process and the repository's common git dir. */
 type SnapshotOwner = { pid: number; repo: string };
 
-/** The owner file sits beside the snapshot, never inside the worktree seats read. */
+/**
+ * Each snapshot lives in a private holder folder that `mkdtemp` makes in the
+ * temp folder (mode 0700, so no other user can put anything in it). The
+ * holder keeps the owner file and the worktree, so the owner file is never
+ * inside the worktree seats read.
+ */
 export function snapshotOwnerPath(worktreePath: string): string {
-	return `${worktreePath}${OWNER_SUFFIX}`;
+	return path.join(path.dirname(worktreePath), OWNER_FILE);
 }
 
 /** What a sweep removed and what it left because a live run may own it. */
@@ -60,21 +70,21 @@ export function pinSnapshot(
 	} catch {
 		// A sweep is housekeeping; it never stops a run.
 	}
-	const worktreePath = mkdtempSync(path.join(tmpdir(), SNAPSHOT_PREFIX));
-	const ownerPath = snapshotOwnerPath(worktreePath);
+	// Everything the owner file needs is known before the holder exists.
+	const owner: SnapshotOwner = {
+		pid: process.pid,
+		repo: commonGitDir(repoDir),
+	};
+	const holder = mkdtempSync(path.join(tmpdir(), SNAPSHOT_PREFIX));
+	const worktreePath = path.join(holder, path.basename(holder));
 
 	try {
 		// The owner is on disk before the worktree is registered, so a sweep
 		// never sees a registered snapshot of this version without an owner.
-		const owner: SnapshotOwner = {
-			pid: process.pid,
-			repo: commonGitDir(repoDir),
-		};
-		writeFileSync(ownerPath, `${JSON.stringify(owner)}\n`);
+		writeOwnerFile(snapshotOwnerPath(worktreePath), owner);
 		git(repoDir, ["worktree", "add", "--detach", worktreePath, commit]);
 	} catch (error) {
-		rmSync(worktreePath, { recursive: true, force: true });
-		rmSync(ownerPath, { force: true });
+		rmSync(holder, { recursive: true, force: true });
 		throw error;
 	}
 
@@ -82,6 +92,33 @@ export function pinSnapshot(
 		worktreePath,
 		release: () => releaseSnapshot(repoDir, worktreePath),
 	};
+}
+
+/**
+ * Creates the owner file exclusively (never over anything already there, and
+ * never through a symlink), readable only by this user.
+ */
+function writeOwnerFile(ownerPath: string, owner: SnapshotOwner): void {
+	let fd: number;
+	try {
+		fd = openSync(
+			ownerPath,
+			constants.O_WRONLY |
+				constants.O_CREAT |
+				constants.O_EXCL |
+				(constants.O_NOFOLLOW ?? 0),
+			0o600,
+		);
+	} catch (error) {
+		throw new Error(
+			`snapshot owner file ${ownerPath} could not be created: ${failureMessage(error)}`,
+		);
+	}
+	try {
+		writeSync(fd, `${JSON.stringify(owner)}\n`);
+	} finally {
+		closeSync(fd);
+	}
 }
 
 /**
@@ -95,9 +132,10 @@ function releaseSnapshot(
 	repoDir: string,
 	worktreePath: string,
 ): SnapshotReleaseOutcome {
+	const holder = path.dirname(worktreePath);
 	try {
 		git(repoDir, ["worktree", "remove", worktreePath]);
-		rmSync(snapshotOwnerPath(worktreePath), { force: true });
+		rmSync(holder, { recursive: true, force: true });
 		return { ok: true };
 	} catch {
 		// Fall through to the forced removal.
@@ -105,7 +143,7 @@ function releaseSnapshot(
 
 	try {
 		git(repoDir, ["worktree", "remove", "--force", worktreePath]);
-		rmSync(snapshotOwnerPath(worktreePath), { force: true });
+		rmSync(holder, { recursive: true, force: true });
 		return { ok: true };
 	} catch (error) {
 		return { ok: false, error: failureMessage(error) };
@@ -114,10 +152,20 @@ function releaseSnapshot(
 
 /**
  * Removes snapshots of this repository that no live run uses: those whose
- * owner process has exited, and owner-less ones older than
- * {@link OWNERLESS_SNAPSHOT_MAX_AGE_MS}. A snapshot owned by a live process,
- * or by another repository, is never touched, and nothing else in the
- * repository's worktree list is (no repo-wide `git worktree prune`).
+ * owner process has exited, and those with no trusted owner that are older
+ * than {@link OWNERLESS_SNAPSHOT_MAX_AGE_MS}. The temp folder may be shared
+ * with other users (`/tmp`), so nothing found there is taken on trust:
+ *
+ * - Only a folder this user owns is touched, found by `lstat` (a symlink is
+ *   never followed), and only directly inside the temp folder.
+ * - An owner file is trusted only inside a holder this user owns that no one
+ *   else can write, and only as a regular file this user owns with one link.
+ * - A folder with no trusted owner is removed only when it is registered as a
+ *   worktree of this repository and is past the age bound.
+ *
+ * A snapshot owned by a live process, or by another repository, is never
+ * touched, and nothing else in the repository's worktree list is (no
+ * repo-wide `git worktree prune`).
  */
 export function sweepStaleSnapshots(
 	repoDir: string,
@@ -127,56 +175,59 @@ export function sweepStaleSnapshots(
 	const repo = commonGitDir(repoDir);
 	const root = tmpdir();
 	const realRoot = realpathSync(root);
-	const registered = registeredSnapshotNames(repoDir, realRoot);
+	const registered = registeredSnapshots(repoDir, realRoot);
 	const names = new Set(registered.keys());
 	for (const entry of safeReaddir(realRoot)) {
-		if (!entry.startsWith(SNAPSHOT_PREFIX)) {
-			continue;
+		// Only folders are judged below. A `<name>.owner.json` file beside one
+		// is skipped like any other file: it is not this version's, and anyone
+		// can create one in a shared temp folder.
+		if (entry.startsWith(SNAPSHOT_PREFIX)) {
+			names.add(entry);
 		}
-		names.add(
-			entry.endsWith(OWNER_SUFFIX)
-				? entry.slice(0, -OWNER_SUFFIX.length)
-				: entry,
-		);
 	}
 
 	const removed: string[] = [];
 	const kept: string[] = [];
 	for (const name of [...names].sort()) {
-		const worktreePath = path.join(root, name);
-		const ownerPath = snapshotOwnerPath(path.join(realRoot, name));
-		const owner = readOwner(ownerPath);
-		const listedPath = registered.get(name);
+		const folder = path.join(realRoot, name);
+		const shown = path.join(root, name);
+		const folderStats = safeLstat(folder);
+		if (folderStats !== undefined && !ownedDirectory(folderStats)) {
+			// A symlink, a file, or another user's folder: not ours to judge.
+			continue;
+		}
+		const listed = registered.get(name);
+		const owner =
+			folderStats !== undefined && (folderStats.mode & 0o022) === 0
+				? readOwner(path.join(folder, OWNER_FILE))
+				: undefined;
 		let stale: boolean;
 		if (owner !== undefined) {
 			if (owner.repo !== repo) {
 				continue;
 			}
 			stale = !isProcessAlive(owner.pid);
-		} else if (listedPath !== undefined) {
-			const modified = modifiedAt(path.join(realRoot, name));
+		} else if (listed !== undefined) {
+			const modified = safeLstat(listed.path)?.mtimeMs;
 			stale =
 				modified === undefined ||
 				now() - modified > OWNERLESS_SNAPSHOT_MAX_AGE_MS;
 		} else {
-			// Not ours to judge: no owner and not registered in this repository.
+			// Not ours to judge: no trusted owner and not registered here.
 			continue;
 		}
 		if (!stale) {
-			kept.push(worktreePath);
+			kept.push(listed?.shown ?? shown);
 			continue;
 		}
-		if (listedPath !== undefined) {
-			try {
-				// Also drops the registration when the folder is already gone.
-				git(repoDir, ["worktree", "remove", "--force", listedPath]);
-			} catch {
-				// Best effort; the next sweep tries again.
-			}
+		if (listed !== undefined) {
+			dropWorktree(repoDir, repo, listed.path);
 		}
-		rmSync(path.join(realRoot, name), { recursive: true, force: true });
-		rmSync(ownerPath, { force: true });
-		removed.push(worktreePath);
+		const current = safeLstat(folder);
+		if (current !== undefined && ownedDirectory(current)) {
+			rmSync(folder, { recursive: true, force: true });
+		}
+		removed.push(listed?.shown ?? shown);
 	}
 	// No `git worktree prune`: it would also drop the registration of any
 	// unrelated worktree whose folder is away at this moment. Each snapshot is
@@ -184,13 +235,63 @@ export function sweepStaleSnapshots(
 	return { removed, kept };
 }
 
-/** Snapshot worktrees registered in this repository, by folder name. */
-function registeredSnapshotNames(
+/**
+ * Removes one registered snapshot worktree. When its folder is there (a real
+ * folder this user owns), through `git worktree remove --force`. When it is
+ * gone, git is not handed the path at all (something else could be put
+ * there); its registration is dropped from this repository's own worktree
+ * list instead, the way `git worktree prune` drops one entry.
+ */
+function dropWorktree(
+	repoDir: string,
+	commonDir: string,
+	listed: string,
+): void {
+	const stats = safeLstat(listed);
+	if (stats !== undefined) {
+		if (!ownedDirectory(stats)) {
+			return;
+		}
+		try {
+			git(repoDir, ["worktree", "remove", "--force", listed]);
+		} catch {
+			// Best effort; the next sweep tries again.
+		}
+		return;
+	}
+	const admin = path.join(commonDir, "worktrees");
+	for (const id of safeReaddir(admin)) {
+		const entry = path.join(admin, id);
+		let gitdir: string;
+		try {
+			gitdir = readFileSync(path.join(entry, "gitdir"), "utf8").trim();
+		} catch {
+			continue;
+		}
+		if (
+			gitdir === path.join(listed, ".git") &&
+			safeLstat(path.join(entry, "locked")) === undefined
+		) {
+			rmSync(entry, { recursive: true, force: true });
+		}
+	}
+}
+
+/** A registered snapshot worktree: its path as git lists it, and as shown. */
+type ListedSnapshot = { path: string; shown: string };
+
+/**
+ * Snapshot worktrees registered in this repository, by the name of their
+ * folder directly in the temp folder: the holder for this version's
+ * snapshots, the worktree itself for older ones.
+ */
+function registeredSnapshots(
 	repoDir: string,
 	realRoot: string,
-): Map<string, string> {
-	const names = new Map<string, string>();
+): Map<string, ListedSnapshot> {
+	const names = new Map<string, ListedSnapshot>();
 	const listing = git(repoDir, ["worktree", "list", "--porcelain"]);
+	const root = tmpdir();
 	for (const line of listing.split("\n")) {
 		if (!line.startsWith("worktree ")) {
 			continue;
@@ -200,8 +301,14 @@ function registeredSnapshotNames(
 		if (!name.startsWith(SNAPSHOT_PREFIX)) {
 			continue;
 		}
+		const parent = path.dirname(listed);
 		if (realDirname(listed) === realRoot) {
-			names.set(name, listed);
+			names.set(name, { path: listed, shown: path.join(root, name) });
+		} else if (
+			path.basename(parent) === name &&
+			realDirname(parent) === realRoot
+		) {
+			names.set(name, { path: listed, shown: path.join(root, name, name) });
 		}
 	}
 	return names;
@@ -216,12 +323,47 @@ function realDirname(target: string): string {
 	}
 }
 
+/** This user's id, or undefined where there is none (Windows). */
+function currentUid(): number | undefined {
+	return typeof process.getuid === "function" ? process.getuid() : undefined;
+}
+
+/** A real folder (not a symlink) that this user owns. */
+function ownedDirectory(stats: {
+	isDirectory(): boolean;
+	uid: number;
+}): boolean {
+	const uid = currentUid();
+	return stats.isDirectory() && (uid === undefined || stats.uid === uid);
+}
+
+/**
+ * The owner file, only when it is a regular file this user owns with one
+ * link, opened without following a symlink and without blocking on a FIFO.
+ */
 function readOwner(ownerPath: string): SnapshotOwner | undefined {
+	let fd: number;
 	try {
-		if (!lstatSync(ownerPath).isFile()) {
+		fd = openSync(
+			ownerPath,
+			constants.O_RDONLY |
+				(constants.O_NOFOLLOW ?? 0) |
+				(constants.O_NONBLOCK ?? 0),
+		);
+	} catch {
+		return undefined;
+	}
+	try {
+		const stats = fstatSync(fd);
+		const uid = currentUid();
+		if (
+			!stats.isFile() ||
+			stats.nlink !== 1 ||
+			(uid !== undefined && stats.uid !== uid)
+		) {
 			return undefined;
 		}
-		const parsed: unknown = JSON.parse(readFileSync(ownerPath, "utf8"));
+		const parsed: unknown = JSON.parse(readFileSync(fd, "utf8"));
 		if (
 			typeof parsed === "object" &&
 			parsed !== null &&
@@ -233,14 +375,16 @@ function readOwner(ownerPath: string): SnapshotOwner | undefined {
 			return { pid: parsed.pid, repo: parsed.repo };
 		}
 	} catch {
-		// Missing or unreadable: treated as owner-less.
+		// Unreadable: treated as owner-less.
+	} finally {
+		closeSync(fd);
 	}
 	return undefined;
 }
 
-function modifiedAt(target: string): number | undefined {
+function safeLstat(target: string): Stats | undefined {
 	try {
-		return lstatSync(target).mtimeMs;
+		return lstatSync(target);
 	} catch {
 		return undefined;
 	}

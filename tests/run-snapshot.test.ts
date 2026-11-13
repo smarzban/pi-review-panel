@@ -1,16 +1,47 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
+	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	rmSync,
+	symlinkSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * `mkdtempSync` passes through, except that a test can act on the folder it
+ * just made before `pinSnapshot` does anything else with it.
+ */
+const fsHook = vi.hoisted(() => ({
+	afterMkdtemp: undefined as ((made: string) => void) | undefined,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const real = await importOriginal<typeof import("node:fs")>();
+	return {
+		...real,
+		mkdtempSync: (...args: Parameters<typeof real.mkdtempSync>) => {
+			const made = real.mkdtempSync(...args);
+			const act = fsHook.afterMkdtemp;
+			fsHook.afterMkdtemp = undefined;
+			act?.(String(made));
+			return made;
+		},
+	};
+});
+
+afterEach(() => {
+	fsHook.afterMkdtemp = undefined;
+	vi.restoreAllMocks();
+});
 
 import {
 	OWNERLESS_SNAPSHOT_MAX_AGE_MS,
@@ -46,8 +77,35 @@ function removeFixture(...paths: string[]): void {
 		if (fixture !== "") {
 			rmSync(fixture, { recursive: true, force: true });
 			rmSync(snapshotOwnerPath(fixture), { force: true });
+			// A snapshot's private holder folder, when it has one.
+			const holder = path.dirname(fixture);
+			if (path.basename(holder).startsWith("review-panel-snapshot-")) {
+				rmSync(holder, { recursive: true, force: true });
+			}
 		}
 	}
+}
+
+/** The repository's common git dir, as the sweep names it. */
+function commonGitDir(repo: string): string {
+	return realpathSync(
+		git(repo, [
+			"rev-parse",
+			"--path-format=absolute",
+			"--git-common-dir",
+		]).trim(),
+	);
+}
+
+/**
+ * A snapshot as 0.3.0 made it: a registered worktree folder straight in the
+ * temp folder, with no owner file.
+ */
+function legacySnapshot(repo: string): string {
+	const folder = mkdtempSync(path.join(tmpdir(), "review-panel-snapshot-"));
+	rmSync(folder, { recursive: true });
+	git(repo, ["worktree", "add", "--quiet", "--detach", folder]);
+	return folder;
 }
 
 describe("pinSnapshot", () => {
@@ -334,6 +392,188 @@ describe("sweepStaleSnapshots", () => {
 			sweepStaleSnapshots(repo);
 
 			expect(worktreeCount(repo)).toBe(1);
+		} finally {
+			removeFixture(repo, pin.worktreePath);
+		}
+	});
+});
+
+describe("the sweep trusts only what this user made", () => {
+	it("ignores a sidecar planted beside a snapshot this user should keep", () => {
+		const repo = createHostRepo();
+		const folder = legacySnapshot(repo);
+		const planted = `${folder}.owner.json`;
+		try {
+			// Another local user can create this file in a shared temp folder.
+			writeFileSync(
+				planted,
+				`${JSON.stringify({ pid: 0, repo: commonGitDir(repo) })}\n`,
+			);
+
+			const swept = sweepStaleSnapshots(repo);
+
+			expect(swept.removed).toEqual([]);
+			expect(existsSync(path.join(folder, "committed.txt"))).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+		} finally {
+			rmSync(planted, { force: true });
+			removeFixture(repo, folder);
+		}
+	});
+
+	it("never reads an owner file through a symlink", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		const outside = mkdtempSync(path.join(tmpdir(), "run-snapshot-victim-"));
+		try {
+			const fake = path.join(outside, "owner.json");
+			writeFileSync(
+				fake,
+				`${JSON.stringify({ pid: deadPid(), repo: commonGitDir(repo) })}\n`,
+			);
+			const ownerPath = snapshotOwnerPath(pin.worktreePath);
+			rmSync(ownerPath);
+			symlinkSync(fake, ownerPath);
+
+			const swept = sweepStaleSnapshots(repo);
+
+			expect(swept.removed).toEqual([]);
+			expect(existsSync(pin.worktreePath)).toBe(true);
+			expect(existsSync(fake)).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+		} finally {
+			removeFixture(repo, pin.worktreePath, outside);
+		}
+	});
+
+	it.skipIf(typeof process.getuid !== "function")(
+		"never removes a snapshot owned by another user, even with a dead owner",
+		() => {
+			const repo = createHostRepo();
+			const pin = pinSnapshot(repo);
+			try {
+				ownedBy(pin.worktreePath, deadPid());
+				const me = (process.getuid as () => number)();
+				// Seen as another user, this user's files are someone else's.
+				vi.spyOn(process, "getuid").mockReturnValue(me + 1);
+
+				const swept = sweepStaleSnapshots(repo);
+
+				vi.restoreAllMocks();
+				expect(swept.removed).toEqual([]);
+				expect(existsSync(pin.worktreePath)).toBe(true);
+				expect(worktreeCount(repo)).toBe(2);
+			} finally {
+				vi.restoreAllMocks();
+				removeFixture(repo, pin.worktreePath);
+			}
+		},
+	);
+
+	it("never follows a snapshot-named symlink in the temp folder", () => {
+		const repo = createHostRepo();
+		const outside = mkdtempSync(path.join(tmpdir(), "run-snapshot-victim-"));
+		const link = path.join(
+			tmpdir(),
+			`review-panel-snapshot-link${process.pid}`,
+		);
+		try {
+			writeFileSync(
+				path.join(outside, "owner.json"),
+				`${JSON.stringify({ pid: deadPid(), repo: commonGitDir(repo) })}\n`,
+			);
+			mkdirSync(path.join(outside, "keep"));
+			symlinkSync(outside, link);
+
+			sweepStaleSnapshots(repo);
+
+			expect(lstatSync(link).isSymbolicLink()).toBe(true);
+			expect(existsSync(path.join(outside, "keep"))).toBe(true);
+			expect(existsSync(path.join(outside, "owner.json"))).toBe(true);
+		} finally {
+			rmSync(link, { force: true });
+			removeFixture(repo, outside);
+		}
+	});
+
+	it("keeps a registered snapshot-named worktree outside the temp folder", () => {
+		const repo = createHostRepo();
+		const away = mkdtempSync(path.join(repo, "..", "run-snapshot-away-"));
+		const folder = path.join(away, "review-panel-snapshot-away");
+		try {
+			git(repo, ["worktree", "add", "--quiet", "--detach", folder]);
+			const old = new Date(Date.now() - OWNERLESS_SNAPSHOT_MAX_AGE_MS - 60_000);
+			utimesSync(folder, old, old);
+
+			sweepStaleSnapshots(repo);
+
+			expect(existsSync(path.join(folder, "committed.txt"))).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+		} finally {
+			removeFixture(repo, away);
+		}
+	});
+});
+
+describe("pinSnapshot writes its owner file safely", () => {
+	it("refuses a symlink planted at the owner path and never follows it", () => {
+		const repo = createHostRepo();
+		const outside = mkdtempSync(path.join(tmpdir(), "run-snapshot-victim-"));
+		const victim = path.join(outside, "victim.txt");
+		const planted: string[] = [];
+		try {
+			writeFileSync(victim, "keep me\n");
+			// The moment the folder exists, plant a symlink at every place an
+			// owner file could go: beside the folder and inside it.
+			fsHook.afterMkdtemp = (made) => {
+				for (const target of [
+					`${made}.owner.json`,
+					path.join(made, "owner.json"),
+				]) {
+					try {
+						symlinkSync(victim, target);
+						planted.push(target);
+					} catch {
+						// This user cannot plant there; neither can anyone else.
+					}
+				}
+			};
+
+			let pinned: string | undefined;
+			let refusal: unknown;
+			try {
+				const pin = pinSnapshot(repo);
+				pinned = pin.worktreePath;
+				pin.release();
+			} catch (error) {
+				refusal = error;
+			}
+
+			expect(readFileSync(victim, "utf8")).toBe("keep me\n");
+			expect(pinned).toBeUndefined();
+			expect(String(refusal)).toMatch(/owner file/);
+			expect(worktreeCount(repo)).toBe(1);
+		} finally {
+			for (const target of planted) {
+				rmSync(target, { force: true });
+			}
+			removeFixture(repo, outside);
+		}
+	});
+
+	it("puts the owner file and the worktree in a private folder only this user can enter", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			const holder = path.dirname(pin.worktreePath);
+			expect(path.basename(holder)).toMatch(/^review-panel-snapshot-/);
+			expect(lstatSync(holder).mode & 0o777).toBe(0o700);
+			const owner = lstatSync(snapshotOwnerPath(pin.worktreePath));
+			expect(owner.isFile()).toBe(true);
+			expect(owner.mode & 0o777).toBe(0o600);
+			expect(path.dirname(snapshotOwnerPath(pin.worktreePath))).toBe(holder);
+			expect(pin.release()).toEqual({ ok: true });
+			expect(existsSync(holder)).toBe(false);
 		} finally {
 			removeFixture(repo, pin.worktreePath);
 		}

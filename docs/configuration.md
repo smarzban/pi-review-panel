@@ -228,17 +228,29 @@ A `run.lock` left by a process that has exited is replaced. The replacement happ
 holding `run.lock.takeover`, created exclusively, so two resumes can never both take over the same
 lock. If a process dies in that instant, the next resume refuses and names the file to delete. A
 `run.lock` whose pid now belongs to an unrelated live process also refuses; delete `run.lock` when
-no review_panel run is active.
+no review_panel run is active. A run publishes `run.lock` whole (written to a temp file, then
+hard-linked into place), so it never exists empty. A `run.lock` that names no pid is therefore one
+another process is still writing, or one an older version left unfinished when it crashed: it is
+refused, never taken over, and the message says to delete it when no review_panel run is active.
 
 ## Snapshot cleanup
 
-Each run reviews a detached worktree in the system temp folder named `review-panel-snapshot-*`, with
-a `<name>.owner.json` file beside it naming the process and repository that made it. At the start of
-every run the package removes this repository's snapshots whose owner process has exited, each by
-its exact path (`git worktree remove --force`, which also drops the registration when the folder is
-already gone). It never runs a repository-wide `git worktree prune`, so another worktree whose
-folder is away for a while keeps its registration. A snapshot whose owner is alive, or that belongs
-to another repository, is never removed. A snapshot with no owner file (made by an earlier version) is removed only once it is
-more than 24 hours old.
+Each run reviews a detached worktree in the system temp folder. It sits in a private holder folder
+named `review-panel-snapshot-*` (mode `0700`, so no other user can put anything in it), beside an
+`owner.json` file (mode `0600`) naming the process and repository that made it. The owner file is
+created exclusively, never through a symlink, before the worktree is added. At the start of every
+run the package removes this repository's snapshots whose owner process has exited, each by its
+exact path (`git worktree remove --force`; when the folder is already gone, only that worktree's
+own registration is dropped). It never runs a repository-wide `git worktree prune`, so another
+worktree whose folder is away for a while keeps its registration. A snapshot whose owner is alive,
+or that belongs to another repository, is never removed.
+
+The temp folder can be shared with other users (`/tmp` on Linux), so the sweep trusts nothing it
+finds there on sight. It touches only folders you own directly in the temp folder, and never
+follows a symlink. It reads an owner file only inside a holder you own that no one else can write,
+and only when the file is a regular file you own with a single link. A `<name>.owner.json` file
+beside a folder is never read. A snapshot with no trusted owner file (made by an earlier version)
+is removed only when it is registered as a worktree of this repository and is more than 24 hours
+old.
 
 
