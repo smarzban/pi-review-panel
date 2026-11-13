@@ -1,93 +1,42 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
-import { cwd as processCwd, env as processEnv } from "node:process";
+import { cwd as processCwd } from "node:process";
 
 import { Type } from "typebox";
-import { resolveAuditPanel } from "../config/audit-panel.js";
-import { loadAuditPassTable } from "../config/audit-passes.js";
-import { loadLensTable } from "../config/lenses.js";
 import {
-	type ConfigEnv,
-	loadConfig,
-	resolveConfigPath,
-} from "../config/load.js";
-import { resolvePanel } from "../config/panel.js";
-import {
-	diagnoseReadiness,
-	type ReadinessReport,
-} from "../config/readiness.js";
-import { suggestLenses } from "../run/changeset.js";
-import { discoverPriorRecords } from "../run/prior-records.js";
-import {
-	checkRecordKey,
-	loadRecordKey,
-	RecordKeyError,
-	type RecordKeyProblem,
-	recordKeyPath,
-} from "../run/record-key.js";
-import { SCOPING_NOTE_DROPPED } from "../run/render.js";
-import {
-	loadResumable,
-	type ResumableRun,
-	type ResumeOptions,
-	type ResumeResult,
-	resumeRun,
-} from "../run/resume.js";
-import {
-	type RunAuditInput,
-	type RunAuditOptions,
-	type RunAuditResult,
-	runAudit,
-} from "../run/run-audit.js";
-import {
-	type RunReviewOptions,
-	type RunReviewResult,
-	resolveCommitOid,
-	runReview,
-} from "../run/run-review.js";
-import {
-	planVerifySeats,
-	type RunVerifyInput,
-	type RunVerifyOptions,
-	type RunVerifyResult,
-	runVerify,
-} from "../run/run-verify.js";
-import type { PlannedSeat, RunConfig, StampedFinding } from "../run/types.js";
-import {
-	accountCloseoutFindings,
-	assembleCloseoutComment,
-	type CloseoutJudgmentRow,
-} from "./closeout-comment.js";
-import { assertFixedResolved, loadCloseoutRun } from "./closeout-from-run.js";
-import {
-	type PostCloseoutInput,
-	type PostCloseoutResult,
-	postCloseoutComment,
-} from "./closeout-post.js";
-import {
-	compactPanelRoster,
-	progressFromAuditEvent,
-	progressFromReviewEvent,
-	progressFromVerifyEvent,
-	type ReviewProgressView,
-	renderAuditResult,
-	renderReadiness,
-	renderReviewProgress,
-	renderReviewResult,
-	renderVerifyResult,
-} from "./review-presentation.js";
+	type ActionContext,
+	type ActionDependencies,
+	type ActionResult,
+	auditAction,
+	coerceJsonValue,
+	coerceStringList,
+	commentAction,
+	diagnoseAction,
+	isNonEmptyString,
+	parseAuditArguments,
+	parseCommentArguments,
+	parseDiagnoseArguments,
+	parseResumeArguments,
+	parseReviewArguments,
+	parseVerifyArguments,
+	resumeAction,
+	reviewAction,
+	validateNonEmptyString,
+	verifyAction,
+} from "../actions/actions.js";
+import { resolveReviewRepository } from "../actions/repository.js";
+import { renderReviewProgress } from "./review-presentation.js";
 
-/** Copy-paste example. Models truncated "/absolute/path" to "/". */
-export const REPOSITORY_EXAMPLE = "/Users/you/the-repo";
-
-const REPOSITORY_PLACEHOLDERS = new Set([
-	"/",
-	"/absolute/path",
-	"/absolute/path/to/repository",
+export {
+	ownerRecordKey,
+	ownerRecordKeyCheck,
+	type RecordKeyInput,
+} from "../actions/actions.js";
+export {
+	canonicalizeRepository,
+	isPlaceholderRepository,
 	REPOSITORY_EXAMPLE,
-]);
+	rejectFilesystemRoot,
+	resolveReviewRepository,
+} from "../actions/repository.js";
 
 const absoluteRepository = Type.String({
 	pattern: "^/",
@@ -134,86 +83,9 @@ const USAGE =
 
 type ReviewToolArguments = Record<string, unknown>;
 
-type ReviewToolResult = {
-	content: Array<{ type: "text"; text: string }>;
-};
+type ReviewToolResult = ActionResult;
 
-export type ReviewPanelDependencies = {
-	env?: ConfigEnv;
-	home?: string;
-	diagnose?: (input: {
-		repoDir: string;
-		env: ConfigEnv;
-		home: string;
-		mode?: "review-only" | "repair-loop";
-	}) => Promise<ReadinessReport>;
-	loadConfig?: typeof loadConfig;
-	resolvePanel?: typeof resolvePanel;
-	runReview?: (
-		config: RunConfig,
-		options?: RunReviewOptions,
-	) => Promise<RunReviewResult>;
-	runAudit?: (
-		input: RunAuditInput,
-		options?: RunAuditOptions,
-	) => Promise<RunAuditResult>;
-	resolveCommitOid?: typeof resolveCommitOid;
-	suggestLenses?: typeof suggestLenses;
-	runVerify?: (
-		input: RunVerifyInput,
-		options?: RunVerifyOptions,
-	) => Promise<RunVerifyResult>;
-	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
-	resumeRun?: (
-		run: ResumableRun,
-		options?: ResumeOptions,
-	) => Promise<ResumeResult>;
-	/**
-	 * The owner's record key. By default it is read from `record-key` beside
-	 * the owner config, and created there by a first review or audit.
-	 */
-	recordKey?: (input: RecordKeyInput) => Buffer;
-	/**
-	 * The `diagnose` check of the record key, which never writes. By default it
-	 * checks `record-key` beside the owner config the way review and audit use
-	 * it.
-	 */
-	checkRecordKey?: (
-		input: Omit<RecordKeyInput, "create">,
-	) => RecordKeyProblem | undefined;
-};
-
-export type RecordKeyInput = {
-	repoDir: string;
-	env: ConfigEnv;
-	home: string;
-	/** Create the key when it is missing: review and audit do, resume never. */
-	create: boolean;
-};
-
-/** Reads (or creates) the record key in the folder of the owner config. */
-export function ownerRecordKey(input: RecordKeyInput): Buffer {
-	return loadRecordKey(
-		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
-		{ create: input.create, repoDir: input.repoDir },
-	);
-}
-
-/** Checks the owner's record key for `diagnose`, without writing anything. */
-export function ownerRecordKeyCheck(
-	input: Omit<RecordKeyInput, "create">,
-): RecordKeyProblem | undefined {
-	let configPath: string;
-	try {
-		configPath = resolveConfigPath({ env: input.env, home: input.home });
-	} catch {
-		// A bad config override is the configuration row's to report.
-		return undefined;
-	}
-	return checkRecordKey(recordKeyPath(configPath), {
-		repoDir: input.repoDir,
-	});
-}
+export type ReviewPanelDependencies = ActionDependencies;
 
 export type ReviewPanelTool = {
 	name: "review_panel";
@@ -229,32 +101,6 @@ export type ReviewPanelTool = {
 		context: unknown,
 	) => Promise<ReviewToolResult>;
 };
-
-function isNonEmptyString(value: unknown): value is string {
-	return typeof value === "string" && value.trim().length > 0;
-}
-
-function validateNonEmptyString(raw: unknown, label: string): string {
-	if (!isNonEmptyString(raw)) {
-		throw new Error(`${label} must be a non-empty string`);
-	}
-	return raw;
-}
-
-function coerceStringList(value: unknown): unknown {
-	if (typeof value !== "string") {
-		return value;
-	}
-	const trimmed = value.trim();
-	if (trimmed.startsWith("[")) {
-		try {
-			return JSON.parse(trimmed);
-		} catch {
-			return value;
-		}
-	}
-	return trimmed.length > 0 ? [trimmed] : value;
-}
 
 export function prepareReviewArguments(args: unknown): unknown {
 	if (args === null || typeof args !== "object" || Array.isArray(args)) {
@@ -282,197 +128,6 @@ export function prepareReviewArguments(args: unknown): unknown {
 	return next;
 }
 
-function coerceJsonValue(value: string): unknown {
-	const trimmed = value.trim();
-	if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
-		return value;
-	}
-	try {
-		return JSON.parse(trimmed);
-	} catch {
-		return value;
-	}
-}
-
-function validateStringArray(raw: unknown, label: string): string[] {
-	const coerced = coerceStringList(raw);
-	if (!Array.isArray(coerced) || coerced.length === 0) {
-		throw new Error(`${label} must be a non-empty array of non-empty strings`);
-	}
-	for (const item of coerced) {
-		if (!isNonEmptyString(item)) {
-			throw new Error(`${label} must contain only non-empty strings`);
-		}
-	}
-	return coerced;
-}
-
-const COMMENT_KEYS = new Set([
-	"action",
-	"repository",
-	"priorRunId",
-	"ownerApproved",
-	"pr",
-	"dismissed",
-	"lowAdvisory",
-	"verifyRunId",
-	"head",
-]);
-
-function parseDismissed(raw: unknown): CloseoutJudgmentRow[] {
-	if (raw === undefined) {
-		return [];
-	}
-	const value = typeof raw === "string" ? coerceJsonValue(raw) : raw;
-	if (!Array.isArray(value)) {
-		throw new Error("dismissed must be an array of { id, reason }");
-	}
-	return value.map((row, index) => {
-		if (row === null || typeof row !== "object") {
-			throw new Error(`dismissed[${index}] must be an object`);
-		}
-		const record = row as { id?: unknown; reason?: unknown };
-		return {
-			id: validateNonEmptyString(record.id, `dismissed[${index}].id`),
-			reason: validateNonEmptyString(
-				record.reason,
-				`dismissed[${index}].reason`,
-			),
-		};
-	});
-}
-
-function parseLowAdvisory(raw: unknown): string[] {
-	if (raw === undefined) {
-		return [];
-	}
-	const value = typeof raw === "string" ? coerceStringList(raw) : raw;
-	if (!Array.isArray(value)) {
-		throw new Error("lowAdvisory must be an array of finding ids");
-	}
-	return value.map((item, index) => {
-		if (isNonEmptyString(item)) {
-			return item;
-		}
-		if (item !== null && typeof item === "object") {
-			return validateNonEmptyString(
-				(item as { id?: unknown }).id,
-				`lowAdvisory[${index}].id`,
-			);
-		}
-		throw new Error(`lowAdvisory[${index}] must be a finding id`);
-	});
-}
-
-function executeComment(
-	args: ReviewToolArguments,
-	repoDir: string,
-	postComment: (input: PostCloseoutInput) => PostCloseoutResult,
-): ReviewToolResult {
-	for (const key of Reflect.ownKeys(args)) {
-		if (!COMMENT_KEYS.has(String(key))) {
-			throw new Error(`comment does not accept argument "${String(key)}"`);
-		}
-	}
-	if (args.ownerApproved !== true) {
-		throw new Error(
-			"comment refused: ownerApproved must be true after the owner asked to post",
-		);
-	}
-	const priorRunId = validateNonEmptyString(args.priorRunId, "priorRunId");
-	const dismissed = parseDismissed(args.dismissed);
-	const lowAdvisory = parseLowAdvisory(args.lowAdvisory);
-	const facts = loadCloseoutRun(repoDir, priorRunId);
-	const accounted = accountCloseoutFindings({
-		findings: facts.run.findings,
-		dismissed,
-		lowAdvisory,
-	});
-	if (accounted.fixed.length > 0) {
-		if (!isNonEmptyString(args.verifyRunId)) {
-			throw new Error(
-				`comment refused: ${accounted.fixed.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
-			);
-		}
-		assertFixedResolved(
-			repoDir,
-			args.verifyRunId,
-			accounted.fixed.map((row) => row.id),
-			facts.run.runId,
-		);
-	}
-	const body = assembleCloseoutComment({
-		findings: facts.run.findings,
-		panel: facts.panel,
-		lost: facts.lost,
-		meta: facts.run.meta,
-		dismissed,
-		lowAdvisory,
-		...(isNonEmptyString(args.head) ? { headRef: args.head } : {}),
-	});
-	const posted = postComment({
-		repository: repoDir,
-		body,
-		...(args.pr === undefined ? {} : { pr: args.pr as number | string }),
-	});
-	return {
-		content: [
-			{
-				type: "text",
-				text: [
-					`Posted comment on PR #${posted.pr} (${posted.action})`,
-					posted.url,
-					"",
-					body,
-				].join("\n"),
-			},
-		],
-	};
-}
-
-function emitProgress(onUpdate: unknown, view: ReviewProgressView): void {
-	if (typeof onUpdate === "function") {
-		(onUpdate as (result: ReviewToolResult) => void)({
-			content: [{ type: "text", text: renderReviewProgress(view) }],
-		});
-	}
-}
-
-function readStampedFindings(recordPath: string): StampedFinding[] | undefined {
-	try {
-		const parsed: unknown = JSON.parse(
-			readFileSync(path.join(recordPath, "findings.json"), "utf8"),
-		);
-		return Array.isArray(parsed) ? (parsed as StampedFinding[]) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function refusePlaceholderRepository(repository: string): void {
-	const trimmed = repository.trim();
-	const resolved = path.resolve(trimmed);
-	if (REPOSITORY_PLACEHOLDERS.has(trimmed) || resolved === "/") {
-		throw new Error(
-			`repository must be the real repo directory, not "${trimmed}". Pass an absolute path such as ${REPOSITORY_EXAMPLE}.`,
-		);
-	}
-}
-
-export function isPlaceholderRepository(repository: unknown): boolean {
-	if (repository === undefined || repository === null) {
-		return true;
-	}
-	if (typeof repository !== "string") {
-		return false;
-	}
-	const trimmed = repository.trim();
-	if (trimmed === "") {
-		return true;
-	}
-	return REPOSITORY_PLACEHOLDERS.has(trimmed) || path.resolve(trimmed) === "/";
-}
-
 function cwdFromContext(context: unknown): string | undefined {
 	if (context === null || typeof context !== "object") {
 		return undefined;
@@ -484,91 +139,9 @@ function cwdFromContext(context: unknown): string | undefined {
 	return undefined;
 }
 
-/** Use an explicit repo path, or the git top-level of cwd when the model omitted or faked it. */
-export function resolveReviewRepository(
-	repository: unknown,
-	fallbackCwd: string,
-): string {
-	if (!isPlaceholderRepository(repository) && typeof repository === "string") {
-		return canonicalizeRepository(repository);
-	}
-	try {
-		return canonicalizeRepository(fallbackCwd);
-	} catch {
-		const shown =
-			typeof repository === "string" && repository.trim() !== ""
-				? `"${repository.trim()}"`
-				: "omitted";
-		throw new Error(
-			`repository ${shown} is not a Git repository (cwd: "${fallbackCwd}"). Pass the absolute path to the repo, or run from inside it.`,
-		);
-	}
-}
-
-/** Refuse a resolved path that is the filesystem root (including a Git top-level of /). */
-export function rejectFilesystemRoot(
-	resolved: string,
-	labeled: string,
-): string {
-	if (resolved === "/") {
-		throw new Error(
-			`repository must be the real repo directory, not "${labeled}". Pass an absolute path such as ${REPOSITORY_EXAMPLE}.`,
-		);
-	}
-	return resolved;
-}
-
-export function canonicalizeRepository(repository: unknown): string {
-	if (
-		typeof repository !== "string" ||
-		repository.trim() === "" ||
-		!path.isAbsolute(repository)
-	) {
-		throw new Error("repository must be a non-empty absolute path");
-	}
-	refusePlaceholderRepository(repository);
-	let real: string;
-	try {
-		real = realpathSync(repository);
-	} catch (error) {
-		const cause = error instanceof Error ? error.message : String(error);
-		throw new Error(`repository "${repository}" cannot be resolved: ${cause}`);
-	}
-	rejectFilesystemRoot(real, repository);
-	try {
-		const root = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-			cwd: real,
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		}).trim();
-		return rejectFilesystemRoot(realpathSync(root), repository);
-	} catch (error) {
-		if (
-			error instanceof Error &&
-			error.message.includes("real repo directory")
-		) {
-			throw error;
-		}
-		throw new Error(`repository "${repository}" is not a Git repository`);
-	}
-}
-
 export function createReviewPanelTool(
 	deps?: ReviewPanelDependencies,
 ): ReviewPanelTool {
-	const diagnose = deps?.diagnose ?? diagnoseReadiness;
-	const load = deps?.loadConfig ?? loadConfig;
-	const panelOf = deps?.resolvePanel ?? resolvePanel;
-	const review = deps?.runReview ?? runReview;
-	const audit = deps?.runAudit ?? runAudit;
-	const oidOf = deps?.resolveCommitOid ?? resolveCommitOid;
-	const suggest = deps?.suggestLenses ?? suggestLenses;
-	const verify = deps?.runVerify ?? runVerify;
-	const postComment = deps?.postComment ?? postCloseoutComment;
-	const resume = deps?.resumeRun ?? resumeRun;
-	const keyOf = deps?.recordKey ?? ownerRecordKey;
-	const checkKey = deps?.checkRecordKey ?? ownerRecordKeyCheck;
-
 	return {
 		name: "review_panel",
 		label: "Review panel",
@@ -578,481 +151,64 @@ export function createReviewPanelTool(
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {
 			const startedAt = Date.now();
-			const runtime = {
-				env: deps?.env ?? processEnv,
-				home: deps?.home ?? homedir(),
-			};
 			if (!isNonEmptyString(args.action)) {
 				throw new Error(USAGE);
 			}
-			const recordKey = (create: boolean, refusal: string): Buffer => {
-				try {
-					return keyOf({
-						repoDir,
-						env: runtime.env,
-						home: runtime.home,
-						create,
-					});
-				} catch (error) {
-					const fix = error instanceof RecordKeyError ? ` ${error.fix}` : "";
-					throw new Error(
-						`${refusal}: ${error instanceof Error ? error.message : String(error)}.${fix}`,
-					);
-				}
-			};
 			const action = validateNonEmptyString(args.action, "action");
 			const repoDir = resolveReviewRepository(
 				args.repository,
 				cwdFromContext(context) ?? processCwd(),
 			);
-
-			if (action === "diagnose") {
-				for (const key of Reflect.ownKeys(args)) {
-					if (key !== "action" && key !== "repository") {
-						throw new Error(
-							`diagnose does not accept argument "${String(key)}"`,
-						);
-					}
-				}
-				const report = await diagnose({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				// Review and audit refuse to start without a usable record key,
-				// so diagnose checks it too, without creating it.
-				const keyProblem = checkKey({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				const shown =
-					keyProblem === undefined
-						? report
-						: {
-								ready: false,
-								rows: [
-									...report.rows,
-									{
-										prerequisite: `record key ${recordKeyPath(resolveConfigPath({ env: runtime.env, home: runtime.home }))}`,
-										remediation: `${keyProblem.cause}. ${keyProblem.fix}`,
-									},
-								],
-							};
-				return { content: [{ type: "text", text: renderReadiness(shown) }] };
-			}
-
-			if (action === "audit") {
-				for (const key of Reflect.ownKeys(args)) {
-					if (
-						key !== "action" &&
-						key !== "repository" &&
-						key !== "seats" &&
-						key !== "passes" &&
-						key !== "scopingNote"
-					) {
-						throw new Error(`audit does not accept argument "${String(key)}"`);
-					}
-				}
-				const seats =
-					args.seats === undefined
-						? undefined
-						: validateStringArray(args.seats, "seats");
-				const passes =
-					args.passes === undefined
-						? undefined
-						: validateStringArray(args.passes, "passes");
-				const scopingNote =
-					args.scopingNote === undefined
-						? undefined
-						: validateNonEmptyString(args.scopingNote, "scopingNote");
-				const report = await diagnose({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				if (!report.ready) {
-					throw new Error(renderReadiness(report));
-				}
-				const config = load({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				const panel = resolveAuditPanel({
-					config,
-					passTable: loadAuditPassTable(),
-					...(seats === undefined ? {} : { seats }),
-					...(passes === undefined ? {} : { passes }),
-				});
-				const revision = oidOf(repoDir, "HEAD");
-				const auditKey = recordKey(true, "Audit refused");
-				const roster = compactPanelRoster(panel);
-				emitProgress(onUpdate, {
-					phase: "audit",
-					event: "started",
-					elapsedMs: Date.now() - startedAt,
-					total: panel.length,
-					completed: 0,
-					active: 0,
-					roster,
-				});
-				const result = await audit(
-					{
-						repoDir,
-						revision,
-						seats: panel,
-						...(scopingNote === undefined ? {} : { scopingNote }),
-						...(config.defaults.seatBudgetMs === undefined
-							? {}
-							: { seatBudgetMs: config.defaults.seatBudgetMs }),
-					},
-					{
-						...(signal === undefined ? {} : { abortSignal: signal }),
-						recordKey: auditKey,
-						onProgress: (event) =>
-							emitProgress(onUpdate, {
-								...progressFromAuditEvent(event, Date.now() - startedAt),
-								roster,
-							}),
-					},
-				);
-				return {
-					content: [
-						{
-							type: "text",
-							text: renderAuditResult({
-								recordPath: result.recordPath,
-								panel,
-								result,
-							}),
-						},
-					],
-				};
-			}
-
-			if (action === "verify") {
-				for (const key of Reflect.ownKeys(args)) {
-					if (
-						key !== "action" &&
-						key !== "repository" &&
-						key !== "priorRunId" &&
-						key !== "head" &&
-						key !== "keptFindingIds" &&
-						key !== "seats" &&
-						key !== "scopingNote"
-					) {
-						throw new Error(`verify does not accept argument "${String(key)}"`);
-					}
-				}
-				const priorRunId = validateNonEmptyString(
-					args.priorRunId,
-					"priorRunId",
-				);
-				const head = validateNonEmptyString(args.head, "head");
-				if (!Array.isArray(args.keptFindingIds)) {
-					throw new Error(
-						"keptFindingIds must be an array of non-empty strings",
-					);
-				}
-				const keptFindingIds = args.keptFindingIds.map((id, index) =>
-					validateNonEmptyString(id, `keptFindingIds[${index}]`),
-				);
-				const seats =
-					args.seats === undefined
-						? undefined
-						: validateStringArray(args.seats, "seats");
-				const scopingNote =
-					args.scopingNote === undefined
-						? undefined
-						: validateNonEmptyString(args.scopingNote, "scopingNote");
-
-				const report = await diagnose({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				if (!report.ready) {
-					throw new Error(renderReadiness(report));
-				}
-				const config = load({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				const headRevision = oidOf(repoDir, head);
-				const panel = planVerifySeats(config, seats);
-				const roster = compactPanelRoster(panel);
-				emitProgress(onUpdate, {
-					phase: "verify",
-					event: "started",
-					elapsedMs: Date.now() - startedAt,
-					total: panel.length,
-					completed: 0,
-					active: 0,
-					roster,
-				});
-				const result = await verify(
-					{
-						repoDir,
-						config,
-						priorRunId,
-						headRevision,
-						keptFindingIds,
-						...(seats === undefined ? {} : { seats }),
-						...(scopingNote === undefined ? {} : { scopingNote }),
-						...(config.defaults.seatBudgetMs === undefined
-							? {}
-							: { seatBudgetMs: config.defaults.seatBudgetMs }),
-					},
-					{
-						...(signal === undefined ? {} : { abortSignal: signal }),
-						onProgress: (event) =>
-							emitProgress(onUpdate, {
-								...progressFromVerifyEvent(event, Date.now() - startedAt),
-								roster,
-							}),
-					},
-				);
-				return {
-					content: [{ type: "text", text: renderVerifyResult(result) }],
-				};
-			}
-
-			if (action === "comment") {
-				return executeComment(args, repoDir, postComment);
-			}
-
-			if (action === "resume") {
-				for (const key of Reflect.ownKeys(args)) {
-					if (
-						key !== "action" &&
-						key !== "repository" &&
-						key !== "priorRunId"
-					) {
-						throw new Error(`resume does not accept argument "${String(key)}"`);
-					}
-				}
-				const priorRunId = validateNonEmptyString(
-					args.priorRunId,
-					"priorRunId",
-				);
-				const report = await diagnose({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				if (!report.ready) {
-					throw new Error(renderReadiness(report));
-				}
-				// Resume never creates the key: a record it did not sign is not
-				// this owner's.
-				const resumeKey = recordKey(false, "Resume refused");
-				// Seats, lenses and commits all come from the record itself, once
-				// its plan's signature checks out.
-				const run = loadResumable(repoDir, priorRunId, resumeKey);
-				// Models, extension paths and prompts come from the owner config and
-				// the package, never from the record inside the reviewed repository.
-				const config = load({
-					repoDir,
-					env: runtime.env,
-					home: runtime.home,
-				});
-				const panel: PlannedSeat[] = run.plan.seats.map((seat) => ({
-					...seat,
-					lensPrompt: "",
-				}));
-				const roster = compactPanelRoster(panel);
-				const progressOf =
-					run.plan.kind === "audit"
-						? progressFromAuditEvent
-						: progressFromReviewEvent;
-				const result = await resume(run, {
-					config,
-					recordKey: resumeKey,
-					...(signal === undefined ? {} : { abortSignal: signal }),
-					// Started once the lock is held and the record re-read, so the
-					// count is what will actually run.
-					onStart: ({ toRun }) =>
-						emitProgress(onUpdate, {
-							phase: run.plan.kind,
-							event: "started",
-							elapsedMs: Date.now() - startedAt,
-							total: toRun,
-							completed: 0,
-							active: 0,
-							roster,
-						}),
-					onProgress: (event) =>
-						emitProgress(onUpdate, {
-							...progressOf(event, Date.now() - startedAt),
-							roster,
-						}),
-				});
-				const resumed = result.resumedSeats;
-				const lost = result.lostSeats;
-				const label = (seats: PlannedSeat[]) =>
-					seats.map((seat) => `${seat.rosterId}/${seat.lens}`).join(", ");
-				const headline = [
-					`Resumed ${run.runId}: ran ${resumed.length} of ${panel.length} planned seats again${
-						resumed.length === 0 ? "" : ` (${label(resumed)})`
-					}; kept ${panel.length - resumed.length - lost.length} as recorded${
-						lost.length === 0
-							? ""
-							: `; lost ${lost.length} that could not be rebuilt from the owner config (${label(lost)})`
-					}.`,
-					...(result.scopingNoteDropped ? [SCOPING_NOTE_DROPPED] : []),
-				].join("\n");
-				let body: string;
-				if (run.plan.kind === "audit") {
-					body = renderAuditResult({
-						recordPath: result.recordPath,
-						panel,
-						result,
-					});
-				} else {
-					const plannedLenses = new Set(panel.map((seat) => seat.lens));
-					const suggestions = suggest(
-						repoDir,
-						run.plan.baseOid,
-						run.plan.headOid,
-					).filter((row) => !plannedLenses.has(row.lens));
-					const findings = readStampedFindings(result.recordPath);
-					body = renderReviewResult({
-						recordPath: result.recordPath,
-						panel,
-						result,
-						suggestions,
-						...(findings === undefined ? {} : { findings }),
-					});
-				}
-				return {
-					content: [{ type: "text", text: `${headline}\n\n${body}` }],
-				};
-			}
-
-			if (action !== "review") {
-				throw new Error(
-					`review_panel action must be "diagnose", "review", "audit", "verify", "resume", or "comment", got "${action}"`,
-				);
-			}
-
-			for (const key of Reflect.ownKeys(args)) {
-				if (
-					key !== "action" &&
-					key !== "repository" &&
-					key !== "base" &&
-					key !== "head" &&
-					key !== "seats" &&
-					key !== "lenses" &&
-					key !== "scopingNote"
-				) {
-					throw new Error(`review does not accept argument "${String(key)}"`);
-				}
-			}
-
-			const base = validateNonEmptyString(args.base, "base");
-			const head = validateNonEmptyString(args.head, "head");
-			const baseRevision = oidOf(repoDir, base);
-			const headRevision = oidOf(repoDir, head);
-			if (baseRevision === headRevision) {
-				throw new Error(
-					"Review refused: base and head resolve to the same commit",
-				);
-			}
-
-			const report = await diagnose({
-				repoDir,
-				env: runtime.env,
-				home: runtime.home,
-			});
-			if (!report.ready) {
-				throw new Error(renderReadiness(report));
-			}
-
-			const config = load({
-				repoDir,
-				env: runtime.env,
-				home: runtime.home,
-			});
-			const seats =
-				args.seats === undefined
-					? undefined
-					: validateStringArray(args.seats, "seats");
-			const lenses =
-				args.lenses === undefined
-					? undefined
-					: validateStringArray(args.lenses, "lenses");
-			const scopingNote =
-				args.scopingNote === undefined
-					? undefined
-					: validateNonEmptyString(args.scopingNote, "scopingNote");
-
-			const panel: PlannedSeat[] = panelOf({
-				config,
-				lensTable: loadLensTable(),
-				...(seats === undefined ? {} : { seats }),
-				...(lenses === undefined ? {} : { lenses }),
-			});
-
-			const reviewKey = recordKey(true, "Review refused");
-			const roster = compactPanelRoster(panel);
-			emitProgress(onUpdate, {
-				phase: "review",
-				event: "started",
-				elapsedMs: Date.now() - startedAt,
-				total: panel.length,
-				completed: 0,
-				active: 0,
-				roster,
-			});
-			const result = await review(
-				{
-					repoDir,
-					baseRef: base,
-					baseRevision,
-					headRevision,
-					revision: headRevision,
-					seats: panel,
-					priorRecordPaths: discoverPriorRecords(repoDir).map(
-						(record) => record.path,
-					),
-					...(scopingNote === undefined ? {} : { scopingNote }),
-					...(config.defaults.seatBudgetMs === undefined
-						? {}
-						: { seatBudgetMs: config.defaults.seatBudgetMs }),
-				},
-				{
-					...(signal === undefined ? {} : { abortSignal: signal }),
-					recordKey: reviewKey,
-					onProgress: (event) =>
-						emitProgress(onUpdate, {
-							...progressFromReviewEvent(event, Date.now() - startedAt),
-							roster,
-						}),
-				},
-			);
-			const plannedLenses = new Set(panel.map((seat) => seat.lens));
-			const suggestions = suggest(repoDir, baseRevision, headRevision).filter(
-				(row) => !plannedLenses.has(row.lens),
-			);
-			const findings = readStampedFindings(result.recordPath);
-
-			return {
-				content: [
-					{
-						type: "text",
-						text: renderReviewResult({
-							recordPath: result.recordPath,
-							panel,
-							result,
-							suggestions,
-							...(scopingNote === undefined ? {} : { scopingNote }),
-							...(findings === undefined ? {} : { findings }),
-						}),
-					},
-				],
+			const actionContext: ActionContext = {
+				...(deps === undefined ? {} : { deps }),
+				...(signal === undefined ? {} : { signal }),
+				...(typeof onUpdate === "function"
+					? {
+							onProgress: (view) =>
+								(onUpdate as (result: ReviewToolResult) => void)({
+									content: [{ type: "text", text: renderReviewProgress(view) }],
+								}),
+						}
+					: {}),
+				startedAt,
 			};
+
+			switch (action) {
+				case "diagnose":
+					return diagnoseAction(
+						{ repoDir, ...parseDiagnoseArguments(args) },
+						actionContext,
+					);
+				case "audit":
+					return auditAction(
+						{ repoDir, ...parseAuditArguments(args) },
+						actionContext,
+					);
+				case "verify":
+					return verifyAction(
+						{ repoDir, ...parseVerifyArguments(args) },
+						actionContext,
+					);
+				case "comment":
+					return commentAction(
+						{ repoDir, ...parseCommentArguments(args) },
+						actionContext,
+					);
+				case "resume":
+					return resumeAction(
+						{ repoDir, ...parseResumeArguments(args) },
+						actionContext,
+					);
+				case "review":
+					return reviewAction(
+						{ repoDir, ...parseReviewArguments(args) },
+						actionContext,
+					);
+				default:
+					throw new Error(
+						`review_panel action must be "diagnose", "review", "audit", "verify", "resume", or "comment", got "${action}"`,
+					);
+			}
 		},
 	};
 }
