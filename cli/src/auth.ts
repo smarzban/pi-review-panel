@@ -4,6 +4,7 @@
  * Login goes through `ModelRuntime.login` with a terminal `AuthInteraction`,
  * the same call Pi's own `pi auth login` makes.
  */
+import { shown } from "./args.js";
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "./sdk-types.js";
 
 /** The slice of `ModelRuntime` the auth commands use. */
@@ -60,8 +61,8 @@ export type AuthTerminal = {
 	write(line: string): void;
 	question(message: string, signal: AbortSignal): Promise<string>;
 	secret(message: string, signal: AbortSignal): Promise<string>;
-	/** All of stdin, when it is not a terminal. */
-	readStdin(): Promise<string>;
+	/** All of stdin, when it is not a terminal; rejects when the signal aborts. */
+	readStdin(signal: AbortSignal): Promise<string>;
 };
 
 export class AuthError extends Error {}
@@ -185,7 +186,7 @@ async function readApiKey(
 ): Promise<string> {
 	const raw = terminal.interactive
 		? await terminal.secret(`Enter ${providerName} API key: `, signal)
-		: await terminal.readStdin();
+		: await terminal.readStdin(signal);
 	const key = raw.trim();
 	if (key === "") {
 		throw new AuthError(
@@ -224,8 +225,9 @@ export async function login(input: LoginInput): Promise<string> {
 				)
 				.map((candidate) => candidate.id)
 				.sort();
+			// The id is not repeated: it may be a key typed in the wrong place.
 			throw new AuthError(
-				`Unknown provider "${input.provider}". Providers with a login: ${ids.join(", ")}`,
+				`Unknown provider. Providers with a login: ${ids.join(", ")}`,
 			);
 		}
 		const hasKeyLogin = provider.auth.apiKey?.login !== undefined;
@@ -282,7 +284,7 @@ export async function logout(input: {
 			(candidate) => candidate.providerId === input.provider,
 		);
 		if (credential === undefined) {
-			return `No stored credential for ${input.provider} in ${input.agentDir}/auth.json. Environment variables and models.json are unchanged.`;
+			return `No stored credential for ${shown(input.provider)} in ${input.agentDir}/auth.json. Environment variables and models.json are unchanged.`;
 		}
 		await runtime.logout(credential.providerId, { signal: input.signal });
 		return `Removed the stored credential for ${input.provider} from ${input.agentDir}/auth.json.`;

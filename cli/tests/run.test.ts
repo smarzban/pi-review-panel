@@ -1,8 +1,8 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
 import type { ActionContext } from "../../src/actions/actions.js";
+import * as actionsModule from "../../src/actions/actions.js";
 import type { AuthSdk, AuthTerminal } from "../src/auth.js";
 import {
 	type ActionFunctions,
@@ -11,6 +11,7 @@ import {
 	EXIT_USAGE,
 	type RunDeps,
 	type RunIo,
+	realActions,
 	run,
 } from "../src/run.js";
 
@@ -25,6 +26,9 @@ function harness(
 		result?: string;
 		throws?: Error;
 		cwd?: string;
+		/** Replaces the default fake for one action. */
+		action?: Partial<ActionFunctions>;
+		deps?: Partial<RunDeps>;
 	} = {},
 ) {
 	const calls: Record<string, Call[]> = {};
@@ -56,6 +60,7 @@ function harness(
 		verify: make("verify"),
 		resume: make("resume"),
 		comment: make("comment"),
+		...options.action,
 	} as unknown as ActionFunctions;
 	let stdout = "";
 	let stderr = "";
@@ -94,9 +99,12 @@ function harness(
 		sdkVersion: async () => "1.5.2",
 		actions,
 		authSdk: {} as AuthSdk,
+		...options.deps,
 	};
 	return {
 		run: (argv: string[]) => run(argv, io, deps),
+		io,
+		deps,
 		calls,
 		out: () => stdout,
 		err: () => stderr,
@@ -386,10 +394,48 @@ describe("exit codes never encode review content", () => {
 	});
 
 	it("exits 1, not 0, when the run was aborted", async () => {
-		const h = harness({ throws: new Error("aborted") });
+		const h = harness({ throws: new Error("boom") });
 		h.controller.abort();
 		expect(await h.run(["audit"])).toBe(EXIT_FAILED);
-		expect(h.err()).toContain("aborted");
+		expect(h.err()).toBe("review-panel: aborted (boom)\n");
+	});
+
+	it("passes the abort signal to a running action, which stops, and exits 1", async () => {
+		let started: () => void = () => {};
+		const running = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const h = harness({
+			action: {
+				review: (async (_input: unknown, context: ActionContext) => {
+					started();
+					await new Promise((resolve) => {
+						context.signal?.addEventListener("abort", resolve);
+					});
+					throw context.signal?.reason;
+				}) as unknown as ActionFunctions["review"],
+			},
+		});
+		const code = h.run(["review", "--base", "main", "--head", "HEAD"]);
+		await running;
+		h.controller.abort(new Error("interrupted"));
+		expect(await code).toBe(EXIT_FAILED);
+		expect(h.err()).toBe("review-panel: aborted (interrupted)\n");
+		expect(h.out()).toBe("");
+	});
+
+	it("reads stdin with the run's abort signal", async () => {
+		const seen: AbortSignal[] = [];
+		const h = harness();
+		const io = {
+			...h.io,
+			readStdin: async (signal: AbortSignal) => {
+				seen.push(signal);
+				return '{"action":"diagnose"}';
+			},
+		};
+		await run(["call", "-"], io, h.deps);
+		expect(seen).toEqual([h.controller.signal]);
 	});
 });
 
@@ -427,5 +473,136 @@ describe("output", () => {
 		]) {
 			expect(h.out()).toContain(command);
 		}
+	});
+});
+
+describe("realActions", () => {
+	it("maps each action to its own production function", () => {
+		expect(Object.keys(realActions).sort()).toEqual([
+			"audit",
+			"comment",
+			"diagnose",
+			"resume",
+			"review",
+			"verify",
+		]);
+		expect(realActions.diagnose).toBe(actionsModule.diagnoseAction);
+		expect(realActions.review).toBe(actionsModule.reviewAction);
+		expect(realActions.audit).toBe(actionsModule.auditAction);
+		expect(realActions.verify).toBe(actionsModule.verifyAction);
+		expect(realActions.resume).toBe(actionsModule.resumeAction);
+		expect(realActions.comment).toBe(actionsModule.commentAction);
+	});
+});
+
+describe("auth status", () => {
+	const roster = [
+		{ id: "opus", provider: "anthropic", model: "claude-opus" },
+		{
+			id: "cc",
+			provider: "claude-code",
+			model: "opus",
+			extraExtensionPaths: ["/ext.ts"],
+		},
+	];
+
+	function statusHarness() {
+		const loaded: unknown[] = [];
+		const inspected: unknown[] = [];
+		const h = harness({
+			deps: {
+				loadConfig: ((input: unknown) => {
+					loaded.push(input);
+					return { roster };
+				}) as unknown as RunDeps["loadConfig"],
+				authSdk: {
+					createRuntime: async () => {
+						throw new Error("unused");
+					},
+					deviceId: () => "",
+					inspect: async (input) => {
+						inspected.push(input);
+						return input.provider === "anthropic"
+							? {
+									authenticated: true,
+									check: { type: "api_key", source: "stored credential" },
+									extensionFailures: [],
+								}
+							: { authenticated: false, extensionFailures: [] };
+					},
+				},
+			},
+		});
+		return { h, loaded, inspected };
+	}
+
+	it("loads the owner config for the repository and prints each provider's login", async () => {
+		const { h, loaded, inspected } = statusHarness();
+		expect(await h.run(["auth", "status"])).toBe(EXIT_OK);
+		expect(loaded).toEqual([
+			{ env: {}, home: "/nonexistent-home", repoDir: REPO },
+		]);
+		expect(inspected).toEqual([
+			{
+				repoDir: REPO,
+				agentDir: "/agent",
+				provider: "anthropic",
+				model: "claude-opus",
+				extensionPaths: [],
+			},
+			{
+				repoDir: REPO,
+				agentDir: "/agent",
+				provider: "claude-code",
+				model: "opus",
+				extensionPaths: ["/ext.ts"],
+			},
+		]);
+		expect(h.out()).toBe(
+			[
+				"Agent folder: /agent",
+				"anthropic [seats: opus]: logged in (api_key, stored credential)",
+				"claude-code [seats: cc]: not logged in. Log in the way its extension documents",
+				"",
+			].join("\n"),
+		);
+	});
+
+	it("--json prints the status object", async () => {
+		const { h } = statusHarness();
+		expect(await h.run(["auth", "status", "--json"])).toBe(EXIT_OK);
+		const result = JSON.parse(h.out());
+		expect(result.agentDir).toBe("/agent");
+		expect(result.providers).toMatchObject([
+			{ provider: "anthropic", seats: ["opus"], authenticated: true },
+			{ provider: "claude-code", seats: ["cc"], authenticated: false },
+		]);
+	});
+});
+
+describe("usage errors never echo an argument that could be a key", () => {
+	it.each(
+		[
+			["auth", "login", "-ksk-ant-abc123secret"],
+			["auth", "login", "anthropic", "--sk-ant-api03-SECRET"],
+			["auth", "sk-ant-abc123secret"],
+			["sk-ant-abc123secret"],
+			["call", "sk-ant-abc123secret"],
+			["call", '{"key": sk-ant-abc123secret}'],
+			["diagnose", "sk-ant-abc123secret"],
+		].map((argv) => [argv.join(" "), argv] as const),
+	)("%s", async (_name, argv) => {
+		const h = harness();
+		expect(await h.run(argv)).toBe(EXIT_USAGE);
+		expect(h.err()).not.toContain("secret");
+		expect(h.err()).not.toContain("SECRET");
+	});
+
+	it("still names a plain mistyped command or option", async () => {
+		const h = harness();
+		await h.run(["auth", "logn"]);
+		await h.run(["review", "--modle", "x"]);
+		expect(h.err()).toContain('auth: unknown command "logn"');
+		expect(h.err()).toContain('review: unknown option "--modle"');
 	});
 });

@@ -26,8 +26,6 @@ export type AgentDirChoice = {
 export type AgentDirInput = {
 	env: Record<string, string | undefined>;
 	home: string;
-	/** Test seam; defaults to `existsSync`. */
-	exists?: (file: string) => boolean;
 };
 
 /** Pi expands a leading `~` in `PI_CODING_AGENT_DIR`; so does the CLI. */
@@ -50,7 +48,6 @@ export function ownAgentDir(home: string): string {
 }
 
 export function chooseAgentDir(input: AgentDirInput): AgentDirChoice {
-	const exists = input.exists ?? existsSync;
 	const fromEnv = input.env[AGENT_DIR_ENV];
 	// Pi treats an empty value as unset.
 	if (fromEnv !== undefined && fromEnv !== "") {
@@ -61,8 +58,8 @@ export function chooseAgentDir(input: AgentDirInput): AgentDirChoice {
 	}
 	const pi = piAgentDir(input.home);
 	if (
-		exists(path.join(pi, "auth.json")) ||
-		exists(path.join(pi, "models.json"))
+		existsSync(path.join(pi, "auth.json")) ||
+		existsSync(path.join(pi, "models.json"))
 	) {
 		return { dir: pi, source: "pi" };
 	}

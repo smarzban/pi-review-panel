@@ -298,7 +298,45 @@ describe("auth login (account sign-in)", () => {
 				signal,
 			}),
 		).rejects.toThrow(
-			'Unknown provider "nope". Providers with a login: anthropic, openai, openai-codex',
+			"Unknown provider. Providers with a login: anthropic, openai, openai-codex",
+		);
+	});
+
+	it("does not repeat an unknown id, which may be a key typed in its place", async () => {
+		const { runtime } = fakeRuntime();
+		const refused = login({
+			provider: "sk-ant-abc123secret",
+			apiKey: true,
+			agentDir: "/a",
+			cwd: "/",
+			sdk: sdkFor(runtime),
+			terminal: terminal({ interactive: false, stdin: "k" }).value,
+			signal,
+		});
+		await expect(refused).rejects.toThrow(AuthError);
+		await expect(refused).rejects.not.toThrow(/secret/);
+	});
+
+	it("takes an API key without --api-key for a provider that has only key login", async () => {
+		let seen: string | undefined;
+		const { runtime, logins } = fakeRuntime(async (interaction) => {
+			seen = await interaction.prompt({ type: "secret", message: "key" });
+		});
+		const line = await login({
+			provider: "openai",
+			apiKey: false,
+			agentDir: "/a",
+			cwd: "/",
+			sdk: sdkFor(runtime),
+			terminal: terminal({ interactive: false, stdin: "sk-openai\n" }).value,
+			signal,
+		});
+		expect(seen).toBe("sk-openai");
+		expect(logins).toEqual([
+			{ provider: "openai", type: "api_key", deviceId: "device-1" },
+		]);
+		expect(line).toBe(
+			"Saved the API key for OpenAI. Credentials are in /a/auth.json",
 		);
 	});
 
@@ -329,8 +367,20 @@ describe("auth logout", () => {
 		expect(stored.has("anthropic")).toBe(false);
 		expect(
 			await logout({ provider: "anthropic", agentDir: "/a", sdk, signal }),
-		).toContain("No stored credential for anthropic");
+		).toContain('No stored credential for "anthropic"');
 		expect(runtime.logout).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not repeat an id that may be a key", async () => {
+		const { runtime } = fakeRuntime();
+		const line = await logout({
+			provider: "sk-ant-abc123secret",
+			agentDir: "/a",
+			sdk: sdkFor(runtime),
+			signal,
+		});
+		expect(line).toContain("No stored credential for (not shown");
+		expect(line).not.toContain("secret");
 	});
 });
 

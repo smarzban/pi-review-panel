@@ -7,6 +7,21 @@
 
 export class UsageError extends Error {}
 
+/**
+ * A command-line token as an error message may show it. A key typed in the
+ * wrong place must not reach the terminal's scrollback or a captured log, so
+ * only tokens shaped like a command, option or provider id are shown: lowercase
+ * letters and hyphens, no digits, no long runs.
+ */
+export function shown(token: string): string {
+	const words = token.replace(/^-{1,2}/, "").split("-");
+	const plain =
+		/^-{0,2}[a-z][a-z-]*$/.test(token) &&
+		token.length <= 40 &&
+		words.every((word) => word.length <= 16);
+	return plain ? `"${token}"` : "(not shown, in case it is a key)";
+}
+
 export const ACTIONS = [
 	"diagnose",
 	"review",
@@ -118,7 +133,7 @@ function readFlags(
 		}
 		if (!arg.startsWith("--")) {
 			if (arg.startsWith("-") && arg !== "-") {
-				throw new UsageError(`${command}: unknown option "${arg}"`);
+				throw new UsageError(`${command}: unknown option ${shown(arg)}`);
 			}
 			positionals.push(arg);
 			continue;
@@ -127,7 +142,7 @@ function readFlags(
 		const name = eq === -1 ? arg.slice(2) : arg.slice(2, eq);
 		const spec = specs[name];
 		if (spec === undefined) {
-			throw new UsageError(`${command}: unknown option "--${name}"`);
+			throw new UsageError(`${command}: unknown option ${shown(`--${name}`)}`);
 		}
 		if (spec.kind === "boolean") {
 			if (eq !== -1) {
@@ -176,7 +191,7 @@ function parseAction(action: ActionName, argv: readonly string[]): Command {
 	}
 	if (flags.positionals.length > 0) {
 		throw new UsageError(
-			`${action}: unexpected argument "${flags.positionals[0]}"`,
+			`${action}: unexpected argument ${shown(flags.positionals[0] as string)}`,
 		);
 	}
 	const args: Record<string, unknown> = {};
@@ -276,7 +291,7 @@ function parseAuth(argv: readonly string[]): Command {
 		}
 		if (flags.positionals.length > 0) {
 			throw new UsageError(
-				`auth status: unexpected argument "${flags.positionals[0]}"`,
+				`auth status: unexpected argument ${shown(flags.positionals[0] as string)}`,
 			);
 		}
 		const repo = flags.values.get("repo");
@@ -287,7 +302,7 @@ function parseAuth(argv: readonly string[]): Command {
 		};
 	}
 	throw new UsageError(
-		`auth: unknown command "${sub}"; use login, logout or status`,
+		`auth: unknown command ${shown(sub)}; use login, logout or status`,
 	);
 }
 
@@ -316,7 +331,7 @@ export function parseCommand(argv: readonly string[]): Command {
 	if (first === "auth") {
 		return parseAuth(rest);
 	}
-	throw new UsageError(`unknown command "${first}"`);
+	throw new UsageError(`unknown command ${shown(first)}`);
 }
 
 export const HELP = `review-panel: run the multi-model review panel from a terminal.

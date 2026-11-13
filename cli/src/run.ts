@@ -80,7 +80,8 @@ export type RunIo = {
 	home: string;
 	stdout(text: string): void;
 	stderr(text: string): void;
-	readStdin(): Promise<string>;
+	/** All of stdin; rejects when the signal aborts first. */
+	readStdin(signal: AbortSignal): Promise<string>;
 	readFile(file: string): string;
 	signal: AbortSignal;
 	terminal: AuthTerminal;
@@ -135,7 +136,7 @@ async function dismissedText(
 ): Promise<string> {
 	switch (source.from) {
 		case "stdin":
-			return io.readStdin();
+			return io.readStdin(io.signal);
 		case "file":
 			try {
 				return io.readFile(path.resolve(io.cwd, source.path));
@@ -201,7 +202,12 @@ function parseCallPayload(text: string): Record<string, unknown> {
 	try {
 		value = JSON.parse(text);
 	} catch (error) {
-		throw new UsageError(`call: the argument is not JSON: ${message(error)}`);
+		// JSON.parse quotes the text it read; keep only where it failed, so a
+		// key passed here by mistake is not echoed.
+		const where = /at position \d+/.exec(message(error))?.[0];
+		throw new UsageError(
+			`call: the argument is not JSON${where === undefined ? "" : ` (${where})`}`,
+		);
 	}
 	if (value === null || typeof value !== "object" || Array.isArray(value)) {
 		throw new UsageError("call: the argument must be a JSON object");
@@ -260,7 +266,9 @@ async function execute(
 		}
 		case "call": {
 			const args = parseCallPayload(
-				command.payload === "-" ? await io.readStdin() : command.payload,
+				command.payload === "-"
+					? await io.readStdin(io.signal)
+					: command.payload,
 			);
 			const action = args.action;
 			if (

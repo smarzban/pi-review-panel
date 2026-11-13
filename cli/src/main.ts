@@ -67,7 +67,7 @@ const code = await run(
 		stderr: (text) => {
 			process.stderr.write(text);
 		},
-		readStdin: () => readAll(process.stdin),
+		readStdin: (signal) => readAll(process.stdin, signal),
 		readFile: (file) => readFileSync(file, "utf8"),
 		signal: controller.signal,
 		terminal: processTerminal(),
