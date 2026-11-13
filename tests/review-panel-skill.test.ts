@@ -72,6 +72,38 @@ describe("review skill required workflow", () => {
 	});
 });
 
+describe("lens choice workflow", () => {
+	it("calls suggest first, then the caller chooses lenses with reasons, then review", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		const suggest = body.indexOf('`{ "action": "suggest", "base", "head" }`');
+		const choose = body.indexOf("Choose the lenses yourself");
+		const review = body.indexOf(
+			'`{ "action": "review", "base", "head", "lenses" }`',
+		);
+		expect(suggest).toBeGreaterThan(-1);
+		expect(choose).toBeGreaterThan(suggest);
+		expect(review).toBeGreaterThan(choose);
+		expect(body).toContain("with a one-line reason for each");
+		expect(body).toContain("The tool never adds a lens by itself.");
+		expect(body).toContain("`Seats:` line");
+	});
+
+	it("omits lenses when no extra lens is chosen, since the tool refuses an empty array", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).toContain(
+			"If you chose no extra lens, omit `lenses`; the tool refuses an empty array.",
+		);
+	});
+
+	it("re-runs a dropped lens only on a concrete gap the report shows", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).not.toContain("If a lens you did not run was suggested");
+		expect(body).toContain(
+			"Do not re-run a lens you dropped in step 3 unless the report shows a concrete gap on its dimension that holistic left unsettled; then call `review` once with only that lens on the same base/head.",
+		);
+	});
+});
+
 describe("repository audit workflow", () => {
 	it("keeps audit advisory, whole-tree, and separate from review close-out", () => {
 		const body = splitFrontmatter(readSkill()).body;

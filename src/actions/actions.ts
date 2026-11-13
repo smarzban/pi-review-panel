@@ -25,7 +25,8 @@
  * seat (review, audit, verify, resume) and diagnose's model check still load
  * the Pi SDK (`@earendil-works/pi-coding-agent`) through a dynamic `import()`
  * in `src/seat/sdk-session.ts` and `src/config/readiness.ts`, so a front end
- * that runs those needs the SDK installed. Comment and the parsers do not.
+ * that runs those needs the SDK installed. Suggest, comment and the parsers
+ * do not.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -98,6 +99,8 @@ import {
 } from "../tool/closeout-post.js";
 import {
 	compactPanelRoster,
+	formatSuggestion,
+	formatSuggestionsUnavailable,
 	progressFromAuditEvent,
 	progressFromReviewEvent,
 	progressFromVerifyEvent,
@@ -105,6 +108,7 @@ import {
 	renderAuditResult,
 	renderReadiness,
 	renderReviewResult,
+	renderSuggestResult,
 	renderVerifyResult,
 	truncateCodePoints,
 } from "../tool/review-presentation.js";
@@ -327,6 +331,25 @@ export type ReviewInput = {
 	lenses?: unknown;
 	scopingNote?: unknown;
 };
+
+/** Suggest takes the same commit range as review, and nothing else. */
+export type SuggestInput = { base: string; head: string };
+
+export function parseSuggestArguments(
+	args: Record<string, unknown>,
+): SuggestInput {
+	refuseUnknownArguments(args, "suggest", ["base", "head"]);
+	return validateSuggestInput(args);
+}
+
+function validateSuggestInput(
+	args: SuggestInput | Record<string, unknown>,
+): SuggestInput {
+	return {
+		base: validateNonEmptyString(args.base, "base"),
+		head: validateNonEmptyString(args.head, "head"),
+	};
+}
 
 export function parseDiagnoseArguments(
 	args: Record<string, unknown>,
@@ -579,6 +602,21 @@ async function requireReady(resolved: Resolved, repoDir: string) {
 	}
 }
 
+/** Resolves review's commit range, with review's refusals. */
+function resolveRange(
+	resolved: Resolved,
+	repoDir: string,
+	base: string,
+	head: string,
+): { baseRevision: string; headRevision: string } {
+	const baseRevision = resolved.oidOf(repoDir, base);
+	const headRevision = resolved.oidOf(repoDir, head);
+	if (baseRevision === headRevision) {
+		throw new Error("Review refused: base and head resolve to the same commit");
+	}
+	return { baseRevision, headRevision };
+}
+
 function loadOwnerConfig(resolved: Resolved, repoDir: string) {
 	return resolved.load({
 		repoDir,
@@ -744,7 +782,7 @@ export async function verifyAction(
 				emit({ ...progressFromVerifyEvent(event, elapsed()), roster }),
 		},
 	);
-	return textResult(renderVerifyResult(result));
+	return textResult(renderVerifyResult(result, panel));
 }
 
 export async function commentAction(
@@ -861,10 +899,11 @@ export async function resumeAction(
 	if (run.plan.kind === "audit") {
 		body = renderAuditResult({ recordPath: result.recordPath, panel, result });
 	} else {
-		const plannedLenses = new Set(panel.map((seat) => seat.lens));
-		const suggestions = resolved
-			.suggest(repoDir, run.plan.baseOid, run.plan.headOid)
-			.filter((row) => !plannedLenses.has(row.lens));
+		const suggestions = resolved.suggest(
+			repoDir,
+			run.plan.baseOid,
+			run.plan.headOid,
+		);
 		const findings = readStampedFindings(result.recordPath);
 		body = renderReviewResult({
 			recordPath: result.recordPath,
@@ -886,11 +925,12 @@ export async function reviewAction(
 	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateReviewInput(input);
 	const { base, head } = valid;
-	const baseRevision = resolved.oidOf(repoDir, base);
-	const headRevision = resolved.oidOf(repoDir, head);
-	if (baseRevision === headRevision) {
-		throw new Error("Review refused: base and head resolve to the same commit");
-	}
+	const { baseRevision, headRevision } = resolveRange(
+		resolved,
+		repoDir,
+		base,
+		head,
+	);
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
 	const seats = optionalStringArray(valid.seats, "seats");
@@ -938,10 +978,7 @@ export async function reviewAction(
 				emit({ ...progressFromReviewEvent(event, elapsed()), roster }),
 		},
 	);
-	const plannedLenses = new Set(panel.map((seat) => seat.lens));
-	const suggestions = resolved
-		.suggest(repoDir, baseRevision, headRevision)
-		.filter((row) => !plannedLenses.has(row.lens));
+	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
 	const findings = readStampedFindings(result.recordPath);
 
 	return textResult(
@@ -952,6 +989,59 @@ export async function reviewAction(
 			suggestions,
 			...(scopingNote === undefined ? {} : { scopingNote }),
 			...(findings === undefined ? {} : { findings }),
+		}),
+	);
+}
+
+/** How many pieces of evidence suggest shows for one lens before counting. */
+const SUGGEST_EVIDENCE = 3;
+
+/**
+ * The lenses the diff's rules suggest, each with its reason and evidence,
+ * before any seat runs. It runs no seat, checks no login and never touches
+ * the record key: it reads the commit range and the owner's default lenses.
+ * It adds no lens to any review; the caller chooses and passes `lenses`.
+ */
+export async function suggestAction(
+	input: RepositoryInput & SuggestInput,
+	context: ActionContext = {},
+): Promise<ActionResult> {
+	const resolved = resolveDependencies(context.deps);
+	const repoDir = canonicalizeRepository(input.repoDir);
+	const { base, head } = validateSuggestInput(input);
+	const { baseRevision, headRevision } = resolveRange(
+		resolved,
+		repoDir,
+		base,
+		head,
+	);
+	const ownerLenses = loadOwnerConfig(resolved, repoDir).defaults.lenses ?? [];
+	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
+	const range = truncateCodePoints(`${base}...${head}`, 200);
+	return textResult(
+		renderSuggestResult({
+			head: [
+				"# Lens suggestions",
+				`${range} · holistic always runs · owner default lenses: ${
+					ownerLenses.length === 0 ? "none" : ownerLenses.join(", ")
+				}`,
+			],
+			rows: !Array.isArray(suggestions)
+				? [formatSuggestionsUnavailable(suggestions)]
+				: suggestions.length === 0
+					? ["- No suggestion rule matched this change."]
+					: suggestions.map((row) =>
+							formatSuggestion(row, {
+								evidence: SUGGEST_EVIDENCE,
+								...(ownerLenses.includes(row.lens)
+									? { note: "already on, owner default" }
+									: {}),
+							}),
+						),
+			tail: [
+				"",
+				"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
+			],
 		}),
 	);
 }

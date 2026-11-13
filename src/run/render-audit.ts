@@ -1,5 +1,9 @@
 import type { Finding } from "../seat/schema.js";
-import { type ResumeFacts, renderResumeSection } from "./render.js";
+import {
+	type ResumeFacts,
+	renderResumeSection,
+	renderSeatsLine,
+} from "./render.js";
 import type { SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -43,8 +47,6 @@ export function renderAuditReport(input: {
 		"## Seats",
 		"",
 		...renderSeats(input.outcomes),
-		"Not a merge decision.",
-		"",
 	];
 	return lines.join("\n");
 }
@@ -80,10 +82,14 @@ function renderFindings(stamped: StampedFinding[]): string[] {
 	return lines;
 }
 
+/** Outcomes come one per planned seat, in planned order. */
 function renderSeats(outcomes: SeatOutcomeFacts[]): string[] {
 	const voted = outcomes.filter((outcome) => outcome.outcome.kind === "voted");
 	const lines = [
 		`${outcomes.length} planned seats: ${voted.length} voted, ${outcomes.length - voted.length} failed.`,
+		...(outcomes.length === 0
+			? []
+			: [renderSeatsLine(outcomes.map((facts) => facts.seat))]),
 		"",
 	];
 	for (const facts of outcomes) {

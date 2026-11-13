@@ -56,6 +56,7 @@ export const ACTIONS = [
 	"verify",
 	"resume",
 	"comment",
+	"suggest",
 ] as const;
 
 export type ActionName = (typeof ACTIONS)[number];
@@ -100,6 +101,10 @@ const COMMON: Record<string, FlagSpec> = {
 /** Each action's flags, named after the tool argument they set. */
 const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 	diagnose: {},
+	suggest: {
+		base: STRING("base"),
+		head: STRING("head"),
+	},
 	review: {
 		base: STRING("base"),
 		head: STRING("head"),
@@ -367,6 +372,7 @@ Usage: review-panel <command> [options]
 
 Actions (the same as the review_panel tool's):
   diagnose                     Check the owner config, every seat's model and login, and the record key
+  suggest                      Suggest lenses for base...head, each with its reason; runs no seat: --base <ref> --head <ref>
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
   audit                        Advisory whole-repository sweep of HEAD: [--seats a,b] [--passes p,q] [--scoping-note <text>]
   verify                       Check fixes against a prior run: --prior-run-id <run> --head <ref> --kept-finding-ids F-1,F-2 [--seats a,b] [--scoping-note <text>]

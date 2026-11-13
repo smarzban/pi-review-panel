@@ -85,7 +85,39 @@ From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 ```
 
 ```json
-{"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
+{"action":"suggest","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
+```
+
+`suggest` runs no seat, but it reads the owner config for `defaults.lenses`. It
+lists the lenses the diff's rules point at, each with its reason and evidence,
+and marks the owner's default lenses as already on. The calling agent chooses
+the lenses, with a reason for each, and passes the extras to review. The tool
+never adds a lens by itself. When the diff cannot be read, it says
+"Suggestions unavailable" with the cause; no rule ran, so choose from the
+skill's trigger table.
+
+```json
+{"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD","lenses":["security"]}
+```
+
+A review reply starts like this:
+
+```
+# Review panel
+4/4 voted · 8 findings · 2m 57s · $1.6012
+Seats: holistic (sol, opus), tests (sol, opus)
+Record: `…/.review-panel/runs/…`
+```
+
+`Seats:` groups the seats by lens, failed seats included; a `Lost:` line under
+it names any that failed. After the findings, a `Suggest:` block lists suggested
+lenses that did not run, one per line with its reason and first evidence. Each
+file name is shown as a code span, with any control or invisible format
+character replaced:
+
+```
+Suggest:
+- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, +2 more)
 ```
 
 ```json
@@ -116,11 +148,11 @@ runs only the missing seats against the same head commit and writes the report.
 Holistic seats always run. Optional `lenses` add extras. Optional `scopingNote`
 focuses a large diff.
 
-Records land under `.review-panel/runs/`. The public card is coverage, findings
-or dispositions, and lost seats. It is not a merge decision.
+Records land under `.review-panel/runs/`. The reply is coverage, findings
+or dispositions, and lost seats. The tool computes no merge decision.
 
 ## Status
 
-0.3.0. Install as `npm:pi-review-panel`. Diagnose, review, audit, verify,
+0.3.0. Install as `npm:pi-review-panel`. Diagnose, suggest, review, audit, verify,
 resume, and comment are the public path. Pi loads the TypeScript directly, no `dist/`, no
 runtime dependencies beyond Pi.

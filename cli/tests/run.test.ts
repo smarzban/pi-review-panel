@@ -1,4 +1,12 @@
-import { realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "../../src/actions/actions.js";
@@ -60,6 +68,7 @@ function harness(
 		verify: make("verify"),
 		resume: make("resume"),
 		comment: make("comment"),
+		suggest: make("suggest"),
 		...options.action,
 	} as unknown as ActionFunctions;
 	let stdout = "";
@@ -466,6 +475,7 @@ describe("output", () => {
 			"verify",
 			"resume",
 			"comment",
+			"suggest",
 			"call",
 			"auth login",
 			"auth logout",
@@ -484,6 +494,7 @@ describe("realActions", () => {
 			"diagnose",
 			"resume",
 			"review",
+			"suggest",
 			"verify",
 		]);
 		expect(realActions.diagnose).toBe(actionsModule.diagnoseAction);
@@ -492,6 +503,7 @@ describe("realActions", () => {
 		expect(realActions.verify).toBe(actionsModule.verifyAction);
 		expect(realActions.resume).toBe(actionsModule.resumeAction);
 		expect(realActions.comment).toBe(actionsModule.commentAction);
+		expect(realActions.suggest).toBe(actionsModule.suggestAction);
 	});
 });
 
@@ -631,5 +643,147 @@ describe("usage errors never echo an argument that could be a key", () => {
 		await h.run(["call", '{"action":"diagnose","priorRunId":"r"}']);
 		expect(h.err()).toContain('diagnose does not accept argument "modle"');
 		expect(h.err()).toContain('diagnose does not accept argument "priorRunId"');
+	});
+});
+
+describe("suggest", () => {
+	function git(cwd: string, args: string[]): string {
+		return execFileSync("git", args, { cwd, encoding: "utf8" });
+	}
+
+	/** A repository whose last commit adds a source file that runs a subprocess. */
+	function withRepository(test: (repo: string) => Promise<void>) {
+		const root = mkdtempSync(path.join(tmpdir(), "cli-suggest-"));
+		const repo = path.join(root, "repo");
+		mkdirSync(path.join(repo, "src"), { recursive: true });
+		git(repo, ["init", "-b", "main", "--quiet"]);
+		git(repo, ["config", "user.email", "cli@example.test"]);
+		git(repo, ["config", "user.name", "CLI Test"]);
+		writeFileSync(path.join(repo, "base.txt"), "base\n");
+		git(repo, ["add", "."]);
+		git(repo, ["commit", "-m", "base", "--quiet"]);
+		writeFileSync(
+			path.join(repo, "src", "run.ts"),
+			'import { spawn } from "node:child_process";\n',
+		);
+		git(repo, ["add", "."]);
+		git(repo, ["commit", "-m", "head", "--quiet"]);
+		return test(realpathSync(repo)).finally(() =>
+			rmSync(root, { recursive: true, force: true }),
+		);
+	}
+
+	/** The real suggest action, with every runner and the record key refusing. */
+	function realSuggest(): Partial<ActionFunctions> {
+		const never = (name: string) => () => {
+			throw new Error(`${name} must not be called by suggest`);
+		};
+		return {
+			suggest: (input, context) =>
+				actionsModule.suggestAction(input, {
+					...context,
+					deps: {
+						env: {},
+						home: "/nonexistent-home",
+						loadConfig: () => ({
+							roster: [{ id: "sol", provider: "openai", model: "gpt" }],
+							defaults: { seats: ["sol"], lenses: ["tests"] },
+						}),
+						diagnose: never("diagnose") as never,
+						runReview: never("runReview") as never,
+						runAudit: never("runAudit") as never,
+						runVerify: never("runVerify") as never,
+						resumeRun: never("resumeRun") as never,
+						postComment: never("postComment") as never,
+						recordKey: never("recordKey") as never,
+						checkRecordKey: never("checkRecordKey") as never,
+					},
+				}),
+		};
+	}
+
+	it("maps --base and --head onto the tool's arguments", async () => {
+		const h = harness();
+		expect(await h.run(["suggest", "--base", "main", "--head", "HEAD"])).toBe(
+			EXIT_OK,
+		);
+		expect(h.calls.suggest?.[0]?.input).toEqual({
+			repoDir: REPO,
+			base: "main",
+			head: "HEAD",
+		});
+	});
+
+	it("prints each lens with its reason and evidence, runs no seat, and exits 0", async () => {
+		await withRepository(async (repo) => {
+			const h = harness({ action: realSuggest() });
+			const code = await h.run([
+				"suggest",
+				"--repo",
+				repo,
+				"--base",
+				"main~1",
+				"--head",
+				"main",
+			]);
+			expect(h.err()).toBe("");
+			expect(code).toBe(EXIT_OK);
+			expect(h.out()).toBe(
+				[
+					"# Lens suggestions",
+					"main~1...main · holistic always runs · owner default lenses: tests",
+					"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run.ts:1`)",
+					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (`src/run.ts`)",
+					"",
+					"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
+					"",
+				].join("\n"),
+			);
+		});
+	});
+
+	it("refuses a bad ref with review's message and exits 1", async () => {
+		await withRepository(async (repo) => {
+			const h = harness({ action: realSuggest() });
+			expect(
+				await h.run([
+					"suggest",
+					"--repo",
+					repo,
+					"--base",
+					"nope",
+					"--head",
+					"main",
+				]),
+			).toBe(EXIT_FAILED);
+			expect(h.err()).toBe(
+				"review-panel: failed: run refused: baseRef does not resolve to a commit: nope\n",
+			);
+			expect(h.out()).toBe("");
+		});
+	});
+
+	it("refuses options and arguments suggest does not take", async () => {
+		const h = harness();
+		expect(
+			await h.run([
+				"suggest",
+				"--base",
+				"main",
+				"--head",
+				"HEAD",
+				"--lenses",
+				"x",
+			]),
+		).toBe(EXIT_USAGE);
+		expect(h.err()).toContain('suggest: unknown option "--lenses"');
+		expect(
+			await h.run([
+				"call",
+				'{"action":"suggest","base":"main","head":"HEAD","seats":["a"]}',
+			]),
+		).toBe(EXIT_USAGE);
+		expect(h.err()).toContain('suggest does not accept argument "seats"');
+		expect(h.calls.suggest).toBeUndefined();
 	});
 });

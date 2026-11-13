@@ -198,6 +198,9 @@ describe("runReview", () => {
 			);
 			expect(report).toContain(`HEAD OID: \`${before}\``);
 			expect(report).not.toContain("tip.txt");
+			expect(report).toContain(
+				"2 planned seats: 2 voted, 0 failed.\nSeats: correctness (roster-0), security (roster-1)\n",
+			);
 			expect(result.outcomes).toHaveLength(2);
 			for (const facts of result.outcomes) {
 				expect(facts.outcome).toEqual({

@@ -545,7 +545,37 @@ describe("review_panel public tool adapter", () => {
 				undefined,
 				{},
 			);
-			expect(response.content[0]?.text).toContain("Suggest: security");
+			expect(response.content[0]?.text).toContain(
+				"\n\nSuggest:\n- security: added subprocess line (`src/a.ts:1`)",
+			);
+		});
+	});
+
+	it("says in the review summary when the suggestions are unavailable, never that none matched", async () => {
+		await withRepository(async (repository) => {
+			const tool = toolWith({
+				suggestLenses: () => ({ unavailable: "the diff is over 32 MiB" }),
+				runReview: async (config: RunConfig) =>
+					({
+						recordPath: path.join(repository, ".review-panel", "runs", "run-6"),
+						outcomes: config.seats.map((seat) => ({
+							seat,
+							outcome: { kind: "voted" as const, findings: [] },
+						})),
+					}) as unknown as RunReviewResult,
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text).toContain(
+				"\n\nSuggest:\n- Suggestions unavailable: the diff could not be read (the diff is over 32 MiB).",
+			);
+			expect(text).not.toContain("No suggestion rule matched");
 		});
 	});
 
@@ -587,8 +617,90 @@ describe("review_panel public tool adapter", () => {
 				{},
 			);
 			const text = response.content[0]?.text ?? "";
-			expect(text).toContain("Suggest: security");
-			expect(text).not.toContain("Suggest: tests");
+			expect(text).toContain(
+				"\n\nSuggest:\n- security: added subprocess line (`src/a.ts:1`)",
+			);
+			expect(text).not.toContain("- tests:");
+		});
+	});
+
+	it("suggest runs no seat and returns each lens with its reason", async () => {
+		await withRepository(async (repository) => {
+			const tool = toolWith({
+				suggestLenses: () => [
+					{
+						lens: "security",
+						reason: "added subprocess line",
+						evidence: [{ file: "src/a.ts", line: 1 }],
+					},
+				],
+				runReview: async () => {
+					throw new Error("runReview must not be called");
+				},
+				recordKey: () => {
+					throw new Error("suggest must not touch the record key");
+				},
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "suggest", repository, base: "HEAD~1", head: "HEAD" },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text.split("\n").slice(0, 3)).toEqual([
+				"# Lens suggestions",
+				"HEAD~1...HEAD · holistic always runs · owner default lenses: none",
+				"- security: added subprocess line (`src/a.ts:1`)",
+			]);
+			await expect(
+				tool.execute(
+					"tool-call",
+					{
+						action: "suggest",
+						repository,
+						base: "HEAD~1",
+						head: "HEAD",
+						seats: ["a"],
+					},
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow('suggest does not accept argument "seats"');
+		});
+	});
+
+	it("suggest shows hostile diff content and markdown file names inertly, at the right file and line", async () => {
+		await withRepository(async (repository) => {
+			const name = "src/[pwn](javascript:x)*b*`t`.ts";
+			mkdirSync(path.join(repository, "src"));
+			writeFileSync(
+				path.join(repository, name),
+				[
+					"++ b/evil\u001b[31mRED\u001b]52;c;eA==\u0007\r# Heading [x](http://e)",
+					'require("child_process");',
+					"",
+				].join("\n"),
+			);
+			git(repository, ["add", "."]);
+			git(repository, ["commit", "-m", "hostile", "--quiet"]);
+			const response = await toolWith().execute(
+				"tool-call",
+				{ action: "suggest", repository, base: "HEAD~1", head: "HEAD" },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text.split("\n").slice(2, 4)).toEqual([
+				"- security: added line(s) touch auth/crypto/subprocess/deserialization (``src/[pwn](javascript:x)*b*`t`.ts:2``)",
+				"- tests: code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (``src/[pwn](javascript:x)*b*`t`.ts``)",
+			]);
+			expect(text).not.toContain("evil");
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
+			expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
 		});
 	});
 
@@ -1275,8 +1387,10 @@ describe("review_panel resume action", () => {
 				`Resumed ${runId}: ran 2 of 3 planned seats again (seat-1/security, seat-2/tests); kept 1 as recorded.`,
 			);
 			expect(text).toContain("# Review panel");
-			expect(text).toContain("3/3 voted");
-			expect(text).toContain("Not a merge decision.");
+			expect(text).toMatch(
+				/\n3\/3 voted · [^\n]*\nSeats: correctness \(seat-0\), security \(seat-1\), tests \(seat-2\)\n/,
+			);
+			expect(text).not.toContain("merge decision");
 			expect(updates[0]).toMatch(/review started/);
 		});
 	});

@@ -79,7 +79,10 @@ describe("runAudit", () => {
 			);
 			expect(report).toContain("# Repository audit");
 			expect(report).toContain(`Snapshot OID: \`${revision}\``);
-			expect(report).toContain("Not a merge decision.");
+			expect(report).toContain(
+				"\nSeats: code-health (seat-0), docs (seat-1)\n",
+			);
+			expect(report).not.toContain("merge decision");
 		} finally {
 			rmSync(repository, { recursive: true, force: true });
 		}

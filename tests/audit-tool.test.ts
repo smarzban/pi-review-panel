@@ -98,7 +98,10 @@ describe("review_panel audit", () => {
 			expect(response.content[0]?.text).toContain("# Repository audit");
 			expect(response.content[0]?.text).toContain("2/2 voted · 1 finding");
 			expect(response.content[0]?.text).toContain("Areas: src");
-			expect(response.content[0]?.text).toContain("Not a merge decision.");
+			expect(response.content[0]?.text).toContain(
+				"2/2 voted · 1 finding\nSeats: security (terra, claude)\n",
+			);
+			expect(response.content[0]?.text).not.toContain("merge decision");
 			expect(response.content[0]?.text).not.toMatch(
 				/verdict|healthy|pass\/fail/i,
 			);
