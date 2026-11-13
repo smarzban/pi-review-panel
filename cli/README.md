@@ -8,6 +8,9 @@ SDK (`@earendil-works/pi-coding-agent` 1.5.2) to run the seats.
 The tool never judges, and neither does the CLI. It prints a report. No exit code says
 whether there are findings.
 
+Host agents (Grok, Codex, Claude Code) drive the CLI through the
+[`review-panel` host skill](../host-skills/README.md).
+
 ## Install from source
 
 The CLI is not on npm yet, and its `package.json` is marked `"private": true`, so an

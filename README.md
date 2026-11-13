@@ -65,18 +65,18 @@ authenticated in Pi. Shape and location rules are in the
 Then, in Pi:
 
 ```
-Use the review-panel skill. Review this change.
+Use the review-panel-pi skill. Review this change.
 ```
 
 For a periodic repository sweep instead:
 
 ```
-Use the review-panel skill. Audit this repository.
+Use the review-panel-pi skill. Audit this repository.
 ```
 
-From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
-`/pi-review`. That starts Pi. Pi owns the tool. The host does not call
-`review_panel` itself.
+From Grok, Codex, or Claude Code, install the [`review-panel` CLI](cli/README.md)
+and the `host-skills/review-panel` skill, then run `/review-panel`. The host agent runs
+the CLI itself, reads the report, and judges each finding. It does not start Pi.
 
 ## How a run goes
 

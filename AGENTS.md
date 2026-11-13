@@ -15,7 +15,7 @@ frozen one-line pointer and says so in-file.
 ## Project overview
 
 **pi-review-panel** runs multi-model code review as a pi package. The public tool is `review_panel`
-(`diagnose` / `suggest` / `review` / `audit` / `verify` / `resume` / `comment`). The shipped skill is `review-panel`. A run
+(`diagnose` / `suggest` / `review` / `audit` / `verify` / `resume` / `comment`). The shipped Pi skill is `review-panel-pi`. A run
 fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned lens — over
 one pinned snapshot, as isolated in-process Pi SDK sessions that have only their read-only role
 tools and can report findings only through their submit tool (`submit_findings` for reviewers).
@@ -39,8 +39,9 @@ across the first two owner-default seats. It does not write `AUDIT.md`, repair, 
 GitHub comment. `comment` posts or updates one PR card after the owner says yes
 (`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
 list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
-run whose `priorRunId` is this review marks them resolved. Host agents use
-`host-skills/pi-review` to start Pi; they do not call `review_panel` themselves.
+run whose `priorRunId` is this review marks them resolved. Host agents (Grok,
+Codex, Claude Code) use `host-skills/review-panel`, which runs the standalone `review-panel` CLI
+(`cli/`) directly and never starts Pi.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
