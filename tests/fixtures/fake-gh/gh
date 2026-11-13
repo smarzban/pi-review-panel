@@ -1,0 +1,4 @@
+#!/bin/sh
+# Tests never reach GitHub: this stands first on PATH for every test run.
+echo "fake gh: tests never reach GitHub" >&2
+exit 1
