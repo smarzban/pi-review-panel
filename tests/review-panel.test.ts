@@ -1568,6 +1568,15 @@ describe("review_panel record key", () => {
 					).rejects.toThrow(
 						/Review refused: record key .*record-key is readable by group or other users and is refused/,
 					);
+					await expect(
+						tool.execute(
+							"tool-call",
+							{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+							undefined,
+							undefined,
+							{},
+						),
+					).rejects.toThrow(/is refused\. Run chmod 600 .*record-key/);
 					expect(reviewed).toBe(0);
 				}),
 			);
@@ -1610,6 +1619,29 @@ describe("review_panel record key", () => {
 			);
 		},
 	);
+
+	it("diagnose still reports, rather than throws, when the config override is not absolute", async () => {
+		await withRepository(async (repository) => {
+			const tool = createReviewPanelTool({
+				env: { PI_REVIEW_PANEL_CONFIG: "relative/config.json" },
+				home: "/nonexistent-home",
+				diagnose: async () => ({
+					ready: false,
+					rows: [{ prerequisite: "configuration", remediation: "fix it" }],
+				}),
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "diagnose", repository },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text).toContain("- configuration: fix it");
+			expect(text).not.toContain("record key");
+		});
+	});
 
 	it("diagnose reports ready for a usable key folder with no key, and creates none", async () => {
 		await withRepository((repository) =>
