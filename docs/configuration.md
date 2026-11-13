@@ -117,4 +117,33 @@ records `runId`, `baseRef`, the optional `scopingNote` verbatim, and the ordered
 to exactly `rosterId`, `lens`, `provider`, `model`. It contains no prompt text, extension paths,
 credentials, or endpoints. Because it is written before the work begins, an aborted run retains it.
 
+## Interrupted runs and `resume`
+
+A review or audit also writes `plan.json` before pinning: its kind, the frozen base and head
+commits, the scoping note, the seat budget, and the full planned seats. Like the replay specs in
+`execution.json`, it holds lens prompt text and extension paths, so treat it as a replay artifact.
+Each seat's outcome is written to `seats/<planned index>.json` the moment that seat settles, by a
+temp file and a rename. A seat torn down because the run was cancelled is not written there. While
+a run is going, `run.lock` names its process; the run removes it when it ends.
+
+`{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It takes no
+seats, lenses, or commits: those come from `plan.json`. It pins the recorded head commit, runs only
+the planned seats with no settled outcome, then writes `execution.json`, `report.md`,
+`findings.json`, `meta.json`, and `COMPLETE` as a first run would. The report has a "Resumed run"
+section naming the seats kept and the seats run again, and `execution.json` lists the re-run seats
+under `resumedSeats`. A seat file that is unreadable or names a different seat counts as unsettled.
+Resume refuses a complete record, an unknown run, a record whose `run.lock` names a live process,
+a record with no `plan.json` (runs from earlier versions), a head or base commit that no longer
+resolves, and verify runs: verify runs one or two seats in sequence, so a fresh verify costs the
+same as a resume.
+
+## Snapshot cleanup
+
+Each run reviews a detached worktree in the system temp folder named `review-panel-snapshot-*`, with
+a `<name>.owner.json` file beside it naming the process and repository that made it. At the start of
+every run the package removes this repository's snapshots whose owner process has exited, then runs
+`git worktree prune`. A snapshot whose owner is alive, or that belongs to another repository, is
+never removed. A snapshot with no owner file (made by an earlier version) is removed only once it is
+more than 24 hours old.
+
 

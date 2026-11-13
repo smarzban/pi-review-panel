@@ -106,6 +106,13 @@ not write `AUDIT.md` or post an audit comment.
 {"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29}
 ```
 
+```json
+{"action":"resume","repository":"/Users/you/the-repo","priorRunId":"<run-id>"}
+```
+
+A review or audit that was killed keeps every seat that had finished. `resume`
+runs only the missing seats against the same head commit and writes the report.
+
 Holistic seats always run. Optional `lenses` add extras. Optional `scopingNote`
 focuses a large diff.
 
@@ -114,6 +121,6 @@ or dispositions, and lost seats. It is not a merge decision.
 
 ## Status
 
-0.3.0. Install as `npm:pi-review-panel`. Diagnose, review, audit, verify, and
-comment are the public path. Pi loads the TypeScript directly, no `dist/`, no
+0.3.0. Install as `npm:pi-review-panel`. Diagnose, review, audit, verify,
+resume, and comment are the public path. Pi loads the TypeScript directly, no `dist/`, no
 runtime dependencies beyond Pi.

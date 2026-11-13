@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
@@ -12,7 +13,8 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
 import type { Config } from "../src/config/schema.js";
-import type { RunReviewResult } from "../src/run/run-review.js";
+import { resumeRun } from "../src/run/resume.js";
+import { type RunReviewResult, runReview } from "../src/run/run-review.js";
 import type { PlannedSeat, RunConfig } from "../src/run/types.js";
 import reviewPanelExtension, {
 	canonicalizeRepository,
@@ -21,6 +23,7 @@ import reviewPanelExtension, {
 	REPOSITORY_EXAMPLE,
 	rejectFilesystemRoot,
 } from "../src/tool/review-panel.js";
+import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 type ReviewTool = ReturnType<typeof createReviewPanelTool>;
 
@@ -1128,6 +1131,135 @@ describe("review_panel comment", () => {
 				),
 			).rejects.toThrow(/priorRunId/);
 			expect(posted).toBe(0);
+		});
+	});
+});
+
+describe("review_panel resume action", () => {
+	function threeSeats(): PlannedSeat[] {
+		return ["correctness", "security", "tests"].map((lens, index) => ({
+			rosterId: `seat-${index}`,
+			provider: "openai-codex",
+			model: `gpt-5.6-${index}`,
+			lens,
+			lensPrompt: `Review through ${lens}.`,
+		}));
+	}
+
+	/** A real review record interrupted after its first seat settled. */
+	async function interruptedRecord(repository: string): Promise<string> {
+		const controller = new AbortController();
+		const fake = createSdkSeatFake([
+			{ kind: "default" },
+			{ kind: "pending" },
+			{ kind: "pending" },
+		]);
+		await expect(
+			runReview(
+				{ repoDir: repository, baseRef: "HEAD~1", seats: threeSeats() },
+				{
+					abortSignal: controller.signal,
+					sessionFactory: fake.factory,
+					onProgress: (event) => {
+						if (event.kind === "seat-finished") {
+							controller.abort();
+						}
+					},
+				},
+			),
+		).rejects.toThrow(/cancel/i);
+		const runsDir = path.join(repository, ".review-panel", "runs");
+		return readdirSync(runsDir)[0] as string;
+	}
+
+	it("lists resume in the tool description, the action argument and the usage", async () => {
+		const tool = toolWith();
+		expect(tool.description).toMatch(/resume/i);
+		expect(JSON.stringify(tool.parameters)).toContain('\\"resume\\"');
+		await expect(
+			tool.execute("tool-call", {}, undefined, undefined, {}),
+		).rejects.toThrow(/"action": "resume", "priorRunId"/);
+	});
+
+	it("rejects arguments resume does not take, so seats never come from the caller", async () => {
+		await withRepository(async (repository) => {
+			const tool = toolWith();
+			await expect(
+				tool.execute(
+					"tool-call",
+					{ action: "resume", repository, priorRunId: "x", seats: ["terra"] },
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/resume does not accept argument "seats"/);
+			await expect(
+				tool.execute(
+					"tool-call",
+					{ action: "resume", repository },
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/priorRunId must be a non-empty string/);
+		});
+	});
+
+	it("refuses an unknown run before anything runs", async () => {
+		await withRepository(async (repository) => {
+			let ran = false;
+			const tool = toolWith({
+				resumeRun: async () => {
+					ran = true;
+					throw new Error("must not run");
+				},
+			});
+			await expect(
+				tool.execute(
+					"tool-call",
+					{ action: "resume", repository, priorRunId: "no-such-run" },
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/Resume refused: run "no-such-run" was not found/);
+			expect(ran).toBe(false);
+		});
+	});
+
+	it("finishes an interrupted review and says which seats ran again", async () => {
+		await withRepository(async (repository) => {
+			const runId = await interruptedRecord(repository);
+			const sessions: string[] = [];
+			const fake = createSdkSeatFake();
+			const updates: string[] = [];
+			const tool = toolWith({
+				resumeRun: (run, options) =>
+					resumeRun(run, {
+						...options,
+						sessionFactory: async (input) => {
+							sessions.push(input.spec.lens);
+							return fake.factory(input);
+						},
+					}),
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "resume", repository, priorRunId: runId },
+				undefined,
+				(update: { content: Array<{ text: string }> }) =>
+					updates.push(update.content[0]?.text ?? ""),
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(sessions.sort()).toEqual(["security", "tests"]);
+			expect(text).toContain(
+				`Resumed ${runId}: ran 2 of 3 planned seats again (seat-1/security, seat-2/tests); kept 1 as recorded.`,
+			);
+			expect(text).toContain("# Review panel");
+			expect(text).toContain("3/3 voted");
+			expect(text).toContain("Not a merge decision.");
+			expect(updates[0]).toMatch(/review started/);
 		});
 	});
 });

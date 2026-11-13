@@ -17,6 +17,13 @@ import {
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
 import {
+	loadResumable,
+	type ResumableRun,
+	type ResumeOptions,
+	type ResumeResult,
+	resumeRun,
+} from "../run/resume.js";
+import {
 	type RunAuditInput,
 	type RunAuditOptions,
 	type RunAuditResult,
@@ -89,7 +96,7 @@ const parameters = Type.Object(
 		action: Type.Optional(
 			Type.String({
 				description:
-					'Required action: "diagnose", "review", "audit", "verify", or "comment".',
+					'Required action: "diagnose", "review", "audit", "verify", "resume", or "comment".',
 			}),
 		),
 		repository: Type.Optional(absoluteRepository),
@@ -111,7 +118,7 @@ const parameters = Type.Object(
 );
 
 const USAGE =
-	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
+	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "resume", "priorRunId": "<interrupted-run-directory>" } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -145,6 +152,10 @@ export type ReviewPanelDependencies = {
 		options?: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
 	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
+	resumeRun?: (
+		run: ResumableRun,
+		options?: ResumeOptions,
+	) => Promise<ResumeResult>;
 };
 
 export type ReviewPanelTool = {
@@ -497,12 +508,13 @@ export function createReviewPanelTool(
 	const suggest = deps?.suggestLenses ?? suggestLenses;
 	const verify = deps?.runVerify ?? runVerify;
 	const postComment = deps?.postComment ?? postCloseoutComment;
+	const resume = deps?.resumeRun ?? resumeRun;
 
 	return {
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {
@@ -715,9 +727,85 @@ export function createReviewPanelTool(
 				return executeComment(args, repoDir, postComment);
 			}
 
+			if (action === "resume") {
+				for (const key of Reflect.ownKeys(args)) {
+					if (
+						key !== "action" &&
+						key !== "repository" &&
+						key !== "priorRunId"
+					) {
+						throw new Error(`resume does not accept argument "${String(key)}"`);
+					}
+				}
+				const priorRunId = validateNonEmptyString(
+					args.priorRunId,
+					"priorRunId",
+				);
+				// Seats, lenses and commits all come from the record itself.
+				const run = loadResumable(repoDir, priorRunId);
+				const panel = run.plan.seats;
+				const roster = compactPanelRoster(panel);
+				const progressOf =
+					run.plan.kind === "audit"
+						? progressFromAuditEvent
+						: progressFromReviewEvent;
+				emitProgress(onUpdate, {
+					phase: run.plan.kind,
+					event: "started",
+					elapsedMs: Date.now() - startedAt,
+					total: run.missing.length,
+					completed: 0,
+					active: 0,
+					roster,
+				});
+				const result = await resume(run, {
+					...(signal === undefined ? {} : { abortSignal: signal }),
+					onProgress: (event) =>
+						emitProgress(onUpdate, {
+							...progressOf(event, Date.now() - startedAt),
+							roster,
+						}),
+				});
+				const resumed = result.resumedSeats;
+				const headline = `Resumed ${run.runId}: ran ${resumed.length} of ${panel.length} planned seats again${
+					resumed.length === 0
+						? ""
+						: ` (${resumed.map((seat) => `${seat.rosterId}/${seat.lens}`).join(", ")})`
+				}; kept ${panel.length - resumed.length} as recorded.`;
+				let body: string;
+				if (run.plan.kind === "audit") {
+					body = renderAuditResult({
+						recordPath: result.recordPath,
+						panel,
+						result,
+					});
+				} else {
+					const plannedLenses = new Set(panel.map((seat) => seat.lens));
+					const suggestions = suggest(
+						repoDir,
+						run.plan.baseOid,
+						run.plan.headOid,
+					).filter((row) => !plannedLenses.has(row.lens));
+					const findings = readStampedFindings(result.recordPath);
+					body = renderReviewResult({
+						recordPath: result.recordPath,
+						panel,
+						result,
+						suggestions,
+						...(run.plan.scopingNote === undefined
+							? {}
+							: { scopingNote: run.plan.scopingNote }),
+						...(findings === undefined ? {} : { findings }),
+					});
+				}
+				return {
+					content: [{ type: "text", text: `${headline}\n\n${body}` }],
+				};
+			}
+
 			if (action !== "review") {
 				throw new Error(
-					`review_panel action must be "diagnose", "review", "audit", "verify", or "comment", got "${action}"`,
+					`review_panel action must be "diagnose", "review", "audit", "verify", "resume", or "comment", got "${action}"`,
 				);
 			}
 

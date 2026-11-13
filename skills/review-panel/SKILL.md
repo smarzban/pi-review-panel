@@ -1,6 +1,6 @@
 ---
 name: review-panel
-description: Use when asked to review a PR or diff, or audit a repository. Call review_panel with review, audit, diagnose, verify, or comment. Never call it with {}. Judge findings and keep repair in the harness.
+description: Use when asked to review a PR or diff, or audit a repository. Call review_panel with review, audit, diagnose, verify, resume, or comment. Never call it with {}. Judge findings and keep repair in the harness.
 ---
 
 # review
@@ -20,6 +20,10 @@ Never call the tool with `{}`. Review already diagnoses and refuses when setup i
 7. If you fixed something, commit it so `head` is a new OID. Uncommitted work is invisible: verify pins a committed snapshot and refuses when head matches the prior run. Then call `{ "action": "verify", "repository", "priorRunId", "head", "keptFindingIds" }`. Pass `seats` with one roster alias from the config (the first `defaults.seats` row is fine) unless the kept item is high-stakes; then at most two. Do not replay the whole discovery roster. `priorRunId` is the run directory name from the review record path, or that full record path. `keptFindingIds` is your list, including any promoted low.
 8. Recommend landing only when every kept item is resolved, there is no new high/medium regression on the fix, and lost coverage is named. Then ask whether to post the close-out comment. Do not post until they say yes.
 9. After a yes, call `{ "action": "comment", "repository", "priorRunId", "ownerApproved": true }` with `pr` when you know the number, `dismissed` as `[{ "id", "reason" }]` for every high/medium you dropped, `lowAdvisory` as the leftover low ids, and `verifyRunId` when any kept item was fixed. The tool finds the one comment whose author is you and whose body has heading `## Review panel`, then updates it. Never open a second thread. Never write ready to merge on the comment.
+
+## Resume an interrupted run
+
+If a review or audit was killed or crashed before it finished, its record has no `COMPLETE` marker. Each seat that settled before the interruption is already on disk. Call `{ "action": "resume", "priorRunId": "<run directory name>" }` to finish it. Resume takes no other argument: seats, lenses, and commits come from the record. It pins the same head commit, runs only the seats that had not settled, and writes the report as a normal run would. The report names which seats ran again. A seat that fails on resume is lost coverage, like any failed seat. Resume refuses a complete record, an unknown run, a run that is still in progress, a head commit that no longer resolves, and verify runs (start a new verify instead).
 
 ## Repository audit
 
