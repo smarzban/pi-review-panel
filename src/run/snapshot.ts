@@ -1,11 +1,6 @@
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { execFileSync } from "node:child_process";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { mkdtempSync, rmSync } from "node:fs";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { tmpdir } from "node:os";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 
 /** Release outcome: a cleanup failure is returned as data, never thrown. */

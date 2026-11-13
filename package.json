@@ -27,7 +27,7 @@
 		"check": "biome check ."
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "^0.84.1",
+		"@earendil-works/pi-coding-agent": "*",
 		"typebox": "*"
 	},
 	"files": [
@@ -48,6 +48,9 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.6",
+		"@earendil-works/pi-ai": "1.5.2",
+		"@earendil-works/pi-coding-agent": "1.5.2",
+		"@types/node": "26.6.6",
 		"typebox": "1.3.7",
 		"typescript": "7.0.2",
 		"vitest": "^4.1.10"

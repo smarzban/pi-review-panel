@@ -1,8 +1,4 @@
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { lstatSync, readFileSync } from "node:fs";
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 import type { Finding } from "../seat/schema.js";
 import { COMPLETE_MARKER } from "./record.js";

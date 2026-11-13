@@ -1,10 +1,5 @@
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { execFileSync } from "node:child_process";
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { writeFileSync } from "node:fs";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";

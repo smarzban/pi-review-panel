@@ -1,4 +1,3 @@
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 
 export type RosterRow = {

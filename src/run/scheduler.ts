@@ -1,5 +1,3 @@
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { performance } from "node:perf_hooks";
 import {
 	type FindingsProfile,

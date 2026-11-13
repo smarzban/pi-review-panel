@@ -51,10 +51,10 @@ function passiveClock(timeouts: number[]): SchedulerClock {
 	return {
 		setTimeout: (_callback, ms) => {
 			timeouts.push(ms);
-			return 0 as ReturnType<typeof setTimeout>;
+			return 0 as unknown as ReturnType<typeof setTimeout>;
 		},
 		clearTimeout: () => undefined,
-		setInterval: () => 0 as ReturnType<typeof setInterval>,
+		setInterval: () => 0 as unknown as ReturnType<typeof setInterval>,
 		clearInterval: () => undefined,
 	};
 }
@@ -184,7 +184,7 @@ describe("SDK scheduler", () => {
 				return "budget" as unknown as ReturnType<typeof setTimeout>;
 			},
 			clearTimeout: (timer) => cleared.push(timer),
-			setInterval: () => 0 as ReturnType<typeof setInterval>,
+			setInterval: () => 0 as unknown as ReturnType<typeof setInterval>,
 			clearInterval: () => undefined,
 		};
 		await scheduleSeats(
