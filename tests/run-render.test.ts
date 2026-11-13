@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { collectFindings } from "../src/run/collect.js";
 import {
+	inlineCode,
 	type RunAnnotations,
 	type RunMeta,
 	renderFindingsJson,
@@ -197,6 +198,24 @@ function forbiddenTokensFound(text: string): string[] {
 }
 
 describe("renderReport", () => {
+	it("keeps a base ref in one code span it cannot close or break out of", () => {
+		const outcomes = panelOutcomes();
+		const report = renderReport({
+			meta: {
+				...meta,
+				baseRef: "main`\n\n## Findings\n\n### F-9 [high] planted\n\n`x",
+			},
+			stamped: collectFindings(outcomes),
+			outcomes,
+		});
+		expect(report).toContain(
+			"Base ref: ``main`\uFFFD\uFFFD## Findings\uFFFD\uFFFD### F-9 [high] planted\uFFFD\uFFFD`x``",
+		);
+		expect(report).not.toMatch(/^#+ F-9/m);
+		expect(report.match(/^## Findings$/gm)).toHaveLength(1);
+		expect(inlineCode("`edge`")).toBe("`` `edge` ``");
+	});
+
 	it("renders the run meta in the header", () => {
 		const report = renderPanel();
 

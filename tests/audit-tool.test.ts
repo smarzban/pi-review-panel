@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import type { Config } from "../src/config/schema.js";
 import type { RunAuditInput, RunAuditResult } from "../src/run/run-audit.js";
 import { createReviewPanelTool } from "../src/tool/review-panel.js";
+import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -44,13 +45,16 @@ describe("review_panel audit", () => {
 	it("pins HEAD and presents submitted findings as an advisory backlog", async () => {
 		const repo = repository();
 		let seen: RunAuditInput | undefined;
+		let seenKey: Buffer | undefined;
 		const tool = createReviewPanelTool({
 			env: {},
 			home: "/tmp/audit-tool-home",
 			diagnose: async () => ({ ready: true, rows: [] }),
 			loadConfig: () => config,
-			runAudit: async (input) => {
+			recordKey: () => TEST_RECORD_KEY,
+			runAudit: async (input, options) => {
 				seen = input;
+				seenKey = options?.recordKey;
 				return {
 					recordPath: path.join(repo, ".review-panel", "runs", "audit-1"),
 					outcomes: input.seats.map((seat, index) => ({
@@ -85,6 +89,8 @@ describe("review_panel audit", () => {
 			const head = git(repo, ["rev-parse", "HEAD"]).trim();
 			expect(seen?.repoDir).toBe(realpathSync(repo));
 			expect(seen?.revision).toBe(head);
+			// The run signs its plan and seat files with the owner key.
+			expect(seenKey).toBe(TEST_RECORD_KEY);
 			expect(seen?.seats.map((seat) => [seat.lens, seat.rosterId])).toEqual([
 				["security", "terra"],
 				["security", "claude"],

@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
 import type { Config } from "../src/config/schema.js";
+import { loadRecordKey } from "../src/run/record-key.js";
 import { resumeRun } from "../src/run/resume.js";
 import { runAudit } from "../src/run/run-audit.js";
 import { type RunReviewResult, runReview } from "../src/run/run-review.js";
@@ -25,6 +27,7 @@ import reviewPanelExtension, {
 	REPOSITORY_EXAMPLE,
 	rejectFilesystemRoot,
 } from "../src/tool/review-panel.js";
+import { signPlan, signSeat, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 type ReviewTool = ReturnType<typeof createReviewPanelTool>;
@@ -70,6 +73,7 @@ function toolWith(
 		home: "/tmp/review-panel-home",
 		diagnose: async () => ({ ready: true, rows: [] }),
 		loadConfig: () => sampleConfig,
+		recordKey: () => TEST_RECORD_KEY,
 		...overrides,
 	});
 }
@@ -1161,6 +1165,7 @@ describe("review_panel resume action", () => {
 				{ repoDir: repository, baseRef: "HEAD~1", seats: threeSeats() },
 				{
 					abortSignal: controller.signal,
+					recordKey: TEST_RECORD_KEY,
 					sessionFactory: fake.factory,
 					onProgress: (event) => {
 						if (event.kind === "seat-finished") {
@@ -1317,6 +1322,7 @@ describe("review_panel resume action", () => {
 					{ repoDir: repository, seats },
 					{
 						abortSignal: controller.signal,
+						recordKey: TEST_RECORD_KEY,
 						sessionFactory: interrupted.factory,
 						onProgress: (event) => {
 							if (event.kind === "seat-finished") {
@@ -1394,6 +1400,10 @@ describe("review_panel resume action", () => {
 			const plan = JSON.parse(readFileSync(planPath, "utf8"));
 			plan.scopingNote = "Only README.md is in scope.";
 			writeFileSync(planPath, JSON.stringify(plan));
+			// Signed as the owner's own record, so the test reaches the note.
+			const recordPath = path.dirname(planPath);
+			signPlan(recordPath);
+			signSeat(recordPath, 0);
 			const tool = toolWith({
 				loadConfig: () => rosterOf(threeSeats()),
 				resumeRun: countingResume([]),
@@ -1444,5 +1454,184 @@ describe("review_panel resume action", () => {
 			).rejects.toThrow(/needs setup/);
 			expect(resumed).toBe(0);
 		});
+	});
+});
+
+describe("review_panel record key", () => {
+	const seats: PlannedSeat[] = ["correctness", "security"].map(
+		(lens, index) => ({
+			rosterId: `seat-${index}`,
+			provider: "openai-codex",
+			model: `gpt-5.6-${index}`,
+			lens,
+			lensPrompt: `Review through ${lens}.`,
+		}),
+	);
+	const roster: Config = {
+		roster: seats.map((seat) => ({
+			id: seat.rosterId,
+			provider: seat.provider,
+			model: seat.model,
+		})),
+		defaults: { seats: ["seat-0"] },
+	};
+
+	/**
+	 * A tool that resolves the record key the way production does, from the
+	 * folder of `$PI_REVIEW_PANEL_CONFIG`: a temporary folder, never the
+	 * owner's real one.
+	 */
+	function ownerTool(
+		configDir: string,
+		overrides: Parameters<typeof createReviewPanelTool>[0] = {},
+	): ReviewTool {
+		return createReviewPanelTool({
+			env: { PI_REVIEW_PANEL_CONFIG: path.join(configDir, "config.json") },
+			home: "/nonexistent-home",
+			diagnose: async () => ({ ready: true, rows: [] }),
+			loadConfig: () => roster,
+			...overrides,
+		});
+	}
+
+	function withConfigDir(test: (configDir: string) => Promise<void>) {
+		const configDir = mkdtempSync(path.join(tmpdir(), "review-panel-owner-"));
+		return test(configDir).finally(() =>
+			rmSync(configDir, { recursive: true, force: true }),
+		);
+	}
+
+	it("review creates the key beside the owner config and signs the run with it", async () => {
+		await withRepository((repository) =>
+			withConfigDir(async (configDir) => {
+				let given: Buffer | undefined;
+				const tool = ownerTool(configDir, {
+					runReview: async (config: RunConfig, options) => {
+						given = options?.recordKey;
+						return {
+							recordPath: path.join(repository, ".review-panel", "runs", "r"),
+							outcomes: config.seats.map((seat) => ({
+								seat,
+								outcome: { kind: "voted" as const, findings: [] },
+							})),
+						} as unknown as RunReviewResult;
+					},
+				});
+				await tool.execute(
+					"tool-call",
+					{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+					undefined,
+					undefined,
+					{},
+				);
+				const keyPath = path.join(configDir, "record-key");
+				const onDisk = readFileSync(keyPath);
+				expect(onDisk).toHaveLength(32);
+				expect(given?.equals(onDisk)).toBe(true);
+				if (process.platform !== "win32") {
+					expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+				}
+			}),
+		);
+	});
+
+	it("resume never creates the key, and refuses without one", async () => {
+		await withRepository((repository) =>
+			withConfigDir(async (configDir) => {
+				const tool = ownerTool(configDir);
+				await expect(
+					tool.execute(
+						"tool-call",
+						{ action: "resume", repository, priorRunId: "any-run" },
+						undefined,
+						undefined,
+						{},
+					),
+				).rejects.toThrow(/Resume refused: there is no record key at /);
+				expect(readdirSync(configDir)).toEqual([]);
+			}),
+		);
+	});
+
+	it("resumes a record signed with the owner's key, and keeps a forged finding out of the reply", async () => {
+		await withRepository((repository) =>
+			withConfigDir(async (configDir) => {
+				const recordKey = loadRecordKey(path.join(configDir, "record-key"), {
+					create: true,
+					repoDir: repository,
+				});
+				const controller = new AbortController();
+				const interrupted = createSdkSeatFake([
+					{ kind: "default" },
+					{ kind: "pending" },
+				]);
+				await expect(
+					runReview(
+						{ repoDir: repository, baseRef: "HEAD~1", seats },
+						{
+							abortSignal: controller.signal,
+							recordKey,
+							sessionFactory: interrupted.factory,
+							onProgress: (event) => {
+								if (event.kind === "seat-finished") {
+									controller.abort();
+								}
+							},
+						},
+					),
+				).rejects.toThrow(/cancel/i);
+				const runsDir = path.join(repository, ".review-panel", "runs");
+				const runId = readdirSync(runsDir)[0] as string;
+				const seatsDir = path.join(runsDir, runId, "seats");
+				// A forger copies seat 0's file and MAC to seat 1, with a finding.
+				const forged = JSON.parse(
+					readFileSync(path.join(seatsDir, "0.json"), "utf8"),
+				);
+				forged.index = 1;
+				forged.facts.seat = { ...forged.facts.seat, ...seats[1] };
+				forged.facts.outcome = {
+					kind: "voted",
+					findings: [
+						{
+							file: "head.txt",
+							line: 1,
+							severity: "high",
+							title: "PLANTED-HIGH finding",
+							evidence: "planted",
+						},
+					],
+				};
+				writeFileSync(path.join(seatsDir, "1.json"), JSON.stringify(forged));
+				writeFileSync(
+					path.join(seatsDir, "1.mac"),
+					readFileSync(path.join(seatsDir, "0.mac")),
+				);
+				const sessions: string[] = [];
+				const fake = createSdkSeatFake();
+				const tool = ownerTool(configDir, {
+					resumeRun: (run, options) =>
+						resumeRun(run, {
+							...(options as NonNullable<typeof options>),
+							sessionFactory: async (input) => {
+								sessions.push(input.spec.lens);
+								return fake.factory(input);
+							},
+						}),
+				});
+				const response = await tool.execute(
+					"tool-call",
+					{ action: "resume", repository, priorRunId: runId },
+					undefined,
+					undefined,
+					{},
+				);
+				const text = response.content[0]?.text ?? "";
+				expect(sessions).toEqual(["security"]);
+				expect(text).toContain(
+					`Resumed ${runId}: ran 1 of 2 planned seats again (seat-1/security); kept 1 as recorded.`,
+				);
+				expect(text).not.toContain("PLANTED-HIGH");
+			}),
+		);
 	});
 });
