@@ -32,7 +32,15 @@ function fitPresentation(lines: string[]): string {
 	return [...head, "- additional row(s) omitted."].join("\n");
 }
 
-export function truncateUtf8(text: string, maxChars: number): string {
+/** Cuts by whole code points, so a multibyte character is never split. */
+export function truncateCodePoints(text: string, maxChars: number): string {
+	const points = Array.from(text);
+	return points.length <= maxChars
+		? text
+		: `${points.slice(0, maxChars).join("")}…`;
+}
+
+function truncateUtf8(text: string, maxChars: number): string {
 	if (text.length <= maxChars) {
 		return text;
 	}

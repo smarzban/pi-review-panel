@@ -77,7 +77,7 @@ import {
 	renderReviewProgress,
 	renderReviewResult,
 	renderVerifyResult,
-	truncateUtf8,
+	truncateCodePoints,
 } from "./review-presentation.js";
 
 /** Copy-paste example. Models truncated "/absolute/path" to "/". */
@@ -649,7 +649,7 @@ export function createReviewPanelTool(
 				// report keeps room for it so the reply stays within the cap. The
 				// cause already names the record key, so it is not prefixed again.
 				const warning = keyProblem?.warning
-					? `\n## Warnings\n- ${truncateUtf8(`${keyProblem.cause}. ${keyProblem.fix}`, 1_500)}`
+					? `\n## Warnings\n- ${truncateCodePoints(`${keyProblem.cause}. ${keyProblem.fix}`, 1_500)}`
 					: "";
 				const reserve = new TextEncoder().encode(warning).length;
 				return {

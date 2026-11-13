@@ -29,6 +29,7 @@ import reviewPanelExtension, {
 	REPOSITORY_EXAMPLE,
 	rejectFilesystemRoot,
 } from "../src/tool/review-panel.js";
+import { MAX_PRESENTATION_BYTES } from "../src/tool/review-presentation.js";
 import { signPlan, signSeat, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
@@ -1825,6 +1826,40 @@ describe("review_panel record key", () => {
 						}
 						chmodSync(configDir, 0o700);
 					}
+				}),
+			);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"diagnose keeps the whole reply, warning included, within the public cap",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					groupWritableKey(configDir, repository);
+					const tool = ownerTool(configDir, {
+						diagnose: async () => ({
+							ready: false,
+							// Short rows leave less spare room than the warning needs,
+							// so the reply only fits if the report reserves it.
+							rows: Array.from({ length: 2_000 }, (_, index) => ({
+								prerequisite: `p${index}`,
+								remediation: `r${index}`,
+							})),
+						}),
+					});
+					const response = await tool.execute(
+						"tool-call",
+						{ action: "diagnose", repository },
+						undefined,
+						undefined,
+						{},
+					);
+					const text = response.content[0]?.text ?? "";
+					expect(text).toContain("## Warnings");
+					expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(
+						MAX_PRESENTATION_BYTES,
+					);
 				}),
 			);
 		},

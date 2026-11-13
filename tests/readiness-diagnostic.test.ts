@@ -7,6 +7,7 @@ import { diagnoseReadiness } from "../src/config/readiness.js";
 import {
 	MAX_PRESENTATION_BYTES,
 	renderReadiness,
+	truncateCodePoints,
 } from "../src/tool/review-presentation.js";
 
 let root = "";
@@ -40,6 +41,12 @@ const baseConfig = {
 };
 
 describe("readiness diagnostic", () => {
+	it("cuts appended text by whole code points, never splitting a character", () => {
+		const text = `${"a".repeat(1_499)}😀b`;
+		expect(truncateCodePoints(text, 1_500)).toBe(`${"a".repeat(1_499)}😀…`);
+		expect(truncateCodePoints("short", 1_500)).toBe("short");
+	});
+
 	it("keeps room for text appended after the report, so the whole reply stays under the cap", () => {
 		const report = {
 			ready: false,
