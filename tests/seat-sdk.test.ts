@@ -25,48 +25,74 @@ describe("embedded SDK seat session", () => {
 				cost: 0.01,
 			}),
 		};
+		const modelRuntime = {
+			getModel: (provider: string, model: string) => {
+				calls.push({ name: "model", value: [provider, model] });
+				return { provider, model };
+			},
+			checkAuth: async (provider: string) => {
+				calls.push({ name: "check", value: provider });
+				return { type: "api_key", source: "fake" };
+			},
+			getAuth: async (model: unknown) => {
+				calls.push({ name: "auth", value: model });
+				return { kind: "api-key" };
+			},
+		};
+		const resourceLoader = { getExtensions: () => ({ errors: [] }) };
 		const result = await createSdkSeatSession({
 			spec,
 			tools: [{ name: "submit_findings" }],
 			confinementGuard: createConfinementGuard({ worktree: spec.worktree }),
 			sdk: {
-				ModelRuntime: {
-					create: async () => ({
-						getModel: (provider: string, model: string) => {
-							calls.push({ name: "model", value: [provider, model] });
-							return { provider, model };
-						},
-						getAuth: async (model: unknown) => {
-							calls.push({ name: "auth", value: model });
-							return { kind: "api-key" };
-						},
-					}),
-				},
 				SettingsManager: { inMemory: (value: unknown) => value },
 				SessionManager: { inMemory: (value: unknown) => value },
-				DefaultResourceLoader: class {
-					constructor(options: unknown) {
-						calls.push({ name: "loader", value: options });
-					}
-					async reload() {}
-					getExtensions() {
-						return { errors: [] };
-					}
+				// Pi's createAgentSessionServices builds its loader from these
+				// options plus cwd and agentDir, loads the extensions, and drains
+				// their provider registrations into the runtime it returns.
+				createAgentSessionServices: async (options: {
+					cwd: string;
+					agentDir: string;
+					resourceLoaderOptions: Record<string, unknown>;
+				}) => {
+					calls.push({
+						name: "loader",
+						value: {
+							cwd: options.cwd,
+							agentDir: options.agentDir,
+							...options.resourceLoaderOptions,
+						},
+					});
+					return {
+						modelRuntime,
+						resourceLoader,
+						settingsManager: "settings",
+						diagnostics: [],
+					};
 				},
 				getAgentDir: () => "/agent",
-				createAgentSession: async (options: unknown) => {
+				createAgentSession: async (options: Record<string, unknown>) => {
 					calls.push({ name: "session", value: options });
 					return { session };
 				},
 			},
 		});
 
+		// The model and auth resolve only after the extensions loaded.
+		expect(calls.map((call) => call.name)).toEqual([
+			"loader",
+			"model",
+			"check",
+			"auth",
+			"session",
+		]);
 		expect(calls).toContainEqual({
 			name: "model",
 			value: ["anthropic", "claude-opus-5"],
 		});
 		expect(calls.find((call) => call.name === "loader")?.value).toMatchObject({
 			cwd: "/tmp",
+			agentDir: "/agent",
 			noExtensions: true,
 			noSkills: true,
 			noPromptTemplates: true,
@@ -82,6 +108,11 @@ describe("embedded SDK seat session", () => {
 			tools: ["read", "grep", "find", "ls", "git_diff", "submit_findings"],
 			customTools: [{ name: "submit_findings" }],
 			noTools: "all",
+			// The session reuses the loader and runtime that loaded the
+			// extensions, so each extension loads once per seat.
+			modelRuntime,
+			resourceLoader,
+			settingsManager: "settings",
 		});
 		// No host UI or stream binding is supplied, so model output stays inside
 		// the isolated session and crosses the boundary only through its tool.

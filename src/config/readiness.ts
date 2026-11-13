@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 // @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 
+import {
+	type ExtensionFailure,
+	resolveSeatRuntime,
+	type SeatServicesSdk,
+} from "../seat/seat-runtime.js";
 import { type ConfigEnv, loadConfig } from "./load.js";
 import type { Config } from "./schema.js";
 
@@ -18,71 +23,116 @@ export type ReadinessReport = {
 	rows: ReadinessRow[];
 };
 
-export type ModelInspection = { model: boolean; auth: boolean };
+/**
+ * One inspected roster key. `extensionFailures` names each configured
+ * extension that failed to load or to register its providers.
+ */
+export type ModelInspection = {
+	model: boolean;
+	auth: boolean;
+	extensionFailures?: ExtensionFailure[];
+};
+
+/**
+ * A fixed operational bound on one roster row's inspection: loading its
+ * extensions and running its provider auth check. It stops the wait; it makes
+ * no claim about the row. Pi Claude Code bounds its own CLI login check at
+ * 20 seconds, so this leaves room for that plus loading.
+ */
+export const READINESS_ROW_TIMEOUT_MS = 30_000;
 
 export type ReadinessInput = {
 	repoDir: string;
 	env: ConfigEnv;
 	home: string;
+	/** Test seam only; the tool never sets it, so the bound stays fixed. */
+	inspectionTimeoutMs?: number;
 	/** Test seam, production resolves the configured Pi model and provider auth. */
-	inspectModel?: (provider: string, model: string) => Promise<ModelInspection>;
-};
-
-type ModelRuntimeLike = {
-	getModel: (provider: string, model: string) => unknown;
-	getAuth: (
+	inspectModel?: (
 		provider: string,
-		overrides: { env: Record<string, string> },
-	) => Promise<unknown>;
+		model: string,
+		extensionPaths: readonly string[],
+	) => Promise<ModelInspection>;
 };
 
-type ModelRuntimeModule = {
-	ModelRuntime: {
-		create: (options: {
-			allowModelNetwork: false;
-			authPath: string;
-			modelsPath: string;
-		}) => Promise<ModelRuntimeLike>;
-	};
-};
-
-async function inspectConfiguredModels(
-	rows: Array<{ provider: string; model: string }>,
-	input: Pick<ReadinessInput, "env" | "home">,
-): Promise<Map<string, ModelInspection>> {
+async function inspectConfiguredModel(
+	provider: string,
+	model: string,
+	extensionPaths: readonly string[],
+	input: Pick<ReadinessInput, "env" | "home" | "repoDir">,
+): Promise<ModelInspection> {
 	const moduleName = "@earendil-works/pi-coding-agent";
-	const { ModelRuntime } = (await import(moduleName)) as ModelRuntimeModule;
+	const sdk = (await import(moduleName)) as SeatServicesSdk;
 	const agentDir =
 		input.env.PI_CODING_AGENT_DIR ?? path.join(input.home, ".pi", "agent");
-	const runtime = await ModelRuntime.create({
-		allowModelNetwork: false,
-		authPath: path.join(agentDir, "auth.json"),
-		modelsPath: path.join(agentDir, "models.json"),
-	});
 	const authEnv = Object.fromEntries(
 		Object.entries(input.env).filter(
 			(entry): entry is [string, string] => entry[1] !== undefined,
 		),
 	);
-	const result = new Map<string, ModelInspection>();
-	for (const row of rows) {
-		const key = `${row.provider}\u0000${row.model}`;
-		if (result.has(key)) {
-			continue;
-		}
-		result.set(key, {
-			model: runtime.getModel(row.provider, row.model) !== undefined,
-			auth:
-				(await runtime.getAuth(row.provider, { env: authEnv })) !== undefined,
-		});
+	const runtime = await resolveSeatRuntime({
+		sdk,
+		cwd: input.repoDir,
+		agentDir,
+		provider,
+		model,
+		extensionPaths,
+		authEnv,
+	});
+	return {
+		model: runtime.model !== undefined,
+		auth: runtime.authenticated,
+		extensionFailures: runtime.extensionFailures,
+	};
+}
+
+const TIMED_OUT = Symbol("readiness row timed out");
+
+/** Settles with `work`, or rejects with `TIMED_OUT` once `ms` pass. */
+async function withinBound<T>(work: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const bound = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(TIMED_OUT), ms);
+	});
+	try {
+		return await Promise.race([work, bound]);
+	} finally {
+		clearTimeout(timer);
 	}
-	return result;
 }
 
 /**
- * Checks setup only. It neither starts a reviewer session nor executes a
- * scanner/project-check command. The caller receives exactly one row for each
- * unavailable prerequisite and can repair setup before the first launch.
+ * The row for an inspection that did not finish. It names what was running
+ * and says it timed out; it says nothing about whether the row would pass.
+ */
+function timedOutRow(
+	provider: string,
+	model: string,
+	extensions: readonly string[],
+	timeoutMs: number,
+): ReadinessRow {
+	const pair = `${provider}/${model}`;
+	const seconds = `${timeoutMs / 1000} s`;
+	return {
+		prerequisite: `readiness check ${pair}`,
+		remediation:
+			extensions.length > 0
+				? `The readiness check for "${pair}" timed out after ${seconds} while loading its extensions (${extensions.join(", ")}) and checking provider auth. Fix or remove the extension that does not finish.`
+				: `The readiness check for "${pair}" timed out after ${seconds} while checking provider auth. Fix the provider's auth setup.`,
+	};
+}
+
+/**
+ * Checks setup only. It neither starts a reviewer session, runs a model, nor
+ * executes a scanner/project-check command. It does load each roster row's
+ * configured `extraExtensionPaths`, exactly as that row's seat would, because
+ * an extension can register the row's provider; that runs the extension's
+ * code and its provider auth check (for example asking a provider CLI whether
+ * it is logged in). Each row's inspection is bounded by
+ * `READINESS_ROW_TIMEOUT_MS`, so an extension or check that never finishes
+ * gives a timed-out row instead of stalling every run. The caller receives
+ * exactly one row for each unavailable prerequisite and can repair setup
+ * before the first launch.
  */
 export async function diagnoseReadiness(
 	input: ReadinessInput,
@@ -107,41 +157,59 @@ export async function diagnoseReadiness(
 		};
 	}
 
-	let inspections: Map<string, ModelInspection> | undefined;
-	if (input.inspectModel === undefined) {
-		try {
-			inspections = await inspectConfiguredModels(config.roster, input);
-		} catch {
-			// A missing runtime, credential store, or auth inspection is a setup
-			// failure, not a tool failure. Each configured pair receives its
-			// concrete model/auth remediation below.
-			inspections = new Map();
-		}
-	}
 	const rows: ReadinessRow[] = [];
-	const seenModels = new Set<string>();
+	const seenRows = new Set<string>();
+	const push = (row: ReadinessRow): void => {
+		if (!seenRows.has(row.prerequisite)) {
+			seenRows.add(row.prerequisite);
+			rows.push(row);
+		}
+	};
+	const inspect = input.inspectModel ?? inspectConfiguredModel;
+	const timeoutMs = input.inspectionTimeoutMs ?? READINESS_ROW_TIMEOUT_MS;
+
+	// Each row is inspected with only its own extensions: a provider that row
+	// A's extension registers must not make row B ready.
+	const seenKeys = new Set<string>();
 	for (const roster of config.roster) {
-		const key = `${roster.provider}\u0000${roster.model}`;
-		if (seenModels.has(key)) {
+		// The configured order, as the seat loads it: when two extensions
+		// register the same provider, the later one wins.
+		const extensions = (roster.extraExtensionPaths ?? []).filter(existsSync);
+		const key = [roster.provider, roster.model, ...extensions].join("\u0000");
+		if (seenKeys.has(key)) {
 			continue;
 		}
-		seenModels.add(key);
+		seenKeys.add(key);
 		let inspection: ModelInspection | undefined;
 		try {
-			inspection = input.inspectModel
-				? await input.inspectModel(roster.provider, roster.model)
-				: inspections?.get(key);
-		} catch {
+			inspection = await withinBound(
+				inspect(roster.provider, roster.model, extensions, input),
+				timeoutMs,
+			);
+		} catch (error) {
+			if (error === TIMED_OUT) {
+				push(timedOutRow(roster.provider, roster.model, extensions, timeoutMs));
+				continue;
+			}
+			// A missing runtime, credential store, or auth inspection is a setup
+			// failure, not a tool failure. The pair receives its concrete
+			// model/auth remediation below.
 			inspection = undefined;
 		}
+		for (const failure of inspection?.extensionFailures ?? []) {
+			push({
+				prerequisite: `extension ${failure.extension}`,
+				remediation: `Fix the configured extension at "${failure.extension}", which failed to load: ${failure.message}`,
+			});
+		}
 		if (inspection?.model !== true) {
-			rows.push({
+			push({
 				prerequisite: `model ${roster.provider}/${roster.model}`,
 				remediation: `Configure the exact Pi model "${roster.provider}/${roster.model}".`,
 			});
 		}
 		if (inspection?.auth !== true) {
-			rows.push({
+			push({
 				prerequisite: `authentication ${roster.provider}`,
 				remediation: `Authenticate the Pi provider "${roster.provider}" for the configured model.`,
 			});
@@ -156,7 +224,7 @@ export async function diagnoseReadiness(
 			}
 			seenExtensions.add(extension);
 			if (!existsSync(extension)) {
-				rows.push({
+				push({
 					prerequisite: `extension ${extension}`,
 					remediation: `Install or correct the configured extension at "${extension}".`,
 				});
