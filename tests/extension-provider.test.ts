@@ -26,6 +26,7 @@ const REJECTED_EXTENSION = path.join(
 );
 const THROWING_EXTENSION = path.join(fixtures, "throwing-check-extension.ts");
 const HANGING_EXTENSION = path.join(fixtures, "hanging-check-extension.ts");
+const HANGING_LOAD_EXTENSION = path.join(fixtures, "hanging-load-extension.ts");
 const PROVIDER = "review-panel-fixture";
 const UNAUTHED_PROVIDER = "review-panel-fixture-unauthed";
 const THROWING_PROVIDER = "review-panel-fixture-throwing";
@@ -223,8 +224,65 @@ describe("readiness for a provider registered by a seat extension", () => {
 			ready: false,
 			rows: [
 				{
-					prerequisite: `readiness check ${HANGING_PROVIDER}/${MODEL}`,
+					prerequisite: `readiness check ${HANGING_PROVIDER}/${MODEL} (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION})`,
 					remediation: `The readiness check for "${HANGING_PROVIDER}/${MODEL}" timed out after 0.2 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
+				},
+				...modelRows(PROVIDER),
+			],
+		});
+	});
+
+	it("gives each timed-out row for the same provider/model its own row naming its own extensions", async () => {
+		const report = await readiness(
+			[
+				{
+					id: "hanging-with-provider",
+					provider: HANGING_PROVIDER,
+					extraExtensionPaths: [PROVIDER_EXTENSION, HANGING_EXTENSION],
+				},
+				{
+					id: "hanging-alone",
+					provider: HANGING_PROVIDER,
+					extraExtensionPaths: [HANGING_EXTENSION],
+				},
+			],
+			{ inspectionTimeoutMs: 200 },
+		);
+
+		expect(report).toEqual({
+			ready: false,
+			rows: [
+				{
+					prerequisite: `readiness check ${HANGING_PROVIDER}/${MODEL} (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION})`,
+					remediation: `The readiness check for "${HANGING_PROVIDER}/${MODEL}" timed out after 0.2 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
+				},
+				{
+					prerequisite: `readiness check ${HANGING_PROVIDER}/${MODEL} (${HANGING_EXTENSION})`,
+					remediation: `The readiness check for "${HANGING_PROVIDER}/${MODEL}" timed out after 0.2 s while loading its extensions (${HANGING_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
+				},
+			],
+		});
+	});
+
+	it("bounds an extension whose load never settles, names it, and inspects later rows", async () => {
+		const report = await readiness(
+			[
+				{
+					id: "hanging-load",
+					provider: PROVIDER,
+					extraExtensionPaths: [PROVIDER_EXTENSION, HANGING_LOAD_EXTENSION],
+				},
+				{ id: "bare", provider: PROVIDER },
+			],
+			{ inspectionTimeoutMs: 1_000 },
+		);
+
+		expect(report).toEqual({
+			ready: false,
+			rows: [
+				{
+					prerequisite: `readiness check ${PROVIDER}/${MODEL} (${PROVIDER_EXTENSION}, ${HANGING_LOAD_EXTENSION})`,
+					remediation: `The readiness check for "${PROVIDER}/${MODEL}" timed out after 1 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_LOAD_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
 				},
 				...modelRows(PROVIDER),
 			],
@@ -233,6 +291,25 @@ describe("readiness for a provider registered by a seat extension", () => {
 
 	it("honours a built-in provider key supplied only through the readiness env", async () => {
 		vi.stubEnv("OPENAI_API_KEY", undefined);
+
+		const report = await readiness(
+			[{ id: "openai", provider: "openai", model: "gpt-4o" }],
+			{ env: { OPENAI_API_KEY: "sk-review-panel-fixture" } },
+		);
+
+		expect(report).toEqual({ ready: true, rows: [] });
+	});
+
+	it("honours an env-only key for a built-in provider that models.json overlays", async () => {
+		// Any models.json entry makes Pi compose the built-in provider with its
+		// own auth check, which reads only the process environment.
+		vi.stubEnv("OPENAI_API_KEY", undefined);
+		writeFileSync(
+			path.join(agentDir, "models.json"),
+			JSON.stringify({
+				providers: { openai: { baseUrl: "https://example.invalid/v1" } },
+			}),
+		);
 
 		const report = await readiness(
 			[{ id: "openai", provider: "openai", model: "gpt-4o" }],
