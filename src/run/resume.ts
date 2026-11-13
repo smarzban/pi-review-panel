@@ -99,8 +99,8 @@ export type ResumeOptions = RunReviewOptions &
 const VERIFY_RUN_SUFFIX = `-${sanitizeBaseRef("verify")}-${digestBaseRef("verify")}`;
 
 /**
- * A verify run's id: its base is the prior run's head OID, then the verify
- * role. A review whose base is literally `verify` also ends in the role
+ * A verify run's id: its base is the prior run's head OID (its readable part
+ * cut to 40 characters), then the verify role. A review whose base is literally `verify` also ends in the role
  * suffix, but has no OID part before it.
  */
 function isVerifyRunId(runId: string): boolean {
@@ -108,7 +108,7 @@ function isVerifyRunId(runId: string): boolean {
 		return false;
 	}
 	const base = runId.slice(0, -VERIFY_RUN_SUFFIX.length);
-	return /-[0-9a-f]{40}(?:[0-9a-f]{24})?-[0-9a-f]{16}$/.test(base);
+	return /-[0-9a-f]{40}-[0-9a-f]{16}$/.test(base);
 }
 
 function refuse(message: string): never {
