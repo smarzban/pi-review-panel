@@ -1,14 +1,18 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	type ActionDependencies,
@@ -23,11 +27,18 @@ import { validateConfig } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
+import { parseJsonPages } from "../src/tool/closeout-post.js";
+import { postedCode, postedText } from "../src/tool/posted-text.js";
 import { createReviewPanelTool } from "../src/tool/review-panel.js";
 import {
+	assertVerifyJudgment,
+	CLOSEOUT_CLAIM_MARKER,
+	claimRound,
+	defaultRunGh,
 	type RoundGhRunner as GhRunner,
 	GITHUB_COMMENT_LIMIT,
 	githubSafe,
+	ROUND_DEADLINE_MS,
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
 import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
@@ -1311,14 +1322,17 @@ function expectInert(body: string): void {
 		}
 		expect(line).not.toMatch(/^\s*(={2,}|-{2,}|>|`{3}|~{3}|#|\d+\.\s)/);
 		const outside = outsideCodeSpans(line);
-		expect(outside).not.toMatch(/(?<!\\)[<>!*_~|&`]/);
+		// An escaped backslash escapes nothing after it: drop `\\` pairs first.
+		const unpaired = outside.replace(/\\\\/g, "");
+		expect(unpaired).not.toMatch(/(?<!\\)[<>!*_~|&`$]/);
+		expect(outside).not.toMatch(/www\./i);
 		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low)\])/);
 		expect(outside).not.toMatch(/(?<!\\)\]\(/);
 		expect(outside).not.toMatch(/#(?!\u200D)/);
 		expect(outside).not.toMatch(/GH-(?!\u200D)/i);
 		expect(outside).not.toMatch(/:\/\//);
-		expect(line).not.toMatch(/[@\uFF20](?!\u200D)/);
-		expect(line.replace(/[@\uFF20#:.-]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
+		expect(outside).not.toMatch(/[@\uFF20](?!\u200D)/);
+		expect(line.replace(/[@\uFF20#:-]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
 	}
 }
 
@@ -1341,6 +1355,12 @@ const HOSTILE = [
 	"&#64;octocat",
 	"*bold* _em_ ~~s~~ | t",
 	"$x$",
+	"www.evil.example/p?q=1",
+	"_www.e.example",
+	"(www.f.example)",
+	"WWW.g.example",
+	"\\<img src=x>",
+	"trail\\",
 ].join(" ");
 const HOSTILE_REF = "x`@octocat`x";
 
@@ -1418,7 +1438,8 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 				expectInert(bodyOf(call));
 			}
 			const card = bodyOf(posted[1]);
-			expect(card).toContain("``x`@\u200Doctocat`x``");
+			// A code span is inert on GitHub: no joiner hides in a copied ref.
+			expect(card).toContain("``x`@octocat`x``");
 		});
 	});
 
@@ -1485,7 +1506,7 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 			headRef: HOSTILE_REF,
 		});
 		expectInert(card);
-		expect(card).toContain("``x`@\u200Doctocat`x``");
+		expect(card).toContain("``x`@octocat`x``");
 	});
 
 	it("code spans hold file names unescaped; seat code in titles shows no entity", () => {
@@ -2290,5 +2311,632 @@ describe("fix round 1: the reply stays under its cap with the PR lines (F-8)", (
 				/^PR close-out: not posted \(lost verify coverage: /,
 			);
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 2
+// ---------------------------------------------------------------------------
+
+const STILL: SeatVote[] = [
+	{ rosterId: "terra", items: [{ id: "F-1", disposition: "still present" }] },
+];
+
+function reviewRecordDir(repo: string): string {
+	return path.join(repo, ".review-panel", "runs", REVIEW_ID);
+}
+
+function headingsOf(calls: GhCall[]): string[] {
+	return posts(calls).map((call) => bodyOf(call).split("\n")[0] ?? "");
+}
+
+/** A process id that is certainly not running any more. */
+function deadPid(): number {
+	const child = spawnSync(process.execPath, ["-e", ""]);
+	return child.pid as number;
+}
+
+function verifyOnce(
+	repo: string,
+	gh: { runGh: GhRunner },
+	id: string,
+	votes: SeatVote[] = STILL,
+	signal?: AbortSignal,
+) {
+	return verifyAction(
+		{
+			repoDir: repo,
+			priorRunId: REVIEW_ID,
+			head: "HEAD",
+			keptFindingIds: ["F-1"],
+		},
+		{
+			...(signal === undefined ? {} : { signal }),
+			deps: deps(gh.runGh, {
+				runVerify: verifyRunSeats(repo, id, REVIEW_ID, ROWS_R2, votes),
+			}),
+		},
+	);
+}
+
+const ROWS_R2: Row[] = [{ id: "F-1", severity: "high" }];
+
+describe("fix round 2: concurrent verifies get distinct, sequential round numbers (regression-1-1)", () => {
+	it("two concurrent verifies post verify 1 and verify 2 and leave no claim behind", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({ pulls: [openPr(12, head)], delayMs: 5 });
+			await Promise.all([
+				verifyOnce(repo, gh, "v-1"),
+				verifyOnce(repo, gh, "v-2"),
+			]);
+			expect(headingsOf(gh.calls).sort()).toEqual([
+				"## Review panel · verify 1",
+				"## Review panel · verify 2",
+			]);
+			expect(
+				readdirSync(reviewRecordDir(repo)).filter((name) =>
+					name.endsWith(".claim"),
+				),
+			).toEqual([]);
+			// The next verify follows them.
+			const next = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, next, "v-3");
+			expect(headingsOf(next.calls)).toEqual(["## Review panel · verify 3"]);
+		});
+	});
+
+	it("a failed post gives its number back, so no later round skips it", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const failing = fakeGh({
+				pulls: [openPr(12, head)],
+				failPost: { at: 1, error: new Error("boom") },
+			});
+			const first = await verifyOnce(repo, failing, "v-1");
+			expect(textOf(first).split("\n").at(-1)).toBe(
+				"PR comment: not posted (gh failed: boom; verify 1 is left for the next verify)",
+			);
+			const second = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, second, "v-2");
+			expect(headingsOf(second.calls)).toEqual(["## Review panel · verify 1"]);
+		});
+	});
+
+	it("concurrent verifies where one post fails: the other is verify 1, never a lone verify 2", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				delayMs: 5,
+				failPost: { at: 1, error: new Error("boom") },
+			});
+			const replies = await Promise.all([
+				verifyOnce(repo, gh, "v-1"),
+				verifyOnce(repo, gh, "v-2"),
+			]);
+			expect(
+				replies.map((reply) => textOf(reply).split("\n").at(-1)).sort(),
+			).toEqual([
+				"PR comment: not posted (gh failed: boom; verify 1 is left for the next verify)",
+				"PR comment: posted to #12 (https://github.com/smarzban/demo/pull/12#issuecomment-101)",
+			]);
+			const bodies = posts(gh.calls).map((call) => bodyOf(call).split("\n")[0]);
+			// The first POST failed; the one that reached the PR is verify 1.
+			expect(bodies).toEqual([
+				"## Review panel · verify 1",
+				"## Review panel · verify 1",
+			]);
+		});
+	});
+
+	describe("claimRound", () => {
+		const roots: string[] = [];
+		afterEach(() => {
+			for (const root of roots.splice(0)) {
+				rmSync(root, { recursive: true, force: true });
+			}
+		});
+		function record(): string {
+			const root = mkdtempSync(path.join(tmpdir(), "round-claim-"));
+			roots.push(root);
+			return root;
+		}
+		function claimFile(dir: string, round: number, info: object): string {
+			const file = path.join(dir, `round-${round}.claim`);
+			writeFileSync(file, JSON.stringify(info));
+			return file;
+		}
+
+		it("skips a posted round and claims the next", async () => {
+			const dir = record();
+			writeFileSync(path.join(dir, "round-1.posted"), "{}");
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 1_000,
+			});
+			expect(claim).toMatchObject({ round: 2 });
+			expect(existsSync(path.join(dir, "round-2.claim"))).toBe(true);
+			const text = JSON.parse(
+				readFileSync(path.join(dir, "round-2.claim"), "utf8"),
+			);
+			expect(text).toMatchObject({ verifyRunId: "v-2", pid: process.pid });
+			expect(typeof text.claimedAt).toBe("number");
+		});
+
+		it("waits on a live claim and gives up at the deadline, saying why", async () => {
+			const dir = record();
+			claimFile(dir, 1, {
+				verifyRunId: "v-1",
+				pid: process.pid,
+				claimedAt: Date.now(),
+			});
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 150,
+				pollMs: 20,
+			});
+			expect(claim).toEqual({
+				reason: "another verify is still posting verify 1",
+			});
+		});
+
+		it("takes the live claim's number once that post settles", async () => {
+			const dir = record();
+			const held = claimFile(dir, 1, {
+				verifyRunId: "v-1",
+				pid: process.pid,
+				claimedAt: Date.now(),
+			});
+			setTimeout(() => rmSync(held, { force: true }), 60);
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 2_000,
+				pollMs: 20,
+			});
+			expect(claim).toMatchObject({ round: 1 });
+		});
+
+		it("takes over a claim older than the round deadline", async () => {
+			const dir = record();
+			claimFile(dir, 1, {
+				verifyRunId: "v-1",
+				pid: process.pid,
+				claimedAt: Date.now() - ROUND_DEADLINE_MS - 10_000,
+			});
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 1_000,
+				pollMs: 20,
+			});
+			expect(claim).toMatchObject({ round: 1 });
+			expect(
+				JSON.parse(readFileSync(path.join(dir, "round-1.claim"), "utf8")),
+			).toMatchObject({ verifyRunId: "v-2" });
+		});
+
+		it("takes over a claim whose process is gone", async () => {
+			const dir = record();
+			claimFile(dir, 1, {
+				verifyRunId: "v-1",
+				pid: deadPid(),
+				claimedAt: Date.now(),
+			});
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 1_000,
+				pollMs: 20,
+			});
+			expect(claim).toMatchObject({ round: 1 });
+		});
+
+		it("an unreadable claim is judged by its age on disk", async () => {
+			const dir = record();
+			const file = path.join(dir, "round-1.claim");
+			writeFileSync(file, "v-0");
+			const old = (Date.now() - ROUND_DEADLINE_MS - 10_000) / 1000;
+			utimesSync(file, old, old);
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 1_000,
+				pollMs: 20,
+			});
+			expect(claim).toMatchObject({ round: 1 });
+		});
+
+		it("an interrupted run stops waiting", async () => {
+			const dir = record();
+			claimFile(dir, 1, {
+				verifyRunId: "v-1",
+				pid: process.pid,
+				claimedAt: Date.now(),
+			});
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 40);
+			const claim = await claimRound(dir, 1, "v-2", {
+				deadline: Date.now() + 5_000,
+				pollMs: 20,
+				signal: controller.signal,
+			});
+			expect(claim).toEqual({ reason: "the run was interrupted" });
+		});
+	});
+});
+
+describe("fix round 2: a stale close-out claim falls through to the PR check (L1)", () => {
+	const clean: SeatVote[] = [{ rosterId: "terra", items: [resolved("F-1")] }];
+
+	function writeClaim(repo: string, info: object | string): string {
+		const file = path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER);
+		writeFileSync(file, typeof info === "string" ? info : JSON.stringify(info));
+		return file;
+	}
+
+	it("a claim older than the round deadline: the card posts", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			writeClaim(repo, {
+				verifyRunId: "v-0",
+				pid: process.pid,
+				claimedAt: Date.now() - ROUND_DEADLINE_MS - 10_000,
+			});
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			expect(textOf(result).split("\n").at(-1)).toMatch(
+				/^PR close-out: posted to #12/,
+			);
+		});
+	});
+
+	it("a claim whose process is gone, with the card already on the PR: no second card", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			writeClaim(repo, {
+				verifyRunId: "v-0",
+				pid: deadPid(),
+				claimedAt: Date.now(),
+			});
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("an unreadable claim old on disk is stale too", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const file = writeClaim(repo, "v-0");
+			const old = (Date.now() - ROUND_DEADLINE_MS - 10_000) / 1000;
+			utimesSync(file, old, old);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+		});
+	});
+
+	it("a posted close-out never goes stale", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			writeClaim(repo, {
+				verifyRunId: "v-0",
+				pid: deadPid(),
+				claimedAt: Date.now() - 10 * ROUND_DEADLINE_MS,
+				postedAt: Date.now() - 10 * ROUND_DEADLINE_MS,
+			});
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (another verify already claimed this review's close-out)",
+			);
+		});
+	});
+
+	it("a posted card marks its claim posted, with the claimer's pid and time", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, gh, "v-1", clean);
+			const claim = JSON.parse(
+				readFileSync(
+					path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER),
+					"utf8",
+				),
+			);
+			expect(claim).toMatchObject({ verifyRunId: "v-1", pid: process.pid });
+			expect(typeof claim.claimedAt).toBe("number");
+			expect(typeof claim.postedAt).toBe("number");
+		});
+	});
+});
+
+describe("fix round 2: the abort signal reaches gh (L2)", () => {
+	it("the round hands the run's signal to every gh call", async () => {
+		await withRepository(async (repo, head) => {
+			const controller = new AbortController();
+			const seen: Array<AbortSignal | undefined> = [];
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					signal: controller.signal,
+					deps: deps(
+						(args, options) => {
+							seen.push(
+								(options as { signal?: AbortSignal } | undefined)?.signal,
+							);
+							return gh.runGh(args, options);
+						},
+						{
+							runReview: reviewRun(repo, "r-1", []),
+						},
+					),
+				},
+			);
+			expect(seen.length).toBeGreaterThan(0);
+			expect(seen.every((signal) => signal === controller.signal)).toBe(true);
+		});
+	});
+
+	it("an abort kills a running gh at once, and the reply says the run was interrupted", async () => {
+		const bin = mkdtempSync(path.join(tmpdir(), "rounds-abort-gh-"));
+		writeFileSync(
+			path.join(bin, "gh"),
+			["#!/bin/sh", "exec sleep 20"].join("\n"),
+			{
+				mode: 0o755,
+			},
+		);
+		const savedPath = process.env.PATH;
+		try {
+			await withRepository(async (repo) => {
+				process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ""}`;
+				const controller = new AbortController();
+				const { runGh: _unused, ...rest } = deps(fakeGh().runGh, {
+					runReview: async (config) => {
+						setTimeout(() => controller.abort(), 200);
+						return reviewRun(repo, "r-1", [])(config);
+					},
+				});
+				const started = Date.now();
+				const result = await reviewAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{ signal: controller.signal, deps: rest },
+				);
+				expect(Date.now() - started).toBeLessThan(5_000);
+				expect(textOf(result).split("\n").at(-1)).toBe(
+					"PR comment: not posted (the run was interrupted)",
+				);
+			});
+		} finally {
+			process.env.PATH = savedPath;
+			rmSync(bin, { recursive: true, force: true });
+		}
+	});
+
+	it("defaultRunGh rejects as soon as its signal aborts", async () => {
+		const bin = mkdtempSync(path.join(tmpdir(), "rounds-abort-gh-"));
+		writeFileSync(
+			path.join(bin, "gh"),
+			["#!/bin/sh", "exec sleep 20"].join("\n"),
+			{
+				mode: 0o755,
+			},
+		);
+		const savedPath = process.env.PATH;
+		try {
+			process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ""}`;
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 100);
+			const started = Date.now();
+			await expect(
+				defaultRunGh(["api", "user"], { signal: controller.signal }),
+			).rejects.toMatchObject({ name: "AbortError" });
+			expect(Date.now() - started).toBeLessThan(5_000);
+		} finally {
+			process.env.PATH = savedPath;
+			rmSync(bin, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
+	it("escapes the dot of every www. so GitHub's autolinker cannot fire", () => {
+		expect(postedText("see www.evil.example/p")).toBe(
+			"see www\\.evil.example/p",
+		);
+		expect(postedText("_www.e.example")).toBe("\\_www\\.e.example");
+		expect(postedText("(WWW.x.example)")).toBe("\\(WWW\\.x.example\\)");
+		expect(postedText("www.e")).not.toMatch(/‍/);
+	});
+
+	it("escapes a backslash so seat text cannot unescape a tag", () => {
+		expect(postedText("\\<img src=x>")).toBe("\\\\\\<img src=x\\>");
+		expect(postedText("trail\\")).toBe("trail\\\\");
+	});
+
+	it("escapes $ so no math renders", () => {
+		expect(postedText("$x$ and $$y$$")).toBe("\\$x\\$ and \\$\\$y\\$\\$");
+	});
+
+	it("puts no joiner inside a code span, so copied paths still work", () => {
+		expect(postedCode("node_modules/@types/x/index.d.ts")).toBe(
+			"`node_modules/@types/x/index.d.ts`",
+		);
+		expect(postedCode("src/C#/a.cs")).toBe("`src/C#/a.cs`");
+		// Outside a code span the joiner still breaks the mention.
+		expect(postedText("@types/x")).toBe("@‍types/x");
+	});
+
+	it("keeps emoji presentation selectors and joiners inside emoji sequences", () => {
+		expect(postedText("⚠️ warn")).toBe("⚠️ warn");
+		expect(postedText("👨‍👩‍👧 fam")).toBe("👨‍👩‍👧 fam");
+		// Anywhere else they are still replaced.
+		expect(postedText("a️b")).toBe("a�b");
+		expect(postedText("a‍b")).toBe("a�b");
+		expect(postedText("⚠‍b")).toBe("⚠�b");
+	});
+
+	it("evidence that reads as a block marker stays behind the Evidence: label", async () => {
+		const rows: Row[] = [
+			{ id: "F-1", severity: "high", evidence: "===" },
+			{ id: "F-2", severity: "medium", evidence: "1. x" },
+		];
+		await withRepository(async (repo, head) => {
+			const review = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(review.runGh, { runReview: reviewRun(repo, "r-1", rows) }),
+				},
+			);
+			expectInert(bodyOf(posts(review.calls)[0]));
+			writeReviewRecord(repo, REVIEW_ID, rows);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1", "F-2"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRun(repo, "v-1", REVIEW_ID, rows, [
+							{
+								id: "F-1",
+								disposition: "still present",
+								evidence: { file: "src/a.ts", explanation: "===" },
+							},
+							{
+								id: "F-2",
+								disposition: "still present",
+								evidence: { file: "src/a.ts", explanation: "> q" },
+							},
+						]),
+					}),
+				},
+			);
+			expectInert(bodyOf(posts(gh.calls)[0]));
+		});
+	});
+});
+
+describe("fix round 2: one round's gh calls share a deadline (L7)", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("each call gets at most 30 s, then what is left of 60 s, then none", async () => {
+		await withRepository(async (repo, head) => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			const timeouts: Array<number | undefined> = [];
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(
+						(args, options) => {
+							timeouts.push(options?.timeoutMs);
+							vi.setSystemTime(Date.now() + 25_000);
+							return gh.runGh(args, options);
+						},
+						{ runReview: reviewRun(repo, "r-1", []) },
+					),
+				},
+			);
+			// user at 0 s, repo view at 25 s, pulls lookup at 50 s, POST refused at 75 s.
+			expect(timeouts).toEqual([30_000, 30_000, 10_000]);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR comment: not posted (gh took longer than 60 s in total)",
+			);
+		});
+	});
+
+	it("an interrupt during one call stops the next", async () => {
+		await withRepository(async (repo, head) => {
+			const controller = new AbortController();
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					signal: controller.signal,
+					deps: deps(
+						(args, options) => {
+							controller.abort();
+							return gh.runGh(args, options);
+						},
+						{ runReview: reviewRun(repo, "r-1", []) },
+					),
+				},
+			);
+			expect(gh.calls).toHaveLength(1);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR comment: not posted (the run was interrupted)",
+			);
+		});
+	});
+});
+
+describe("fix round 2: the manual card is capped too (L5)", () => {
+	it("cuts whole rows to stay under GitHub's limit", async () => {
+		const { assembleCloseoutComment } = await import(
+			"../src/tool/closeout-comment.js"
+		);
+		const rows: Row[] = Array.from({ length: 80 }, (_, index) => ({
+			id: `F-${index + 1}`,
+			severity: "high" as const,
+			title: "#".repeat(300),
+		}));
+		const card = assembleCloseoutComment({
+			findings: rows.map(stamped),
+			panel: {
+				runId: "r",
+				baseRef: "main",
+				seats: [
+					{ rosterId: "terra", lens: "holistic", provider: "p", model: "m" },
+				],
+			} as never,
+			lost: [],
+			meta: {
+				baseRef: "main",
+				baseOid: "a".repeat(40),
+				headOid: "b".repeat(40),
+			},
+			dismissed: rows.map((row) => ({ id: row.id, reason: "#".repeat(1_000) })),
+			lowAdvisory: [],
+		});
+		expect(card.length).toBeLessThan(GITHUB_COMMENT_LIMIT);
+		expect(card).toMatch(/- \d+ row\(s\) cut to fit GitHub's comment limit/);
+		expect(card.split("\n")[0]).toBe("## Review panel");
+	});
+});
+
+describe("fix round 2: nits", () => {
+	it("a top-level JSON string is a malformed comment listing", () => {
+		expect(parseJsonPages('"x"')).toBeUndefined();
+		expect(parseJsonPages('"[]"')).toBeUndefined();
+		expect(parseJsonPages("[]")).toEqual([]);
+		expect(parseJsonPages('[{"a":"]"}]')).toEqual([{ a: "]" }]);
+	});
+
+	it("a kept high listed as low/advisory is refused; a kept low is not", () => {
+		const findings = [
+			stamped({ id: "F-1", severity: "high" }),
+			stamped({ id: "F-2", severity: "low" }),
+		];
+		expect(() => assertVerifyJudgment(findings, ["F-1"], [], ["F-1"])).toThrow(
+			/F-1 is high/,
+		);
+		expect(() =>
+			assertVerifyJudgment(findings, ["F-2"], [], ["F-2"]),
+		).not.toThrow();
 	});
 });
