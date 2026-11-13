@@ -138,9 +138,12 @@ with a key only the owner holds:
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
-  needs it. So is a key folder that group or other users can write, sticky bit or not: whoever can
-  write the folder can swap the key for one they hold. The owner check is skipped where Node has no
-  `process.getuid` (Windows), and the mode checks are skipped on Windows.
+  needs it. So is a key folder that other users can write, sticky bit or not: whoever can write the
+  folder can swap the key for one they hold. A folder only its group can write (`0775`, made by the
+  `umask 002` default on Fedora, RHEL, Debian and Ubuntu) is accepted, because a key someone else
+  swaps in is owned by them and the owner check refuses it; `diagnose` shows it as a warning that
+  does not change readiness. The owner check is skipped where Node has no `process.getuid`
+  (Windows), and the mode checks are skipped on Windows.
 - `diagnose` checks the key the same way, and never creates it. With no key yet, it checks that the
   folder lets you write and search it (`access(2)`, which also sees a read-only mount and ACLs).
   It cannot see, without writing, a filesystem that refuses hard links; the first review or audit
@@ -154,14 +157,16 @@ with a key only the owner holds:
 
 ### When the record key is refused
 
-Review and audit refuse to start without a usable key, and `diagnose` reports the same cause as a
-`record key <path>` row. Each cause and its fix:
+Review, audit and resume refuse to start without a usable key, and `diagnose` reports the same
+cause as a `record key <path>` row. Resume also refuses when there is no key at all, since it never
+creates one. Each cause and its fix:
 
 | `diagnose` or the refusal says | Fix |
 | --- | --- |
 | `cannot be created: its folder … is not writable by you`, or `could not be created: EACCES` / `EROFS` | `chmod u+w` the folder if you own it. If it is read-only by design (a read-only mount, a Nix or home-manager store link, a sandbox home), set `PI_REVIEW_PANEL_CONFIG` to a `config.json` in a writable folder, mode `0700`, that only you can write. The key is created beside it. |
 | `could not be created` on a writable folder (for example `EPERM` from `link`) | The folder's filesystem refuses hard links (some FUSE or SMB mounts). Move the config to a local folder with `PI_REVIEW_PANEL_CONFIG`. |
-| `is refused: its folder … is writable by group or other users` | `chmod go-w <folder>`, or move the config to a folder only you can write. |
+| `is refused: its folder … is writable by other users` | If you own the folder and it is not sticky, `chmod go-w <folder>`; the fix text says so only then. For a shared sticky folder such as `/tmp`, or one you do not own, never `chmod` it: point `PI_REVIEW_PANEL_CONFIG` at a `config.json` in a folder you own, mode `0700`. |
+| Warning only: `its folder … is writable by its group` | Nothing blocks. If anyone else is in that group, `chmod g-w <folder>` (or move the config, as above, when you do not own the folder). |
 | `is a symlink and is refused` (stow, chezmoi or a store link) | Replace the link with a regular file: `cp -L` the key's bytes into place, then `chmod 600` it. Or delete the link; the next review or audit creates a new key. |
 | `is readable by group or other users and is refused` (a key copied with a `0644` umask, or a `0444` store file) | `chmod 600 <key>`. If others may have read it, delete it instead. |
 | `is not owned by you and is refused` | Delete it, and the next review or audit creates one you own. `chown` it only if you know where it came from. |
