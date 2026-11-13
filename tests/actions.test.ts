@@ -27,6 +27,7 @@ import {
 	suggestAction,
 	verifyAction,
 } from "../src/actions/actions.js";
+import { loadConfig } from "../src/config/load.js";
 import type { Config } from "../src/config/schema.js";
 import { resumeRun } from "../src/run/resume.js";
 import type { RunAuditResult } from "../src/run/run-audit.js";
@@ -927,8 +928,8 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 				[
 					"# Lens suggestions",
 					"main~2...main · holistic always runs · owner default lenses: tests",
-					"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run.ts:1, src/run.ts:3, src/run.ts:4)",
-					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (src/run.ts)",
+					"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run.ts:1`, `src/run.ts:3`, `src/run.ts:4`)",
+					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (`src/run.ts`)",
 					"",
 					"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
 				].join("\n"),
@@ -957,7 +958,7 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 			);
 			expect(textOf(result).split("\n").slice(1, 3)).toEqual([
 				"main~1...main · holistic always runs · owner default lenses: none",
-				"- migrations: changed file(s) match a migration/DDL path or extension (db/a.sql, db/b.sql, db/c.sql, +2 more)",
+				"- migrations: changed file(s) match a migration/DDL path or extension (`db/a.sql`, `db/b.sql`, `db/c.sql`, +2 more)",
 			]);
 		});
 	});
@@ -999,6 +1000,93 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 				expect(typeof reviewMessage).toBe("string");
 				expect(suggestMessage).toBe(reviewMessage);
 			}
+		});
+	});
+
+	it("hands the rules the resolved commit ids, never the raw refs", async () => {
+		await withRepository(async (repo) => {
+			const seen: string[][] = [];
+			await suggestAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: nothingRuns({
+						suggestLenses: (repoDir, baseOid, headOid) => {
+							seen.push([repoDir, baseOid, headOid]);
+							return [];
+						},
+					}),
+				},
+			);
+			expect(seen).toEqual([
+				[
+					repo,
+					git(repo, ["rev-parse", "main~1"]).trim(),
+					git(repo, ["rev-parse", "main"]).trim(),
+				],
+			]);
+		});
+	});
+
+	it("refuses an owner config inside the repository with review's message, from a subdirectory too", async () => {
+		await withRepository(async (repo) => {
+			const sub = path.join(repo, "src");
+			mkdirSync(sub);
+			const configPath = path.join(repo, ".cfg", "config.json");
+			mkdirSync(path.dirname(configPath));
+			writeFileSync(configPath, JSON.stringify(config));
+			const env = { PI_REVIEW_PANEL_CONFIG: configPath };
+			const review = await reviewAction(
+				{ repoDir: sub, base: "main~1", head: "main" },
+				{ deps: deps({ env, loadConfig }) },
+			).catch((error: Error) => error.message);
+			const suggest = await suggestAction(
+				{ repoDir: sub, base: "main~1", head: "main" },
+				{ deps: nothingRuns({ env, loadConfig }) },
+			).catch((error: Error) => error.message);
+			expect(review).toBe(
+				`Config path "${configPath}" is inside the reviewed repository "${repo}" and is refused`,
+			);
+			expect(suggest).toBe(review);
+		});
+	});
+
+	it("keeps its reply under the 16 KiB cap, whole rows only, with the closing instruction last", async () => {
+		await withRepository(async (repo) => {
+			const long = "\u{1F600}".repeat(250);
+			const text = textOf(
+				await suggestAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{
+						deps: nothingRuns({
+							suggestLenses: () =>
+								Array.from({ length: 60 }, (_, index) => ({
+									lens: `lens-${index}`,
+									reason: "r",
+									evidence: [1, 2, 3, 4].map((line) => ({ file: long, line })),
+								})),
+						}),
+					},
+				),
+			);
+			const lines = text.split("\n");
+			expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(
+				16 * 1024,
+			);
+			expect(lines.slice(0, 2)).toEqual([
+				"# Lens suggestions",
+				"main~1...main · holistic always runs · owner default lenses: none",
+			]);
+			const rows = lines.filter((line) => line.startsWith("- lens-"));
+			expect(rows.length).toBeGreaterThan(0);
+			expect(rows.length).toBeLessThan(60);
+			for (const row of rows) {
+				expect(row).toMatch(/, \+1 more\)$/);
+			}
+			expect(lines.slice(-3)).toEqual([
+				`- ${60 - rows.length} more suggestion(s) omitted.`,
+				"",
+				"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
+			]);
 		});
 	});
 

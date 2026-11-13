@@ -533,8 +533,8 @@ describe("suggest block", () => {
 		expect(review([security, migrations]).split("\n").slice(-4)).toEqual([
 			"",
 			"Suggest:",
-			"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run/record-key.ts:42, +2 more)",
-			"- migrations: changed file(s) match a migration/DDL path or extension (db/001.sql)",
+			"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, +2 more)",
+			"- migrations: changed file(s) match a migration/DDL path or extension (`db/001.sql`)",
 		]);
 	});
 
@@ -544,7 +544,7 @@ describe("suggest block", () => {
 		expect(text.split("\n").slice(-3)).toEqual([
 			"",
 			"Suggest:",
-			"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run/record-key.ts:42, +2 more)",
+			"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, +2 more)",
 		]);
 		expect(text).not.toContain("- tests:");
 	});
@@ -560,14 +560,62 @@ describe("suggest block", () => {
 			"- migrations: changed file(s) match a migration/DDL path or extension",
 		);
 		expect(formatSuggestion(tests)).toBe(
-			"- tests: code changed (src/a.ts, +1 more)",
+			"- tests: code changed (`src/a.ts`, +1 more)",
 		);
 		expect(formatSuggestion(security, { evidence: 2 })).toBe(
-			"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run/record-key.ts:42, src/run/record-key.ts:50, +1 more)",
+			"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, `src/run/record-key.ts:50`, +1 more)",
 		);
 		expect(formatSuggestion(tests, { note: "already on, owner default" })).toBe(
-			"- tests (already on, owner default): code changed (src/a.ts, +1 more)",
+			"- tests (already on, owner default): code changed (`src/a.ts`, +1 more)",
 		);
+	});
+
+	it("shows a hostile file name as one inert code span: no escape, line break, bidi control or markdown", () => {
+		const line = formatSuggestion({
+			lens: "security",
+			reason: "added line(s) touch auth/crypto/subprocess/deserialization",
+			evidence: [
+				{
+					file: "evil\u001b[31mRED\u001b]52;c;eA==\u0007\r# Heading [x](http://e) `tick` \u202Eevil\u2066\u009b",
+					line: 7,
+				},
+			],
+		});
+		expect(line).toBe(
+			"- security: added line(s) touch auth/crypto/subprocess/deserialization (``evil\uFFFD[31mRED\uFFFD]52;c;eA==\uFFFD\uFFFD# Heading [x](http://e) `tick` \uFFFDevil\uFFFD\uFFFD:7``)",
+		);
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
+		expect(line).not.toMatch(
+			/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/,
+		);
+	});
+
+	it("cuts a long file name at 200 code points before the line number and the closing fence", () => {
+		const long = "é".repeat(250);
+		expect(
+			formatSuggestion({
+				lens: "security",
+				reason: "r",
+				evidence: [{ file: long, line: 3 }],
+			}),
+		).toBe(`- security: r (\`${"é".repeat(200)}…:3\`)`);
+		expect(
+			formatSuggestion({
+				lens: "tests",
+				reason: "r",
+				evidence: [{ file: long }],
+			}),
+		).toBe(`- tests: r (\`${"é".repeat(200)}…\`)`);
+	});
+
+	it("strips control characters from a lens name and a reason", () => {
+		expect(
+			formatSuggestion({
+				lens: "sec\u001burity",
+				reason: "why\r# no\u202E",
+				evidence: [],
+			}),
+		).toBe("- sec\uFFFDurity: why\uFFFD# no\uFFFD");
 	});
 });
 

@@ -546,7 +546,7 @@ describe("review_panel public tool adapter", () => {
 				{},
 			);
 			expect(response.content[0]?.text).toContain(
-				"\n\nSuggest:\n- security: added subprocess line (src/a.ts:1)",
+				"\n\nSuggest:\n- security: added subprocess line (`src/a.ts:1`)",
 			);
 		});
 	});
@@ -590,7 +590,7 @@ describe("review_panel public tool adapter", () => {
 			);
 			const text = response.content[0]?.text ?? "";
 			expect(text).toContain(
-				"\n\nSuggest:\n- security: added subprocess line (src/a.ts:1)",
+				"\n\nSuggest:\n- security: added subprocess line (`src/a.ts:1`)",
 			);
 			expect(text).not.toContain("- tests:");
 		});
@@ -624,7 +624,7 @@ describe("review_panel public tool adapter", () => {
 			expect(text.split("\n").slice(0, 3)).toEqual([
 				"# Lens suggestions",
 				"HEAD~1...HEAD · holistic always runs · owner default lenses: none",
-				"- security: added subprocess line (src/a.ts:1)",
+				"- security: added subprocess line (`src/a.ts:1`)",
 			]);
 			await expect(
 				tool.execute(
@@ -641,6 +641,38 @@ describe("review_panel public tool adapter", () => {
 					{},
 				),
 			).rejects.toThrow('suggest does not accept argument "seats"');
+		});
+	});
+
+	it("suggest shows hostile diff content and markdown file names inertly, at the right file and line", async () => {
+		await withRepository(async (repository) => {
+			const name = "src/[pwn](javascript:x)*b*`t`.ts";
+			mkdirSync(path.join(repository, "src"));
+			writeFileSync(
+				path.join(repository, name),
+				[
+					"++ b/evil\u001b[31mRED\u001b]52;c;eA==\u0007\r# Heading [x](http://e)",
+					'require("child_process");',
+					"",
+				].join("\n"),
+			);
+			git(repository, ["add", "."]);
+			git(repository, ["commit", "-m", "hostile", "--quiet"]);
+			const response = await toolWith().execute(
+				"tool-call",
+				{ action: "suggest", repository, base: "HEAD~1", head: "HEAD" },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text.split("\n").slice(2, 4)).toEqual([
+				"- security: added line(s) touch auth/crypto/subprocess/deserialization (``src/[pwn](javascript:x)*b*`t`.ts:2``)",
+				"- tests: code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (``src/[pwn](javascript:x)*b*`t`.ts``)",
+			]);
+			expect(text).not.toContain("evil");
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
+			expect(text).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
 		});
 	});
 

@@ -732,8 +732,8 @@ describe("suggest", () => {
 				[
 					"# Lens suggestions",
 					"main~1...main · holistic always runs · owner default lenses: tests",
-					"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run.ts:1)",
-					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (src/run.ts)",
+					"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run.ts:1`)",
+					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (`src/run.ts`)",
 					"",
 					"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
 					"",

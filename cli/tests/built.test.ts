@@ -178,6 +178,49 @@ describe("the built bin", () => {
 	});
 });
 
+describe("suggest on a hostile diff", () => {
+	it("prints evidence as inert code spans at the real file and line, with no escape or CR byte", () => {
+		const home = tempHome();
+		writeConfig(home);
+		const repo = tempRepo();
+		const git = (args: string[]) =>
+			execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+		git(["config", "user.email", "built@example.test"]);
+		git(["config", "user.name", "Built Test"]);
+		git(["commit", "--allow-empty", "-m", "base", "--quiet"]);
+		mkdirSync(path.join(repo, "src"));
+		const name = "src/[pwn](javascript:x)*b*.ts";
+		writeFileSync(
+			path.join(repo, name),
+			[
+				"++ b/evil\u001b[31mRED\u001b]52;c;eA==\u0007\r# Heading [x](http://e)",
+				'require("child_process");',
+				"",
+			].join("\n"),
+		);
+		git(["add", "."]);
+		git(["commit", "-m", "hostile", "--quiet"]);
+		const { code, stdout, stderr } = cli(home, [
+			"suggest",
+			"--repo",
+			repo,
+			"--base",
+			"HEAD~1",
+			"--head",
+			"HEAD",
+		]);
+		expect(stderr).toBe("");
+		expect(code).toBe(0);
+		expect(stdout.split("\n").slice(2, 4)).toEqual([
+			"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/[pwn](javascript:x)*b*.ts:2`)",
+			"- tests: code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (`src/[pwn](javascript:x)*b*.ts`)",
+		]);
+		expect(stdout).not.toContain("evil");
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
+		expect(stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+	});
+});
+
 describe("agent folder selection", () => {
 	it("without Pi, uses ~/.pi-review-panel/agent and never creates ~/.pi", () => {
 		const home = tempHome();

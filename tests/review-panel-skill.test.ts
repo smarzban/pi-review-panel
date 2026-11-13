@@ -87,6 +87,21 @@ describe("lens choice workflow", () => {
 		expect(body).toContain("The tool never adds a lens by itself.");
 		expect(body).toContain("`Seats:` line");
 	});
+
+	it("omits lenses when no extra lens is chosen, since the tool refuses an empty array", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).toContain(
+			"If you chose no extra lens, omit `lenses`; the tool refuses an empty array.",
+		);
+	});
+
+	it("re-runs a dropped lens only on a concrete gap the report shows", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).not.toContain("If a lens you did not run was suggested");
+		expect(body).toContain(
+			"Do not re-run a lens you dropped in step 3 unless the report shows a concrete gap on its dimension that holistic left unsettled; then call `review` once with only that lens on the same base/head.",
+		);
+	});
 });
 
 describe("repository audit workflow", () => {
