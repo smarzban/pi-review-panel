@@ -1,12 +1,21 @@
-import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import {
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
+import { isProcessAlive } from "./liveness.js";
 import type {
 	PanelRecord,
 	PanelRecordInput,
 	PlannedSeat,
 	ReservedRecord,
+	RunPlan,
 	SeatOutcomeFacts,
 } from "./types.js";
 
@@ -18,6 +27,19 @@ export const EXECUTION_FILE = "execution.json";
 
 /** The mechanical completeness marker at the record root (AC-31). */
 export const COMPLETE_MARKER = "COMPLETE";
+
+/**
+ * Everything `resume` needs to finish an interrupted run: kind, frozen
+ * commits, and the full planned seats. Like execution.json's replay specs it
+ * carries prompt bytes, so it is a replay artifact, never presentation.
+ */
+export const PLAN_FILE = "plan.json";
+
+/** One `<planned index>.json` per seat, written the moment that seat settles. */
+export const SEATS_DIR = "seats";
+
+/** Held by the process running the record; removed when the run ends. */
+export const RUN_LOCK_FILE = "run.lock";
 
 /** Injectable clock: tests pin the run-id timestamp without sleeping. */
 export type ReserveOptions = {
@@ -128,7 +150,12 @@ function projectSeat(seat: PlannedSeat): PanelRecord["seats"][number] {
  */
 export function writeExecution(
 	record: ReservedRecord,
-	input: { cancelled: boolean; outcomes: SeatOutcomeFacts[] },
+	input: {
+		cancelled: boolean;
+		outcomes: SeatOutcomeFacts[];
+		/** Seats a resume ran again; the key is absent on a first run. */
+		resumedSeats?: PlannedSeat[];
+	},
 ): void {
 	const lostCoverage = input.outcomes
 		.filter((entry) => entry.outcome.kind === "failed")
@@ -140,11 +167,160 @@ export function writeExecution(
 	writeFileSync(
 		record.executionPath,
 		`${JSON.stringify(
-			{ cancelled: input.cancelled, lostCoverage, outcomes: input.outcomes },
+			{
+				cancelled: input.cancelled,
+				lostCoverage,
+				...(input.resumedSeats === undefined
+					? {}
+					: {
+							resumedSeats: input.resumedSeats.map(
+								(seat) => `${seat.provider}/${seat.model}/${seat.lens}`,
+							),
+						}),
+				outcomes: input.outcomes,
+			},
 			null,
 			2,
 		)}\n`,
 	);
+}
+
+/** The record paths for an existing run directory (used by resume). */
+export function recordAt(recordPath: string): ReservedRecord {
+	return {
+		runId: path.basename(recordPath),
+		recordPath,
+		reportPath: path.join(recordPath, "report.md"),
+		findingsPath: path.join(recordPath, "findings.json"),
+		panelPath: path.join(recordPath, PANEL_FILE),
+		executionPath: path.join(recordPath, EXECUTION_FILE),
+	};
+}
+
+/** Temp file then rename in the same folder: a reader sees all or nothing. */
+function writeAtomic(target: string, text: string): void {
+	const temp = path.join(
+		path.dirname(target),
+		`.${path.basename(target)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`,
+	);
+	try {
+		writeFileSync(temp, text);
+		renameSync(temp, target);
+	} catch (error) {
+		rmSync(temp, { force: true });
+		throw error;
+	}
+}
+
+/** Persists the resume plan before the snapshot is pinned. */
+export function writePlan(record: ReservedRecord, plan: RunPlan): void {
+	writeAtomic(
+		path.join(record.recordPath, PLAN_FILE),
+		`${JSON.stringify(plan, null, 2)}\n`,
+	);
+}
+
+/** Persists one settled seat under its planned index, atomically. */
+export function writeSeatOutcome(
+	record: ReservedRecord,
+	index: number,
+	facts: SeatOutcomeFacts,
+): void {
+	const dir = path.join(record.recordPath, SEATS_DIR);
+	mkdirSync(dir, { recursive: true });
+	writeAtomic(
+		path.join(dir, `${index}.json`),
+		`${JSON.stringify({ index, facts }, null, 2)}\n`,
+	);
+}
+
+/**
+ * Reads the settled seats of a record, by planned index. A file that is
+ * missing, not a regular file, unreadable, or names a different seat than
+ * the plan counts as unsettled, so resume runs that seat again.
+ */
+export function readSettledOutcomes(
+	recordPath: string,
+	seats: readonly PlannedSeat[],
+): Array<SeatOutcomeFacts | undefined> {
+	return seats.map((seat, index) => {
+		const file = path.join(recordPath, SEATS_DIR, `${index}.json`);
+		try {
+			if (!lstatSync(file).isFile()) {
+				return undefined;
+			}
+			const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+				index?: unknown;
+				facts?: SeatOutcomeFacts;
+			};
+			const facts = parsed.facts;
+			if (
+				parsed.index !== index ||
+				facts === undefined ||
+				facts.seat?.provider !== seat.provider ||
+				facts.seat?.model !== seat.model ||
+				facts.seat?.lens !== seat.lens ||
+				(facts.outcome?.kind !== "voted" && facts.outcome?.kind !== "failed")
+			) {
+				return undefined;
+			}
+			return { ...facts, seat: { ...seat } };
+		} catch {
+			return undefined;
+		}
+	});
+}
+
+/**
+ * Takes the record's run lock for this process. A lock held by a live
+ * process refuses; a lock left by an exited process is replaced. Returns the
+ * release, which removes the lock only while this process still holds it.
+ */
+export function acquireRunLock(recordPath: string): () => void {
+	const lockPath = path.join(recordPath, RUN_LOCK_FILE);
+	const body = `${JSON.stringify({ pid: process.pid })}\n`;
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		try {
+			writeFileSync(lockPath, body, { flag: "wx" });
+			return () => {
+				if (runLockHolder(recordPath) === process.pid) {
+					rmSync(lockPath, { force: true });
+				}
+			};
+		} catch (error) {
+			if (!isExistsError(error)) {
+				throw error;
+			}
+			const holder = runLockHolder(recordPath);
+			if (isProcessAlive(holder)) {
+				throw new Error(
+					`run "${path.basename(recordPath)}" is still in progress (pid ${holder})`,
+				);
+			}
+			rmSync(lockPath, { force: true });
+		}
+	}
+	throw new Error(`run "${path.basename(recordPath)}" lock could not be taken`);
+}
+
+/** The pid named by a record's run lock, when there is a readable one. */
+export function runLockHolder(recordPath: string): number | undefined {
+	try {
+		const parsed: unknown = JSON.parse(
+			readFileSync(path.join(recordPath, RUN_LOCK_FILE), "utf8"),
+		);
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"pid" in parsed &&
+			typeof parsed.pid === "number"
+		) {
+			return parsed.pid;
+		}
+	} catch {
+		// No lock, or an unreadable one.
+	}
+	return undefined;
 }
 
 /**

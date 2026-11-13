@@ -1,6 +1,6 @@
 import type { SeatIdentity } from "../seat/classify.js";
 import type { Finding } from "../seat/schema.js";
-import type { SeatOutcomeFacts, StampedFinding } from "./types.js";
+import type { PlannedSeat, SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 /** Identifies this run in the report header. */
 export type RunMeta = {
@@ -55,7 +55,34 @@ export type RenderInput = {
 	annotations?: RunAnnotations;
 	/** Durable snapshot-cleanup failure notice (AC-19), when any. */
 	cleanupError?: string;
+	/** Present only when a resume finished this record. */
+	resume?: ResumeFacts;
 };
+
+/** Which planned seats a resume ran again, and which it kept as recorded. */
+export type ResumeFacts = { rerun: PlannedSeat[]; kept: PlannedSeat[] };
+
+/**
+ * States plainly that the record was finished by a resume and which seats
+ * ran when. Presentation only: it says nothing about the findings.
+ */
+export function renderResumeSection(resume: ResumeFacts | undefined): string[] {
+	if (resume === undefined) {
+		return [];
+	}
+	return [
+		"## Resumed run",
+		"",
+		"An earlier attempt at this run was interrupted. Seats that had settled",
+		"were kept as recorded; the rest ran again against the same head commit.",
+		"",
+		...resume.kept.map(
+			(seat) => `- Kept from the interrupted run: ${seatLabel(seat)}`,
+		),
+		...resume.rerun.map((seat) => `- Re-run: ${seatLabel(seat)}`),
+		"",
+	];
+}
 
 /** Presentation order for a seat's stated severity (AC-14). */
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -91,6 +118,7 @@ export function renderReport(input: RenderInput): string {
 		`Base OID: \`${input.meta.baseOid}\``,
 		`HEAD OID: \`${input.meta.headOid}\``,
 		"",
+		...renderResumeSection(input.resume),
 		...renderCleanupSection(input.cleanupError),
 		...renderLedgerNoticesSection(annotations.notices),
 		...renderFindingsSection(input.stamped, annotations.flags),

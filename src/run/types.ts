@@ -121,3 +121,23 @@ export type PanelRecordInput = {
 	scopingNote?: string;
 	seats: PlannedSeat[];
 };
+
+/**
+ * The durable resume plan of a review or audit record: what `resume` needs to
+ * finish it against the same snapshot with the same seats.
+ */
+export type RunPlan = {
+	version: 1;
+	kind: "review" | "audit";
+	runId: string;
+	baseRef: string;
+	/** Frozen base commit; for an audit, the snapshot commit. */
+	baseOid: string;
+	/** Frozen head commit the snapshot pins. */
+	headOid: string;
+	scopingNote?: string;
+	seatBudgetMs?: number;
+	/** Review only: prior records consulted for persistence flags. */
+	priorRecordPaths?: string[];
+	seats: PlannedSeat[];
+};

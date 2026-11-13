@@ -1,4 +1,5 @@
 import type { Finding } from "../seat/schema.js";
+import { type ResumeFacts, renderResumeSection } from "./render.js";
 import type { SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -18,12 +19,14 @@ export function renderAuditReport(input: {
 	stamped: StampedFinding[];
 	outcomes: SeatOutcomeFacts[];
 	cleanupError?: string;
+	resume?: ResumeFacts;
 }): string {
 	const lines = [
 		`# Repository audit ${input.runId}`,
 		"",
 		`Snapshot OID: \`${input.snapshotOid}\``,
 		"",
+		...renderResumeSection(input.resume),
 		...(input.cleanupError === undefined
 			? []
 			: [

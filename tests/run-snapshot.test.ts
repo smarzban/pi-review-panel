@@ -1,16 +1,22 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { pinSnapshot } from "../src/run/snapshot.js";
+import {
+	OWNERLESS_SNAPSHOT_MAX_AGE_MS,
+	pinSnapshot,
+	snapshotOwnerPath,
+	sweepStaleSnapshots,
+} from "../src/run/snapshot.js";
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -149,6 +155,149 @@ describe("pinSnapshot", () => {
 			expect(outcome.error).not.toBe("");
 		} finally {
 			removeFixture(repo, snapshot);
+		}
+	});
+});
+
+/** The pid of a process that has already exited. */
+function deadPid(): number {
+	const pid = spawnSync(process.execPath, ["-e", ""]).pid;
+	if (pid === undefined) {
+		throw new Error("could not spawn a short-lived child");
+	}
+	return pid;
+}
+
+function ownedBy(worktreePath: string, pid: number): void {
+	const ownerPath = snapshotOwnerPath(worktreePath);
+	const owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+	writeFileSync(ownerPath, `${JSON.stringify({ ...owner, pid })}\n`);
+}
+
+describe("sweepStaleSnapshots", () => {
+	it("pinSnapshot records its owner outside the worktree", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			const owner = JSON.parse(
+				readFileSync(snapshotOwnerPath(pin.worktreePath), "utf8"),
+			);
+			expect(owner.pid).toBe(process.pid);
+			expect(git(pin.worktreePath, ["status", "--porcelain"])).toBe("");
+			pin.release();
+			expect(existsSync(snapshotOwnerPath(pin.worktreePath))).toBe(false);
+		} finally {
+			removeFixture(repo, pin.worktreePath);
+		}
+	});
+
+	it("removes a snapshot left by a dead run and prunes its registration", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			ownedBy(pin.worktreePath, deadPid());
+			expect(worktreeCount(repo)).toBe(2);
+
+			const swept = sweepStaleSnapshots(repo);
+
+			expect(swept.removed).toEqual([pin.worktreePath]);
+			expect(existsSync(pin.worktreePath)).toBe(false);
+			expect(existsSync(snapshotOwnerPath(pin.worktreePath))).toBe(false);
+			expect(worktreeCount(repo)).toBe(1);
+		} finally {
+			removeFixture(repo, pin.worktreePath);
+		}
+	});
+
+	it("never removes a snapshot whose owner is alive", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			const swept = sweepStaleSnapshots(repo);
+
+			expect(swept.removed).toEqual([]);
+			expect(existsSync(pin.worktreePath)).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+			expect(pin.release()).toEqual({ ok: true });
+		} finally {
+			removeFixture(repo, pin.worktreePath);
+		}
+	});
+
+	it("runs at the next pin: the dead leftover goes, the new snapshot stays", () => {
+		const repo = createHostRepo();
+		const leftover = pinSnapshot(repo);
+		let next = "";
+		try {
+			ownedBy(leftover.worktreePath, deadPid());
+
+			const pin = pinSnapshot(repo);
+			next = pin.worktreePath;
+
+			expect(existsSync(leftover.worktreePath)).toBe(false);
+			expect(existsSync(next)).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+			expect(pin.release()).toEqual({ ok: true });
+		} finally {
+			removeFixture(repo, leftover.worktreePath, next);
+		}
+	});
+
+	it("leaves another repository's dead snapshot alone", () => {
+		const mine = createHostRepo();
+		const theirs = createHostRepo();
+		const pin = pinSnapshot(theirs);
+		try {
+			ownedBy(pin.worktreePath, deadPid());
+
+			sweepStaleSnapshots(mine);
+
+			expect(existsSync(pin.worktreePath)).toBe(true);
+			expect(worktreeCount(theirs)).toBe(2);
+		} finally {
+			removeFixture(mine, theirs, pin.worktreePath);
+			rmSync(snapshotOwnerPath(pin.worktreePath), { force: true });
+		}
+	});
+
+	it("removes an unregistered snapshot folder whose owner is dead", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			ownedBy(pin.worktreePath, deadPid());
+			rmSync(
+				path.join(repo, ".git", "worktrees", path.basename(pin.worktreePath)),
+				{ recursive: true, force: true },
+			);
+			expect(worktreeCount(repo)).toBe(1);
+
+			sweepStaleSnapshots(repo);
+
+			expect(existsSync(pin.worktreePath)).toBe(false);
+			expect(existsSync(snapshotOwnerPath(pin.worktreePath))).toBe(false);
+		} finally {
+			removeFixture(repo, pin.worktreePath);
+		}
+	});
+
+	it("keeps an ownerless snapshot until it is older than the fixed bound", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			// Snapshots made before owner files existed have none.
+			rmSync(snapshotOwnerPath(pin.worktreePath));
+
+			expect(sweepStaleSnapshots(repo).removed).toEqual([]);
+			expect(existsSync(pin.worktreePath)).toBe(true);
+
+			const old = new Date(Date.now() - OWNERLESS_SNAPSHOT_MAX_AGE_MS - 60_000);
+			utimesSync(pin.worktreePath, old, old);
+
+			expect(sweepStaleSnapshots(repo).removed).toEqual([pin.worktreePath]);
+			expect(existsSync(pin.worktreePath)).toBe(false);
+			expect(worktreeCount(repo)).toBe(1);
+		} finally {
+			removeFixture(repo, pin.worktreePath);
 		}
 	});
 });
