@@ -1,7 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+	closeSync,
+	constants,
+	fstatSync,
 	lstatSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	renameSync,
 	rmSync,
@@ -9,6 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import { validateFindings } from "../seat/schema.js";
 import { isProcessAlive } from "./liveness.js";
 import type {
 	PanelRecord,
@@ -41,6 +46,24 @@ export const SEATS_DIR = "seats";
 
 /** Held by the process running the record; removed when the run ends. */
 export const RUN_LOCK_FILE = "run.lock";
+
+/**
+ * Held for the instant it takes to replace a stale run lock, so two
+ * processes can never both replace it.
+ */
+export const RUN_LOCK_TAKEOVER_FILE = "run.lock.takeover";
+
+/** Every file a run writes at the record root. */
+export const RECORD_OUTPUT_FILES = [
+	PANEL_FILE,
+	PLAN_FILE,
+	EXECUTION_FILE,
+	COMPLETE_MARKER,
+	"report.md",
+	"findings.json",
+	"meta.json",
+	"cleanup-error.txt",
+] as const;
 
 /** Injectable clock: tests pin the run-id timestamp without sleeping. */
 export type ReserveOptions = {
@@ -132,7 +155,10 @@ export function writePanel(
 			: { scopingNote: input.scopingNote }),
 		seats: input.seats.map(projectSeat),
 	};
-	writeFileSync(record.panelPath, `${JSON.stringify(panelRecord, null, 2)}\n`);
+	writeRecordFile(
+		record.panelPath,
+		`${JSON.stringify(panelRecord, null, 2)}\n`,
+	);
 }
 
 /** Projects one planned seat to its durable 4-key panel row, byte-for-byte. */
@@ -165,7 +191,7 @@ export function writeExecution(
 				`${entry.seat.provider}/${entry.seat.model}/${entry.seat.lens}`,
 		)
 		.sort();
-	writeFileSync(
+	writeRecordFile(
 		record.executionPath,
 		`${JSON.stringify(
 			{
@@ -198,14 +224,22 @@ export function recordAt(recordPath: string): ReservedRecord {
 	};
 }
 
-/** Temp file then rename in the same folder: a reader sees all or nothing. */
-function writeAtomic(target: string, text: string): void {
+/**
+ * Writes one record file without ever following a symlink. The record lives
+ * in the reviewed repository, so anything already at `target` may have been
+ * planted: the text goes to a fresh temp file (created exclusively) that is
+ * then renamed over `target`. A rename replaces a symlink rather than writing
+ * through it, and a reader sees all or nothing. Anything at `target` that is
+ * neither a regular file nor a symlink (a folder, say) is refused.
+ */
+export function writeRecordFile(target: string, text: string): void {
+	assertReplaceable(target);
 	const temp = path.join(
 		path.dirname(target),
 		`.${path.basename(target)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`,
 	);
 	try {
-		writeFileSync(temp, text);
+		writeFileSync(temp, text, { flag: "wx" });
 		renameSync(temp, target);
 	} catch (error) {
 		rmSync(temp, { force: true });
@@ -213,9 +247,64 @@ function writeAtomic(target: string, text: string): void {
 	}
 }
 
+/** Refuses a record entry that a rename could not safely replace. */
+function assertReplaceable(target: string): void {
+	let stats: ReturnType<typeof lstatSync>;
+	try {
+		stats = lstatSync(target);
+	} catch (error) {
+		if (isNotFoundError(error)) {
+			return;
+		}
+		throw error;
+	}
+	if (!stats.isFile() && !stats.isSymbolicLink()) {
+		throw new Error(`${target} is not a regular file`);
+	}
+}
+
+/**
+ * Checks, before anything runs, that every file a run writes into an
+ * existing record can be written: nothing at those names is a folder or
+ * another non-file, and `seats` is a real folder when present. Symlinks pass,
+ * because {@link writeRecordFile} replaces them.
+ */
+export function assertRecordWritable(recordPath: string): void {
+	for (const name of [...RECORD_OUTPUT_FILES, RUN_LOCK_FILE]) {
+		assertReplaceable(path.join(recordPath, name));
+	}
+	const seats = path.join(recordPath, SEATS_DIR);
+	if (exists(seats) && !isRealDirectory(seats)) {
+		throw new Error(`${seats} is not a real directory`);
+	}
+}
+
+/**
+ * Reads a regular file without following a symlink at its last component.
+ * Returns undefined when it is missing, a symlink, or anything but a file.
+ */
+export function readRegularFile(target: string): string | undefined {
+	let fd: number;
+	try {
+		fd = openSync(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+	} catch {
+		return undefined;
+	}
+	try {
+		if (!fstatSync(fd).isFile()) {
+			return undefined;
+		}
+		return readFileSync(fd, "utf8");
+	} catch {
+		return undefined;
+	} finally {
+		closeSync(fd);
+	}
+}
+
 /** Persists the resume plan before the snapshot is pinned. */
 export function writePlan(record: ReservedRecord, plan: RunPlan): void {
-	writeAtomic(
+	writeRecordFile(
 		path.join(record.recordPath, PLAN_FILE),
 		`${JSON.stringify(plan, null, 2)}\n`,
 	);
@@ -228,98 +317,257 @@ export function writeSeatOutcome(
 	facts: SeatOutcomeFacts,
 ): void {
 	const dir = path.join(record.recordPath, SEATS_DIR);
-	mkdirSync(dir, { recursive: true });
-	writeAtomic(
+	ensureRealDirectory(dir);
+	writeRecordFile(
 		path.join(dir, `${index}.json`),
 		`${JSON.stringify({ index, facts }, null, 2)}\n`,
 	);
 }
 
 /**
- * Reads the settled seats of a record, by planned index. A file that is
- * missing, not a regular file, unreadable, or names a different seat than
- * the plan counts as unsettled, so resume runs that seat again.
+ * Reads the settled seats of a record, by planned index. The record lives in
+ * the reviewed repository, so each file is untrusted: one that is missing,
+ * not a regular file, unreadable, names a different seat than the plan, or
+ * does not match the outcome schema counts as unsettled, and resume runs that
+ * seat again. What is returned is rebuilt from the checked fields only.
  */
 export function readSettledOutcomes(
 	recordPath: string,
-	seats: ReadonlyArray<{ provider: string; model: string; lens: string }>,
+	seats: ReadonlyArray<{
+		rosterId: string;
+		provider: string;
+		model: string;
+		lens: string;
+	}>,
 ): Array<SeatOutcomeFacts | undefined> {
+	const dir = path.join(recordPath, SEATS_DIR);
+	if (!isRealDirectory(dir)) {
+		return seats.map(() => undefined);
+	}
 	return seats.map((seat, index) => {
-		const file = path.join(recordPath, SEATS_DIR, `${index}.json`);
+		const text = readRegularFile(path.join(dir, `${index}.json`));
+		if (text === undefined) {
+			return undefined;
+		}
 		try {
-			if (!lstatSync(file).isFile()) {
+			const parsed: unknown = JSON.parse(text);
+			if (!isRecord(parsed) || parsed.index !== index) {
 				return undefined;
 			}
-			const parsed = JSON.parse(readFileSync(file, "utf8")) as {
-				index?: unknown;
-				facts?: SeatOutcomeFacts;
-			};
-			const facts = parsed.facts;
-			if (
-				parsed.index !== index ||
-				facts === undefined ||
-				facts.seat?.provider !== seat.provider ||
-				facts.seat?.model !== seat.model ||
-				facts.seat?.lens !== seat.lens ||
-				(facts.outcome?.kind !== "voted" && facts.outcome?.kind !== "failed")
-			) {
-				return undefined;
-			}
-			return facts;
+			return settledFacts(parsed.facts, seat);
 		} catch {
 			return undefined;
 		}
 	});
 }
 
-/**
- * Takes the record's run lock for this process. A lock held by a live
- * process refuses; a lock left by an exited process is replaced. Returns the
- * release, which removes the lock only while this process still holds it.
- */
-export function acquireRunLock(recordPath: string): () => void {
-	const lockPath = path.join(recordPath, RUN_LOCK_FILE);
-	const body = `${JSON.stringify({ pid: process.pid })}\n`;
-	for (let attempt = 0; attempt < 2; attempt += 1) {
-		try {
-			writeFileSync(lockPath, body, { flag: "wx" });
-			return () => {
-				if (runLockHolder(recordPath) === process.pid) {
-					rmSync(lockPath, { force: true });
-				}
-			};
-		} catch (error) {
-			if (!isExistsError(error)) {
-				throw error;
-			}
-			const holder = runLockHolder(recordPath);
-			if (isProcessAlive(holder)) {
-				throw new Error(
-					`run "${path.basename(recordPath)}" is still in progress (pid ${holder})`,
-				);
-			}
-			rmSync(lockPath, { force: true });
-		}
+const FAILURE_CLASSES = new Set([
+	"spawn-failure",
+	"killed",
+	"provider-error",
+	"channel-error",
+	"no-submit",
+]);
+
+/** The checked copy of one seat file's facts, or undefined if any part is off. */
+function settledFacts(
+	value: unknown,
+	identity: { rosterId: string; provider: string; model: string; lens: string },
+): SeatOutcomeFacts | undefined {
+	if (!isRecord(value)) {
+		return undefined;
 	}
-	throw new Error(`run "${path.basename(recordPath)}" lock could not be taken`);
+	const { seat, replay, lifecycle, outcome } = value;
+	if (
+		!isRecord(seat) ||
+		seat.rosterId !== identity.rosterId ||
+		seat.provider !== identity.provider ||
+		seat.model !== identity.model ||
+		seat.lens !== identity.lens ||
+		typeof seat.lensPrompt !== "string" ||
+		(seat.extraExtensionPaths !== undefined &&
+			!isStringArray(seat.extraExtensionPaths)) ||
+		!isRecord(replay) ||
+		!isLifecycle(lifecycle) ||
+		!isRecord(outcome)
+	) {
+		return undefined;
+	}
+	let checkedOutcome: SeatOutcomeFacts["outcome"];
+	if (outcome.kind === "voted") {
+		const findings = validateFindings(outcome.findings);
+		if (!findings.ok) {
+			return undefined;
+		}
+		checkedOutcome = { kind: "voted", findings: findings.findings };
+	} else if (
+		outcome.kind === "failed" &&
+		typeof outcome.class === "string" &&
+		FAILURE_CLASSES.has(outcome.class) &&
+		typeof outcome.reason === "string"
+	) {
+		checkedOutcome = {
+			kind: "failed",
+			class: outcome.class as Extract<
+				SeatOutcomeFacts["outcome"],
+				{ kind: "failed" }
+			>["class"],
+			reason: outcome.reason,
+		};
+	} else {
+		return undefined;
+	}
+	return {
+		seat: {
+			rosterId: identity.rosterId,
+			provider: identity.provider,
+			model: identity.model,
+			lens: identity.lens,
+			lensPrompt: seat.lensPrompt,
+			...(seat.extraExtensionPaths === undefined
+				? {}
+				: { extraExtensionPaths: [...(seat.extraExtensionPaths as string[])] }),
+		},
+		replay: replay as SeatOutcomeFacts["replay"],
+		lifecycle: {
+			startedAtMs: lifecycle.startedAtMs,
+			settledAtMs: lifecycle.settledAtMs,
+			durationMs: lifecycle.durationMs,
+			attempts: lifecycle.attempts,
+			aborted: lifecycle.aborted,
+			tokens: { ...lifecycle.tokens },
+			cost: lifecycle.cost,
+		},
+		outcome: checkedOutcome,
+	};
 }
 
-/** The pid named by a record's run lock, when there is a readable one. */
-export function runLockHolder(recordPath: string): number | undefined {
-	try {
-		const parsed: unknown = JSON.parse(
-			readFileSync(path.join(recordPath, RUN_LOCK_FILE), "utf8"),
+function isLifecycle(value: unknown): value is SeatOutcomeFacts["lifecycle"] {
+	if (!isRecord(value) || !isRecord(value.tokens)) {
+		return false;
+	}
+	const { tokens } = value;
+	return (
+		isFiniteNumber(value.startedAtMs) &&
+		isFiniteNumber(value.settledAtMs) &&
+		isFiniteNumber(value.durationMs) &&
+		(value.attempts === 1 || value.attempts === 2) &&
+		typeof value.aborted === "boolean" &&
+		isFiniteNumber(value.cost) &&
+		isFiniteNumber(tokens.input) &&
+		isFiniteNumber(tokens.output) &&
+		isFiniteNumber(tokens.cacheRead) &&
+		isFiniteNumber(tokens.cacheWrite) &&
+		isFiniteNumber(tokens.total)
+	);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return (
+		Array.isArray(value) && value.every((entry) => typeof entry === "string")
+	);
+}
+
+/**
+ * Takes the record's run lock for this process. A lock held by a live
+ * process refuses. A lock left by an exited process is replaced, but only
+ * while holding the takeover file, which is created exclusively: of two
+ * processes that both judged the same lock stale, the second either fails to
+ * take the takeover file or, once it has it, finds the first one's live lock
+ * and refuses. Nothing ever removes a lock it has not re-checked under the
+ * takeover file. Returns the release, which removes the lock only while it is
+ * still this call's own.
+ */
+export function acquireRunLock(recordPath: string): () => void {
+	const runId = path.basename(recordPath);
+	const lockPath = path.join(recordPath, RUN_LOCK_FILE);
+	const token = randomBytes(8).toString("hex");
+	const body = `${JSON.stringify({ pid: process.pid, token })}\n`;
+	const release = () => {
+		const held = readRegularFile(lockPath);
+		if (held !== undefined && lockToken(held) === token) {
+			rmSync(lockPath, { force: true });
+		}
+	};
+	if (createExclusive(lockPath, body)) {
+		return release;
+	}
+	const holder = runLockHolder(recordPath);
+	if (isProcessAlive(holder)) {
+		throw new Error(`run "${runId}" is still in progress (pid ${holder})`);
+	}
+	const takeoverPath = path.join(recordPath, RUN_LOCK_TAKEOVER_FILE);
+	if (
+		!createExclusive(takeoverPath, `${JSON.stringify({ pid: process.pid })}\n`)
+	) {
+		throw new Error(
+			`run "${runId}" lock is being taken over by another process; if no review_panel run is active, delete ${takeoverPath} and try again`,
 		);
-		if (
-			typeof parsed === "object" &&
-			parsed !== null &&
-			"pid" in parsed &&
-			typeof parsed.pid === "number"
-		) {
+	}
+	try {
+		// Judge again now that no one else can replace the lock.
+		const current = runLockHolder(recordPath);
+		if (isProcessAlive(current)) {
+			throw new Error(`run "${runId}" is still in progress (pid ${current})`);
+		}
+		rmSync(lockPath, { force: true });
+		if (!createExclusive(lockPath, body)) {
+			throw new Error(`run "${runId}" lock could not be taken`);
+		}
+		return release;
+	} finally {
+		rmSync(takeoverPath, { force: true });
+	}
+}
+
+/** Creates `target` only if nothing (not even a dangling symlink) is there. */
+function createExclusive(target: string, text: string): boolean {
+	try {
+		writeFileSync(target, text, { flag: "wx" });
+		return true;
+	} catch (error) {
+		if (isExistsError(error)) {
+			return false;
+		}
+		throw error;
+	}
+}
+
+function lockToken(text: string): string | undefined {
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return isRecord(parsed) && typeof parsed.token === "string"
+			? parsed.token
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The pid named by a record's run lock, when there is a readable one. A lock
+ * that is a symlink is never read through and names no one.
+ */
+export function runLockHolder(recordPath: string): number | undefined {
+	const text = readRegularFile(path.join(recordPath, RUN_LOCK_FILE));
+	if (text === undefined) {
+		return undefined;
+	}
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (isRecord(parsed) && typeof parsed.pid === "number") {
 			return parsed.pid;
 		}
 	} catch {
-		// No lock, or an unreadable one.
+		// An unreadable lock names no one.
 	}
 	return undefined;
 }
@@ -329,7 +577,7 @@ export function runLockHolder(recordPath: string): number | undefined {
  * nothing else writes it, so an aborted run stays unmarked (AC-31).
  */
 export function complete(record: ReservedRecord): void {
-	writeFileSync(path.join(record.recordPath, COMPLETE_MARKER), "");
+	writeRecordFile(path.join(record.recordPath, COMPLETE_MARKER), "");
 }
 
 /**
@@ -411,7 +659,7 @@ function isExistsError(error: unknown): boolean {
  * refuses when it is a symlink or a non-directory. Not recursive — the
  * parent must already exist (repoDir for `.review-panel`, `.review-panel` for `runs`).
  */
-function ensureRealDirectory(dirPath: string): void {
+export function ensureRealDirectory(dirPath: string): void {
 	try {
 		const stats = lstatSync(dirPath);
 		if (stats.isSymbolicLink()) {
@@ -439,4 +687,38 @@ function isNotFoundError(error: unknown): boolean {
 		"code" in error &&
 		error.code === "ENOENT"
 	);
+}
+
+/**
+ * Refuses a record folder component that is a symlink or not a folder, the
+ * same rule {@link reserve} applies when it creates them. Unlike reserve, it
+ * never creates anything.
+ */
+export function assertRealDirectory(dirPath: string): void {
+	const stats = lstatSync(dirPath);
+	if (stats.isSymbolicLink()) {
+		throw new Error(
+			`${dirPath} is a symlink; run records must stay inside the repository`,
+		);
+	}
+	if (!stats.isDirectory()) {
+		throw new Error(`${dirPath} exists and is not a directory`);
+	}
+}
+
+function isRealDirectory(target: string): boolean {
+	try {
+		return lstatSync(target).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function exists(target: string): boolean {
+	try {
+		lstatSync(target);
+		return true;
+	} catch {
+		return false;
+	}
 }

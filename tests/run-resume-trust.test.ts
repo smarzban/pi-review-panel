@@ -257,8 +257,9 @@ describe("resume never follows a symlink in the record", () => {
 				"execution.json",
 				"meta.json",
 				PANEL_FILE,
-				COMPLETE_MARKER,
 			];
+			// COMPLETE is not planted: any entry at that name, symlink or not,
+			// makes resume refuse once it holds the lock.
 			for (const name of outputs) {
 				const victim = path.join(outside, name);
 				writeFileSync(victim, "victim\n");

@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";
@@ -12,6 +11,7 @@ import {
 	writeExecution,
 	writePanel,
 	writePlan,
+	writeRecordFile,
 	writeSeatOutcome,
 } from "./record.js";
 import {
@@ -68,6 +68,13 @@ export type ResumeState = {
 	settled: Array<SeatOutcomeFacts | undefined>;
 	/** Planned indexes whose seat could not be rebuilt: lost coverage. */
 	lost: number[];
+	/**
+	 * The record's run lock, already taken by the caller (resume takes it
+	 * before re-reading the record). The run releases it when it ends.
+	 */
+	heldLock?: () => void;
+	/** The record named a scoping note that resume did not pass to the seats. */
+	scopingNoteDropped?: boolean;
 };
 
 export type RunReviewOptions = {
@@ -161,7 +168,7 @@ export async function executeReview(
 	const { baseOid, headOid } = config;
 	const pin = options.pinSnapshot ?? pinSnapshot;
 	const schedule = options.scheduleSeats ?? scheduleSeats;
-	const releaseLock = acquireRunLock(record.recordPath);
+	const releaseLock = resume?.heldLock ?? acquireRunLock(record.recordPath);
 	const settled =
 		resume?.settled ??
 		config.seats.map((): SeatOutcomeFacts | undefined => undefined);
@@ -270,7 +277,7 @@ export async function executeReview(
 			headOid,
 		};
 		// Durable cleanup notice BEFORE COMPLETE (AC-19).
-		writeFileSync(
+		writeRecordFile(
 			record.reportPath,
 			renderReport({
 				meta,
@@ -281,17 +288,22 @@ export async function executeReview(
 				...(resumedSeats === undefined
 					? {}
 					: {
-							resume: resumeSummary(config.seats, missing, resume?.lost ?? []),
+							resume: resumeSummary(
+								config.seats,
+								missing,
+								resume?.lost ?? [],
+								resume?.scopingNoteDropped === true,
+							),
 						}),
 			}),
 		);
-		writeFileSync(record.findingsPath, renderFindingsJson(stamped));
-		writeFileSync(
+		writeRecordFile(record.findingsPath, renderFindingsJson(stamped));
+		writeRecordFile(
 			path.join(record.recordPath, "meta.json"),
 			`${JSON.stringify(meta, null, 2)}\n`,
 		);
 		if (cleanupError !== undefined) {
-			writeFileSync(
+			writeRecordFile(
 				path.join(record.recordPath, CLEANUP_ERROR_FILE),
 				`${cleanupError}\n`,
 			);
@@ -358,8 +370,10 @@ export function resumeSummary(
 	seats: readonly PlannedSeat[],
 	missing: readonly number[],
 	lost: readonly number[],
+	scopingNoteDropped = false,
 ): ResumeFacts {
 	return {
+		scopingNoteDropped,
 		rerun: missing.map((index) => seats[index]),
 		kept: seats.filter(
 			(_, index) => !missing.includes(index) && !lost.includes(index),

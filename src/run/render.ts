@@ -67,7 +67,13 @@ export type ResumeFacts = {
 	rerun: PlannedSeat[];
 	kept: PlannedSeat[];
 	lost: PlannedSeat[];
+	/** The record named a scoping note that the re-run seats did not get. */
+	scopingNoteDropped?: boolean;
 };
+
+/** Said wherever a resume ran seats without the record's scoping note. */
+export const SCOPING_NOTE_DROPPED =
+	"The interrupted run had a scoping note. It is stored in the record, so the re-run seats did not get it.";
 
 /**
  * States plainly that the record was finished by a resume and which seats
@@ -92,6 +98,7 @@ export function renderResumeSection(resume: ResumeFacts | undefined): string[] {
 				`- Not run, could not be rebuilt from the owner config: ${seatLabel(seat)}`,
 		),
 		"",
+		...(resume.scopingNoteDropped === true ? [SCOPING_NOTE_DROPPED, ""] : []),
 	];
 }
 

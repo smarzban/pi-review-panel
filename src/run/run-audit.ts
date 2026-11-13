@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";
@@ -10,6 +9,7 @@ import {
 	writeExecution,
 	writePanel,
 	writePlan,
+	writeRecordFile,
 	writeSeatOutcome,
 } from "./record.js";
 import { renderAuditFindingsJson, renderAuditReport } from "./render-audit.js";
@@ -131,7 +131,7 @@ export async function executeAudit(
 	const { revision } = input;
 	const pin = options.pinSnapshot ?? pinSnapshot;
 	const schedule = options.scheduleSeats ?? scheduleSeats;
-	const releaseLock = acquireRunLock(record.recordPath);
+	const releaseLock = resume?.heldLock ?? acquireRunLock(record.recordPath);
 	const settled =
 		resume?.settled ??
 		input.seats.map((): SeatOutcomeFacts | undefined => undefined);
@@ -227,7 +227,7 @@ export async function executeAudit(
 		const cleanupError =
 			release?.ok === false ? cleanupMessage(release.error) : undefined;
 		stage = "render";
-		writeFileSync(
+		writeRecordFile(
 			record.reportPath,
 			renderAuditReport({
 				runId: record.runId,
@@ -238,17 +238,22 @@ export async function executeAudit(
 				...(resumedSeats === undefined
 					? {}
 					: {
-							resume: resumeSummary(input.seats, missing, resume?.lost ?? []),
+							resume: resumeSummary(
+								input.seats,
+								missing,
+								resume?.lost ?? [],
+								resume?.scopingNoteDropped === true,
+							),
 						}),
 			}),
 		);
-		writeFileSync(record.findingsPath, renderAuditFindingsJson(stamped));
-		writeFileSync(
+		writeRecordFile(record.findingsPath, renderAuditFindingsJson(stamped));
+		writeRecordFile(
 			path.join(record.recordPath, "meta.json"),
 			`${JSON.stringify({ runId: record.runId, snapshotOid: revision, kind: "audit" }, null, 2)}\n`,
 		);
 		if (cleanupError !== undefined) {
-			writeFileSync(
+			writeRecordFile(
 				path.join(record.recordPath, AUDIT_CLEANUP_ERROR_FILE),
 				`${cleanupError}\n`,
 			);

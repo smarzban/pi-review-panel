@@ -16,6 +16,7 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import { SCOPING_NOTE_DROPPED } from "../run/render.js";
 import {
 	loadResumable,
 	type ResumableRun,
@@ -741,6 +742,14 @@ export function createReviewPanelTool(
 					args.priorRunId,
 					"priorRunId",
 				);
+				const report = await diagnose({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				if (!report.ready) {
+					throw new Error(renderReadiness(report));
+				}
 				// Seats, lenses and commits all come from the record itself.
 				const run = loadResumable(repoDir, priorRunId);
 				// Models, extension paths and prompts come from the owner config and
@@ -759,18 +768,21 @@ export function createReviewPanelTool(
 					run.plan.kind === "audit"
 						? progressFromAuditEvent
 						: progressFromReviewEvent;
-				emitProgress(onUpdate, {
-					phase: run.plan.kind,
-					event: "started",
-					elapsedMs: Date.now() - startedAt,
-					total: run.missing.length,
-					completed: 0,
-					active: 0,
-					roster,
-				});
 				const result = await resume(run, {
 					config,
 					...(signal === undefined ? {} : { abortSignal: signal }),
+					// Started once the lock is held and the record re-read, so the
+					// count is what will actually run.
+					onStart: ({ toRun }) =>
+						emitProgress(onUpdate, {
+							phase: run.plan.kind,
+							event: "started",
+							elapsedMs: Date.now() - startedAt,
+							total: toRun,
+							completed: 0,
+							active: 0,
+							roster,
+						}),
 					onProgress: (event) =>
 						emitProgress(onUpdate, {
 							...progressOf(event, Date.now() - startedAt),
@@ -778,11 +790,19 @@ export function createReviewPanelTool(
 						}),
 				});
 				const resumed = result.resumedSeats;
-				const headline = `Resumed ${run.runId}: ran ${resumed.length} of ${panel.length} planned seats again${
-					resumed.length === 0
-						? ""
-						: ` (${resumed.map((seat) => `${seat.rosterId}/${seat.lens}`).join(", ")})`
-				}; kept ${panel.length - resumed.length} as recorded.`;
+				const lost = result.lostSeats;
+				const label = (seats: PlannedSeat[]) =>
+					seats.map((seat) => `${seat.rosterId}/${seat.lens}`).join(", ");
+				const headline = [
+					`Resumed ${run.runId}: ran ${resumed.length} of ${panel.length} planned seats again${
+						resumed.length === 0 ? "" : ` (${label(resumed)})`
+					}; kept ${panel.length - resumed.length - lost.length} as recorded${
+						lost.length === 0
+							? ""
+							: `; lost ${lost.length} that could not be rebuilt from the owner config (${label(lost)})`
+					}.`,
+					...(result.scopingNoteDropped ? [SCOPING_NOTE_DROPPED] : []),
+				].join("\n");
 				let body: string;
 				if (run.plan.kind === "audit") {
 					body = renderAuditResult({
@@ -803,9 +823,6 @@ export function createReviewPanelTool(
 						panel,
 						result,
 						suggestions,
-						...(run.plan.scopingNote === undefined
-							? {}
-							: { scopingNote: run.plan.scopingNote }),
 						...(findings === undefined ? {} : { findings }),
 					});
 				}

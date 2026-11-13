@@ -1,17 +1,30 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import path from "node:path";
 
+import {
+	MAX_AUDIT_SEATS,
+	MAX_AUDIT_SEATS_PER_PASS,
+} from "../config/audit-panel.js";
 import { loadAuditPassTable } from "../config/audit-passes.js";
-import { loadLensTable } from "../config/lenses.js";
+import {
+	HOLISTIC_LENS,
+	loadLensTable,
+	SPECIALIST_SEAT_CAP,
+} from "../config/lenses.js";
+import { MAX_REVIEW_SEATS } from "../config/panel.js";
 import type { Config } from "../config/schema.js";
 import { isProcessAlive } from "./liveness.js";
 import { discoverPriorRecords } from "./prior-records.js";
 import { resolvePriorRunId } from "./prior-run.js";
 import {
+	acquireRunLock,
+	assertRealDirectory,
+	assertRecordWritable,
 	COMPLETE_MARKER,
 	digestBaseRef,
 	PLAN_FILE,
+	readRegularFile,
 	readSettledOutcomes,
 	recordAt,
 	runLockHolder,
@@ -46,6 +59,10 @@ export type ResumeResult = (RunReviewResult | RunAuditResult) & {
 	runId: string;
 	plan: RunPlan;
 	resumedSeats: PlannedSeat[];
+	/** Planned seats resume could not rebuild from the owner config: lost coverage. */
+	lostSeats: PlannedSeat[];
+	/** True when the record named a scoping note, which resume does not pass on. */
+	scopingNoteDropped: boolean;
 };
 
 export type ResumeOptions = RunReviewOptions &
@@ -58,6 +75,11 @@ export type ResumeOptions = RunReviewOptions &
 		/** Package prompt tables; injectable for tests only. */
 		lensTable?: Map<string, string>;
 		passTable?: Map<string, string>;
+		/**
+		 * Called once the run lock is held and the record re-read, with the
+		 * number of seats about to run, before any seat starts.
+		 */
+		onStart?: (start: { toRun: number }) => void;
 	};
 
 const VERIFY_RUN_SUFFIX = `-${sanitizeBaseRef("verify")}-${digestBaseRef("verify")}`;
@@ -75,6 +97,21 @@ export function loadResumable(
 	repoDir: string,
 	priorRunId: string,
 ): ResumableRun {
+	// A symlink at either folder would take reads and writes out of the
+	// repository; reserve() refuses the same.
+	for (const dir of [
+		path.join(repoDir, ".review-panel"),
+		path.join(repoDir, ".review-panel", "runs"),
+	]) {
+		try {
+			assertRealDirectory(dir);
+		} catch (error) {
+			if (isNotFound(error)) {
+				break;
+			}
+			refuse(error instanceof Error ? error.message : String(error));
+		}
+	}
 	let runId: string;
 	try {
 		runId = resolvePriorRunId(repoDir, priorRunId);
@@ -99,6 +136,12 @@ export function loadResumable(
 		);
 	}
 	const plan = readPlan(recordPath, runId);
+	checkPanelCaps(plan, runId);
+	try {
+		assertRecordWritable(recordPath);
+	} catch (error) {
+		refuse(error instanceof Error ? error.message : String(error));
+	}
 	const holder = runLockHolder(recordPath);
 	if (holder !== undefined && isProcessAlive(holder)) {
 		refuse(`run "${runId}" is still in progress (pid ${holder})`);
@@ -119,9 +162,12 @@ export function loadResumable(
 }
 
 /**
- * Finishes an interrupted record in place: pins the recorded head commit,
- * runs only the unsettled seats from the record's own panel, and writes the
- * final artifacts as a first run would.
+ * Finishes an interrupted record in place: takes the run lock, re-reads the
+ * record under it, pins the recorded head commit, runs only the unsettled
+ * seats from the record's own panel, and writes the final artifacts as a
+ * first run would. The record's scoping note is not passed to the seats: the
+ * record lives in the reviewed repository, and resume takes no prompt text
+ * from it.
  */
 export async function resumeRun(
 	run: ResumableRun,
@@ -129,87 +175,152 @@ export async function resumeRun(
 ): Promise<ResumeResult> {
 	const record = recordAt(run.recordPath);
 	const { plan } = run;
-	const { config, lensTable, passTable, ...runOptions } = options;
-	const prompts =
-		plan.kind === "review"
-			? (lensTable ?? loadLensTable())
-			: (passTable ?? loadAuditPassTable());
-	const rows = new Map(config.roster.map((row) => [row.id, row]));
-	const settled = [...run.settled];
-	const lost: number[] = [];
-	const seats = plan.seats.map((identity, index): PlannedSeat => {
-		const row = rows.get(identity.rosterId);
-		const prompt = prompts.get(identity.lens);
-		// Only the four identity keys cross from the record; anything else a
-		// planted plan carries is dropped here.
-		const seat: PlannedSeat = {
-			rosterId: identity.rosterId,
-			provider: identity.provider,
-			model: identity.model,
-			lens: identity.lens,
-			lensPrompt: prompt ?? "",
-			...(row?.extraExtensionPaths === undefined
-				? {}
-				: { extraExtensionPaths: [...row.extraExtensionPaths] }),
-		};
-		const reason =
-			row === undefined
-				? `roster row "${identity.rosterId}" is not in the owner config`
-				: row.provider !== identity.provider || row.model !== identity.model
-					? `roster row "${identity.rosterId}" is now ${row.provider}/${row.model}, not ${identity.provider}/${identity.model}`
-					: prompt === undefined
-						? `"${identity.lens}" is not a ${plan.kind === "review" ? "lens" : "audit pass"} this package ships`
-						: undefined;
-		if (settled[index] === undefined && reason !== undefined) {
-			lost.push(index);
-			settled[index] = unrecoverable(seat, plan, reason);
+	const { config, lensTable, passTable, onStart, ...runOptions } = options;
+	let releaseLock: (() => void) | undefined;
+	try {
+		releaseLock = acquireRunLock(run.recordPath);
+	} catch (error) {
+		refuse(error instanceof Error ? error.message : String(error));
+	}
+	let handedOver = false;
+	try {
+		// Another process may have settled seats, or finished the record,
+		// between loading it and taking the lock.
+		if (exists(path.join(run.recordPath, COMPLETE_MARKER))) {
+			refuse(
+				`run "${run.runId}" is already complete; there is nothing to resume`,
+			);
 		}
-		return seat;
-	});
-	const resume = { settled, lost };
-	const seatBudgetMs = config.defaults.seatBudgetMs;
-	const result =
-		plan.kind === "review"
-			? await executeReview(
-					record,
-					{
-						repoDir: run.repoDir,
-						baseRef: plan.baseRef,
-						baseOid: plan.baseOid,
-						headOid: plan.headOid,
-						seats,
-						...(plan.scopingNote === undefined
-							? {}
-							: { scopingNote: plan.scopingNote }),
-						...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
-						priorRecordPaths: discoverPriorRecords(run.repoDir).map(
-							(entry) => entry.path,
-						),
-					},
-					runOptions,
-					resume,
-				)
-			: await executeAudit(
-					record,
-					{
-						repoDir: run.repoDir,
-						revision: plan.headOid,
-						seats,
-						...(plan.scopingNote === undefined
-							? {}
-							: { scopingNote: plan.scopingNote }),
-						...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
-					},
-					runOptions,
-					resume,
-				);
-	return {
-		...result,
-		kind: plan.kind,
-		runId: run.runId,
-		plan,
-		resumedSeats: result.resumedSeats ?? [],
-	};
+		const prompts =
+			plan.kind === "review"
+				? (lensTable ?? loadLensTable())
+				: (passTable ?? loadAuditPassTable());
+		const rows = new Map(config.roster.map((row) => [row.id, row]));
+		const settled = readSettledOutcomes(run.recordPath, plan.seats);
+		const lost: number[] = [];
+		const seats = plan.seats.map((identity, index): PlannedSeat => {
+			const row = rows.get(identity.rosterId);
+			const prompt = prompts.get(identity.lens);
+			// Only the four identity keys cross from the record; anything else a
+			// planted plan carries is dropped here.
+			const seat: PlannedSeat = {
+				rosterId: identity.rosterId,
+				provider: identity.provider,
+				model: identity.model,
+				lens: identity.lens,
+				lensPrompt: prompt ?? "",
+				...(row?.extraExtensionPaths === undefined
+					? {}
+					: { extraExtensionPaths: [...row.extraExtensionPaths] }),
+			};
+			const reason =
+				row === undefined
+					? `roster row "${identity.rosterId}" is not in the owner config`
+					: row.provider !== identity.provider || row.model !== identity.model
+						? `roster row "${identity.rosterId}" is now ${row.provider}/${row.model}, not ${identity.provider}/${identity.model}`
+						: prompt === undefined
+							? `"${identity.lens}" is not a ${plan.kind === "review" ? "lens" : "audit pass"} this package ships`
+							: undefined;
+			if (settled[index] === undefined && reason !== undefined) {
+				lost.push(index);
+				settled[index] = unrecoverable(seat, plan, reason);
+			}
+			return seat;
+		});
+		const scopingNoteDropped = plan.scopingNote !== undefined;
+		const resume = {
+			settled,
+			lost,
+			heldLock: releaseLock,
+			scopingNoteDropped,
+		};
+		const seatBudgetMs = config.defaults.seatBudgetMs;
+		onStart?.({
+			toRun: settled.filter((facts) => facts === undefined).length,
+		});
+		handedOver = true;
+		const result =
+			plan.kind === "review"
+				? await executeReview(
+						record,
+						{
+							repoDir: run.repoDir,
+							baseRef: plan.baseRef,
+							baseOid: plan.baseOid,
+							headOid: plan.headOid,
+							seats,
+							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
+							priorRecordPaths: discoverPriorRecords(run.repoDir).map(
+								(entry) => entry.path,
+							),
+						},
+						runOptions,
+						resume,
+					)
+				: await executeAudit(
+						record,
+						{
+							repoDir: run.repoDir,
+							revision: plan.headOid,
+							seats,
+							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
+						},
+						runOptions,
+						resume,
+					);
+		return {
+			...result,
+			kind: plan.kind,
+			runId: run.runId,
+			plan,
+			resumedSeats: result.resumedSeats ?? [],
+			lostSeats: lost.map((index) => seats[index] as PlannedSeat),
+			scopingNoteDropped,
+		};
+	} finally {
+		// Once handed over, the run releases the lock itself.
+		if (!handedOver) {
+			releaseLock?.();
+		}
+	}
+}
+
+/**
+ * Refuses a plan the panel planner could never have made: more seats than a
+ * panel may have, one lens or pass on more seats than its cap, or one seat
+ * identity twice. Settled and unrebuildable seats count too, so a planted
+ * plan cannot spend past the owner's limits.
+ */
+function checkPanelCaps(plan: RunPlan, runId: string): void {
+	const review = plan.kind === "review";
+	const maxSeats = review ? MAX_REVIEW_SEATS : MAX_AUDIT_SEATS;
+	if (plan.seats.length > maxSeats) {
+		refuse(
+			`run "${runId}" plans ${plan.seats.length} seats; a${review ? " review panel" : "n audit"} has at most ${maxSeats}`,
+		);
+	}
+	const identities = new Set<string>();
+	const perLens = new Map<string, number>();
+	for (const seat of plan.seats) {
+		const identity = JSON.stringify([seat.provider, seat.model, seat.lens]);
+		if (identities.has(identity)) {
+			refuse(`run "${runId}" plans the same seat twice`);
+		}
+		identities.add(identity);
+		perLens.set(seat.lens, (perLens.get(seat.lens) ?? 0) + 1);
+	}
+	for (const [lens, count] of perLens) {
+		if (review && lens !== HOLISTIC_LENS && count > SPECIALIST_SEAT_CAP) {
+			refuse(
+				`run "${runId}" plans lens "${lens}" on ${count} seats; at most ${SPECIALIST_SEAT_CAP}`,
+			);
+		}
+		if (!review && count > MAX_AUDIT_SEATS_PER_PASS) {
+			refuse(
+				`run "${runId}" plans pass "${lens}" on ${count} seats; at most ${MAX_AUDIT_SEATS_PER_PASS}`,
+			);
+		}
+	}
 }
 
 /** A failed outcome for a seat resume could not rebuild; it never runs. */
@@ -247,15 +358,15 @@ function unrecoverable(
 }
 
 function readPlan(recordPath: string, runId: string): RunPlan {
-	const planPath = path.join(recordPath, PLAN_FILE);
-	if (!isRealFile(planPath)) {
+	const text = readRegularFile(path.join(recordPath, PLAN_FILE));
+	if (text === undefined) {
 		refuse(
-			`run "${runId}" has no resume plan; it was started before runs became resumable, or it is not a review or audit run`,
+			`run "${runId}" has no resume plan, so it cannot be resumed: it stopped before its plan was written, when no seat had run yet, or a version without resume started it. Start a new run instead.`,
 		);
 	}
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(readFileSync(planPath, "utf8"));
+		parsed = JSON.parse(text);
 	} catch {
 		refuse(`run "${runId}" has an unreadable resume plan`);
 	}
@@ -276,6 +387,7 @@ function isRunPlan(value: unknown): value is RunPlan {
 		typeof plan.baseRef === "string" &&
 		isOid(plan.baseOid) &&
 		isOid(plan.headOid) &&
+		(plan.scopingNote === undefined || typeof plan.scopingNote === "string") &&
 		Array.isArray(plan.seats) &&
 		plan.seats.length > 0 &&
 		plan.seats.every(
@@ -317,14 +429,6 @@ function isRealDirectory(target: string): boolean {
 	}
 }
 
-function isRealFile(target: string): boolean {
-	try {
-		return lstatSync(target).isFile();
-	} catch {
-		return false;
-	}
-}
-
 function exists(target: string): boolean {
 	try {
 		lstatSync(target);
@@ -332,4 +436,13 @@ function exists(target: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function isNotFound(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "ENOENT"
+	);
 }
