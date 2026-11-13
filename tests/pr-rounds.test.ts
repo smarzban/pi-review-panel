@@ -23,9 +23,13 @@ import { validateConfig } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
-import type { GhRunner } from "../src/tool/closeout-post.js";
 import { createReviewPanelTool } from "../src/tool/review-panel.js";
-import { GITHUB_COMMENT_LIMIT, githubSafe } from "../src/tool/round-post.js";
+import {
+	GITHUB_COMMENT_LIMIT,
+	githubSafe,
+	type RoundGhRunner as GhRunner,
+	ROUND_POSTED_MARKER,
+} from "../src/tool/round-post.js";
 import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 /**
@@ -84,12 +88,26 @@ type GhScript = {
 	/** Throw this from every call. */
 	fail?: Error;
 	login?: string;
+	/** Raw stdout for the comment listing, such as several pages. */
+	commentsRaw?: string;
+	/** What `repos/<repo>/pulls/<n>` answers, by PR number; absent is a 404. */
+	prs?: Record<number, unknown>;
+	/** Throw this from the Nth POST (1-based). */
+	failPost?: { at: number; error: Error };
+	/** The html_url a new comment answers with. */
+	htmlUrl?: string;
+	/** Answer each call after this many milliseconds. */
+	delayMs?: number;
 };
 
 function fakeGh(script: GhScript = {}): { calls: GhCall[]; runGh: GhRunner } {
 	const calls: GhCall[] = [];
 	let nextId = 100;
-	const runGh: GhRunner = (args, options) => {
+	let postCount = 0;
+	const answer = (
+		args: readonly string[],
+		options?: { cwd?: string; input?: string },
+	) => {
 		calls.push({
 			args: [...args],
 			...(options?.input === undefined ? {} : { input: options.input }),
@@ -108,19 +126,49 @@ function fakeGh(script: GhScript = {}): { calls: GhCall[]; runGh: GhRunner } {
 		if (/commits\/[0-9a-f]+\/pulls/.test(joined)) {
 			return JSON.stringify(script.pulls ?? []);
 		}
+		const onePr = /repos\/[\w.-]+\/[\w.-]+\/pulls\/(\d+)$/.exec(joined);
+		if (onePr !== null) {
+			const row = script.prs?.[Number(onePr[1])];
+			if (row === undefined) {
+				throw Object.assign(new Error("Command failed: gh api"), {
+					stderr: "gh: Not Found (HTTP 404)\n",
+				});
+			}
+			return JSON.stringify(row);
+		}
 		if (/issues\/\d+\/comments/.test(joined) && joined.includes("POST")) {
+			postCount += 1;
+			if (script.failPost !== undefined && script.failPost.at === postCount) {
+				throw script.failPost.error;
+			}
 			nextId += 1;
 			const pr = /issues\/(\d+)\//.exec(joined)?.[1];
 			return JSON.stringify({
 				id: nextId,
-				html_url: `https://github.com/${REPO_SLUG}/pull/${pr}#issuecomment-${nextId}`,
+				html_url:
+					script.htmlUrl ??
+					`https://github.com/${REPO_SLUG}/pull/${pr}#issuecomment-${nextId}`,
 			});
 		}
 		if (/issues\/\d+\/comments/.test(joined)) {
-			return JSON.stringify(script.comments ?? []);
+			return script.commentsRaw ?? JSON.stringify(script.comments ?? []);
 		}
 		throw new Error(`unexpected gh ${joined}`);
 	};
+	const delay = script.delayMs;
+	const runGh: GhRunner =
+		delay === undefined
+			? answer
+			: (args, options) =>
+					new Promise<string>((resolve, reject) => {
+						setTimeout(() => {
+							try {
+								resolve(answer(args, options));
+							} catch (error) {
+								reject(error);
+							}
+						}, delay);
+					});
 	return { calls, runGh };
 }
 
@@ -251,17 +299,25 @@ function writeVerifyRecord(
 	repo: string,
 	runId: string,
 	priorRunId: string,
+	options: { posted?: boolean; kind?: string } = {},
 ): void {
 	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
 	writeFileSync(
 		path.join(recordPath, "meta.json"),
-		JSON.stringify({ runId, kind: "verify", priorRunId }),
+		JSON.stringify({ runId, kind: options.kind ?? "verify", priorRunId }),
 	);
 	writeFileSync(
 		path.join(recordPath, "verification.json"),
 		JSON.stringify({ priorRunId, keptFindingIds: [], outcomes: [] }),
 	);
+	if (options.posted !== false) {
+		// An earlier verify whose comment reached the PR.
+		writeFileSync(
+			path.join(recordPath, ROUND_POSTED_MARKER),
+			JSON.stringify({ pr: 12 }),
+		);
+	}
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
 }
 
@@ -388,9 +444,9 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 		});
 	});
 
-	it("posts to an explicit pr without looking one up", async () => {
-		await withRepository(async (repo) => {
-			const gh = fakeGh({ pulls: [] });
+	it("posts to an explicit pr after checking it is open at this head, without the head lookup", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [], prs: { 31: openPr(31, head) } });
 			const result = await reviewAction(
 				{ repoDir: repo, base: "main~1", head: "main", pr: 31 },
 				{ deps: deps(gh.runGh, { runReview: reviewRun(repo, "r-1", []) }) },
@@ -399,8 +455,13 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 				`repos/${REPO_SLUG}/issues/31/comments`,
 			);
 			expect(
-				gh.calls.some((call) => call.args.join(" ").includes("/pulls")),
+				gh.calls.some((call) => call.args.join(" ").includes("/commits/")),
 			).toBe(false);
+			expect(
+				gh.calls.some((call) =>
+					call.args.includes(`repos/${REPO_SLUG}/pulls/31`),
+				),
+			).toBe(true);
 			expect(textOf(result)).toContain("PR comment: posted to #31");
 		});
 	});
@@ -637,8 +698,11 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			expect(body).toMatch(/R-1 .*new crash on empty input/);
 			expect(body).not.toContain(repo);
 			expect(textOf(result)).toContain("PR comment: posted to #12");
-			// Not every kept id is resolved: no close-out.
-			expect(textOf(result)).not.toContain("PR close-out");
+			// Not every kept id is resolved: no close-out, and the reply says why.
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (F-2 is still present; 1 regression)",
+			);
+			expect(posted).toHaveLength(1);
 		});
 	});
 
@@ -1134,7 +1198,1100 @@ describe("edge cases of the lookup and the run", () => {
 
 	it("escapes & so no HTML entity reaches GitHub", () => {
 		const safe = githubSafe("&#64;octocat &lt;x");
-		expect(safe).not.toMatch(/&#|&lt;x/);
-		expect(safe.startsWith("&amp;#")).toBe(true);
+		expect(safe).not.toMatch(/(?<!\\)&/);
+		expect(safe.startsWith("\\&\\#\u200D64;")).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1
+// ---------------------------------------------------------------------------
+
+type SeatVote =
+	| { rosterId: string; items: Item[]; regressions?: number }
+	| { rosterId: string; failed: true };
+
+/** A fake runVerify with one outcome per seat; it can write its own record. */
+function verifyRunSeats(
+	repo: string,
+	runId: string,
+	priorRunId: string,
+	kept: Row[],
+	votes: SeatVote[],
+	options: { ownRecord?: { posted?: boolean } } = {},
+) {
+	return async (input: { headRevision: string }) => {
+		const recordPath = path.join(repo, ".review-panel", "runs", runId);
+		mkdirSync(recordPath, { recursive: true });
+		if (options.ownRecord !== undefined) {
+			writeVerifyRecord(repo, runId, priorRunId, {
+				posted: options.ownRecord.posted ?? false,
+			});
+		}
+		return {
+			recordPath,
+			priorRunId,
+			priorHeadOid: "b".repeat(40),
+			headOid: input.headRevision,
+			kept: kept.map(stamped),
+			outcomes: votes.map((vote) => {
+				const seat: PlannedSeat = {
+					rosterId: vote.rosterId,
+					provider: "openai-codex",
+					model: "gpt-5.6-terra",
+					lens: "fix-verification",
+					lensPrompt: "",
+				};
+				if ("failed" in vote) {
+					return {
+						seat,
+						outcome: { kind: "failed" as const, class: "timeout", reason: "t" },
+					};
+				}
+				return {
+					seat,
+					outcome: {
+						kind: "voted" as const,
+						result: {
+							items: vote.items,
+							regressions: Array.from(
+								{ length: vote.regressions ?? 0 },
+								(_, index) => ({
+									regressionId: `R-${index + 1}`,
+									title: "broke",
+									file: "src/c.ts",
+									line: 1,
+									evidence: "e",
+								}),
+							),
+						},
+					},
+				};
+			}),
+		} as unknown as RunVerifyResult;
+	};
+}
+
+const resolved = (id: string): Item => ({
+	id,
+	disposition: "resolved",
+	evidence: { file: "src/a.ts", explanation: "fixed" },
+});
+
+function closeoutPosts(calls: GhCall[]): GhCall[] {
+	return posts(calls).filter((call) =>
+		bodyOf(call).startsWith("## Review panel · close-out"),
+	);
+}
+
+/** The text outside every code span, the way CommonMark pairs backtick runs. */
+function outsideCodeSpans(line: string): string {
+	return line.replace(/(?<![\\`])(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g, " ");
+}
+
+/**
+ * Every hostile string a seat or a ref can carry has come out as plain text:
+ * no HTML, image, link, emphasis or block marker, every `@`, `＠` and `#`
+ * followed by a joiner, and no line our own renderer did not start.
+ */
+function expectInert(body: string): void {
+	for (const line of body.split("\n")) {
+		if (/^#{2,3} [A-Z]/.test(line)) {
+			// Our own headings: `## Review panel · …` and `### Kept` and so on.
+			expect(line).toMatch(
+				/^(## Review panel( · [a-z0-9 -]+)?|### [A-Z][a-z /()-]+)$/,
+			);
+			continue;
+		}
+		expect(line).not.toMatch(/^\s*(={2,}|-{2,}|>|`{3}|~{3}|#|\d+\.\s)/);
+		const outside = outsideCodeSpans(line);
+		expect(outside).not.toMatch(/(?<!\\)[<>!*_~|&`]/);
+		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low)\])/);
+		expect(outside).not.toMatch(/(?<!\\)\]\(/);
+		expect(outside).not.toMatch(/#(?!‍)/);
+		expect(outside).not.toMatch(/GH-(?!‍)/i);
+		expect(outside).not.toMatch(/:\/\//);
+		expect(line).not.toMatch(/[@＠](?!‍)/);
+		expect(line.replace(/[@＠#:-]‍/g, "")).not.toMatch(/\p{Cf}/u);
+	}
+}
+
+const HOSTILE = [
+	'<img src="https://evil.example/c.png?d=1">',
+	"<details>",
+	"<h2>Review panel · close-out</h2>",
+	"![](https://x/?q)",
+	"[a](b)",
+	"use `x",
+	"\n===\n",
+	"\n---\n",
+	"\n```\n",
+	"@user",
+	"@org/team",
+	"＠x",
+	"fixes #1",
+	"owner/repo#2",
+	"GH-3",
+	"&#64;octocat",
+	"*bold* _em_ ~~s~~ | t",
+	"$x$",
+].join(" ");
+const HOSTILE_REF = "x`@octocat`x";
+
+describe("fix round 1: one sanitizer for every posted body", () => {
+	const ROWS: Row[] = [
+		{
+			id: "F-1",
+			severity: "high",
+			title: `t1 ${HOSTILE}`,
+			file: `src/${HOSTILE}`,
+			evidence: `e1 ${HOSTILE}`,
+		},
+		{ id: "F-2", severity: "medium", title: `t2 ${HOSTILE}` },
+		{ id: "F-3", severity: "low", title: `t3 ${HOSTILE}` },
+	];
+
+	it("the review comment", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{ deps: deps(gh.runGh, { runReview: reviewRun(repo, "r-1", ROWS) }) },
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			expectInert(body);
+			// Seat text is shown, escaped, not dropped.
+			expect(body).toContain("\\<img src=");
+			expect(body).toContain("use \\`x");
+		});
+	});
+
+	it("the verify comment and the automatic close-out card, with a hostile head ref", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			git(repo, ["branch", HOSTILE_REF]);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: HOSTILE_REF,
+					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-2", reason: `r ${HOSTILE}` }],
+					lowAdvisory: ["F-3"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[
+								{
+									rosterId: "terra",
+									items: [
+										{
+											id: "F-1",
+											disposition: "resolved",
+											evidence: {
+												file: `src/${HOSTILE}`,
+												explanation: `ok ${HOSTILE}`,
+											},
+										},
+									],
+								},
+							],
+						),
+					}),
+				},
+			);
+			const posted = posts(gh.calls);
+			expect(posted).toHaveLength(2);
+			for (const call of posted) {
+				expectInert(bodyOf(call));
+			}
+			const card = bodyOf(posted[1]);
+			expect(card).toContain("``x`@‍octocat`x``");
+		});
+	});
+
+	it("a regression's title, file and evidence", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[resolved("F-1")],
+							[
+								{
+									title: `r ${HOSTILE}`,
+									file: `src/${HOSTILE}`,
+									evidence: `e ${HOSTILE}`,
+								},
+							],
+						),
+					}),
+				},
+			);
+			expectInert(bodyOf(posts(gh.calls)[0]));
+		});
+	});
+
+	it("the manual comment card", async () => {
+		const { assembleCloseoutComment } = await import(
+			"../src/tool/closeout-comment.js"
+		);
+		const card = assembleCloseoutComment({
+			findings: ROWS.map(stamped),
+			panel: {
+				runId: "r",
+				baseRef: HOSTILE_REF,
+				seats: [
+					{
+						rosterId: "terra",
+						lens: "holistic",
+						provider: "openai-codex",
+						model: "gpt-5.6-terra",
+					},
+				],
+			} as never,
+			lost: [],
+			meta: {
+				baseRef: HOSTILE_REF,
+				baseOid: "a".repeat(40),
+				headOid: "b".repeat(40),
+			},
+			dismissed: [{ id: "F-2", reason: `r ${HOSTILE}` }],
+			lowAdvisory: ["F-3"],
+			headRef: HOSTILE_REF,
+		});
+		expectInert(card);
+		expect(card).toContain("``x`@‍octocat`x``");
+	});
+
+	it("code spans hold file names unescaped; seat code in titles shows no entity", () => {
+		const safe = githubSafe("low `a && b<T>`");
+		expect(safe).not.toMatch(/&amp;|&lt;/);
+		expect(safe).toBe("low \\`a \\&\\& b\\<T\\>\\`");
+	});
+});
+
+describe("fix round 1: the close-out card keeps every line (H2)", () => {
+	it("a clean verify with nothing dismissed and no lows posts counts, Seats, Lost and the range", async () => {
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = [
+				{ id: "F-1", severity: "high" },
+				{ id: "F-2", severity: "medium" },
+			];
+			writeReviewRecord(repo, REVIEW_ID, rows);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1", "F-2"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, rows, [
+							{ rosterId: "terra", items: [resolved("F-1"), resolved("F-2")] },
+						]),
+					}),
+				},
+			);
+			const card = closeoutPosts(gh.calls);
+			expect(card).toHaveLength(1);
+			const lines = bodyOf(card[0]).split("\n");
+			expect(lines).toContain(
+				"2 findings submitted · 2 fixed · 0 dismissed · 0 left as low/advisory",
+			);
+			expect(lines.some((line) => line.startsWith("Seats: terra"))).toBe(true);
+			expect(lines).toContain("Lost: none");
+			expect(
+				lines.some((line) => /^`main` \(`aaaaaaa`\) → `HEAD` \(`/.test(line)),
+			).toBe(true);
+		});
+	});
+});
+
+describe("fix round 1: kept findings of any severity (M3)", () => {
+	const ROWS: Row[] = [
+		{ id: "F-1", severity: "high" },
+		{ id: "F-3", severity: "low" },
+	];
+
+	for (const listed of [false, true]) {
+		it(`a kept low that is resolved counts as fixed${listed ? ", even when also listed in lowAdvisory" : ""}`, async () => {
+			await withRepository(async (repo, head) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				const gh = fakeGh({ pulls: [openPr(12, head)] });
+				const result = await verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1", "F-3"],
+						...(listed ? { lowAdvisory: ["F-3"] } : {}),
+					},
+					{
+						deps: deps(gh.runGh, {
+							runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, ROWS, [
+								{
+									rosterId: "terra",
+									items: [resolved("F-1"), resolved("F-3")],
+								},
+							]),
+						}),
+					},
+				);
+				const card = closeoutPosts(gh.calls);
+				expect(card).toHaveLength(1);
+				expect(bodyOf(card[0])).toContain(
+					"2 findings submitted · 2 fixed · 0 dismissed · 0 left as low/advisory",
+				);
+				expect(bodyOf(posts(gh.calls)[0])).not.toContain("### Low / advisory");
+				expect(textOf(result).split("\n").at(-1)).toMatch(
+					/^PR close-out: posted to #12/,
+				);
+			});
+		});
+	}
+});
+
+describe("fix round 1: the close-out needs full coverage and agreement (M4)", () => {
+	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
+
+	async function verifyWith(votes: SeatVote[]) {
+		let gh = fakeGh();
+		let text = "";
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			gh = fakeGh({ pulls: [openPr(12, head)] });
+			text = textOf(
+				await verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+					},
+					{
+						deps: deps(gh.runGh, {
+							runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, ROWS, votes),
+						}),
+					},
+				),
+			);
+		});
+		return { gh, text };
+	}
+
+	it("two seats that both resolve every kept id: the close-out posts", async () => {
+		const { gh } = await verifyWith([
+			{ rosterId: "terra", items: [resolved("F-1")] },
+			{ rosterId: "claude", items: [resolved("F-1")] },
+		]);
+		expect(closeoutPosts(gh.calls)).toHaveLength(1);
+	});
+
+	it("seats disagree: the verify comment posts, the close-out does not", async () => {
+		const { gh, text } = await verifyWith([
+			{ rosterId: "terra", items: [resolved("F-1")] },
+			{
+				rosterId: "claude",
+				items: [{ id: "F-1", disposition: "still present" }],
+			},
+		]);
+		expect(posts(gh.calls)).toHaveLength(1);
+		expect(text.split("\n").at(-1)).toBe(
+			"PR close-out: not posted (seats disagree on F-1)",
+		);
+	});
+
+	it("a seat that says nothing about a kept id is not agreement", async () => {
+		const { gh, text } = await verifyWith([
+			{ rosterId: "terra", items: [resolved("F-1")] },
+			{ rosterId: "claude", items: [] },
+		]);
+		expect(posts(gh.calls)).toHaveLength(1);
+		expect(text.split("\n").at(-1)).toBe(
+			"PR close-out: not posted (seats disagree on F-1)",
+		);
+	});
+
+	it("a lost verify seat: the verify comment posts, the close-out does not", async () => {
+		const { gh, text } = await verifyWith([
+			{ rosterId: "terra", items: [resolved("F-1")] },
+			{ rosterId: "claude", failed: true },
+		]);
+		expect(posts(gh.calls)).toHaveLength(1);
+		expect(text.split("\n").at(-1)).toBe(
+			"PR close-out: not posted (lost verify coverage: claude/fix-verification)",
+		);
+	});
+
+	it("a regression: the reply says so", async () => {
+		const { gh, text } = await verifyWith([
+			{ rosterId: "terra", items: [resolved("F-1")], regressions: 2 },
+		]);
+		expect(posts(gh.calls)).toHaveLength(1);
+		expect(text.split("\n").at(-1)).toBe(
+			"PR close-out: not posted (2 regressions)",
+		);
+	});
+
+	it("the card's Lost line names lost verify seats after the review's", async () => {
+		const { assembleCloseoutComment } = await import(
+			"../src/tool/closeout-comment.js"
+		);
+		const card = assembleCloseoutComment({
+			findings: ROWS.map(stamped),
+			panel: {
+				runId: "r",
+				baseRef: "main",
+				seats: [
+					{ rosterId: "terra", lens: "holistic", provider: "p", model: "m" },
+				],
+			} as never,
+			lost: ["glm/holistic"],
+			verifyLost: ["claude/fix-verification"],
+			meta: {
+				baseRef: "main",
+				baseOid: "a".repeat(40),
+				headOid: "b".repeat(40),
+			},
+			dismissed: [],
+			lowAdvisory: [],
+		});
+		expect(card.split("\n")).toContain(
+			"Lost: glm/holistic, claude/fix-verification (verify)",
+		);
+	});
+});
+
+describe("fix round 1: the comment listing is read across pages (F-2)", () => {
+	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
+	const existing = {
+		id: 9,
+		user: { login: "saeed" },
+		body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+	};
+	const filler = Array.from({ length: 30 }, (_, index) => ({
+		id: 200 + index,
+		user: { login: "someone" },
+		body: "hi",
+	}));
+
+	for (const [name, raw] of [
+		[
+			"pages printed one after another",
+			`${JSON.stringify(filler)}${JSON.stringify([existing])}`,
+		],
+		[
+			"pages on separate lines",
+			`${JSON.stringify(filler)}\n${JSON.stringify([existing])}\n`,
+		],
+		["slurped pages", JSON.stringify([filler, [existing]])],
+	] as const) {
+		it(`finds an earlier close-out on page two: ${name}`, async () => {
+			await withRepository(async (repo, head) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				const gh = fakeGh({ pulls: [openPr(12, head)], commentsRaw: raw });
+				const result = await verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+					},
+					{
+						deps: deps(gh.runGh, {
+							runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, ROWS, [
+								{ rosterId: "terra", items: [resolved("F-1")] },
+							]),
+						}),
+					},
+				);
+				expect(closeoutPosts(gh.calls)).toHaveLength(0);
+				expect(textOf(result).split("\n").at(-1)).toBe(
+					"PR close-out: not posted (a close-out for this review is already on PR #12)",
+				);
+			});
+		});
+	}
+});
+
+describe("fix round 1: an explicit pr must be open at the run's head (L1)", () => {
+	for (const [name, row, reason] of [
+		[
+			"closed",
+			{ number: 7, state: "closed", head: { sha: "HEAD_OID" } },
+			"PR #7 is not open",
+		],
+		[
+			"at another head",
+			{ number: 7, state: "open", head: { sha: "f".repeat(40) } },
+			"PR #7's head is not this run's head",
+		],
+		["not a pull request", undefined, "#7 is not a pull request here"],
+	] as const) {
+		it(`posts nothing to a PR that is ${name}`, async () => {
+			await withRepository(async (repo, head) => {
+				const pr =
+					row === undefined
+						? undefined
+						: {
+								...row,
+								head: {
+									sha: row.head.sha === "HEAD_OID" ? head : row.head.sha,
+								},
+							};
+				const gh = fakeGh(pr === undefined ? {} : { prs: { 7: pr } });
+				const result = await reviewAction(
+					{ repoDir: repo, base: "main~1", head: "main", pr: 7 },
+					{ deps: deps(gh.runGh, { runReview: reviewRun(repo, "r-1", []) }) },
+				);
+				expect(posts(gh.calls)).toHaveLength(0);
+				expect(textOf(result).split("\n").at(-1)).toBe(
+					`PR comment: not posted (${reason})`,
+				);
+			});
+		});
+	}
+});
+
+describe("fix round 1: gh does not block the event loop (L2)", () => {
+	it("timers keep firing while a slow scripted gh answers", async () => {
+		const bin = mkdtempSync(path.join(tmpdir(), "rounds-slow-gh-"));
+		writeFileSync(
+			path.join(bin, "gh"),
+			["#!/bin/sh", "sleep 0.4", "exit 1"].join("\n"),
+			{ mode: 0o755 },
+		);
+		const savedPath = process.env.PATH;
+		let ticks = 0;
+		const timer = setInterval(() => {
+			ticks += 1;
+		}, 20);
+		try {
+			await withRepository(async (repo) => {
+				process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ""}`;
+				const { runGh: _unused, ...rest } = deps(fakeGh().runGh, {
+					runReview: reviewRun(repo, "r-1", []),
+				});
+				const result = await reviewAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{ deps: rest },
+				);
+				expect(textOf(result).split("\n").at(-1)).toMatch(
+					/^PR comment: not posted \(gh failed/,
+				);
+			});
+			expect(ticks).toBeGreaterThanOrEqual(5);
+		} finally {
+			clearInterval(timer);
+			process.env.PATH = savedPath;
+			rmSync(bin, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("fix round 1: one close-out per review, even across concurrent verifies (L3)", () => {
+	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
+
+	it("two concurrent clean verifies post one close-out between them", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const gh = fakeGh({ pulls: [openPr(12, head)], delayMs: 5 });
+			const run = (id: string) =>
+				verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+					},
+					{
+						deps: deps(gh.runGh, {
+							runVerify: verifyRunSeats(repo, id, REVIEW_ID, ROWS, [
+								{ rosterId: "terra", items: [resolved("F-1")] },
+							]),
+						}),
+					},
+				);
+			const [a, b] = await Promise.all([run("v-1"), run("v-2")]);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			const lasts = [textOf(a), textOf(b)].map((text) =>
+				text.split("\n").at(-1),
+			);
+			expect(
+				lasts.filter((line) => line?.startsWith("PR close-out: posted")),
+			).toHaveLength(1);
+			expect(
+				lasts.filter((line) =>
+					line?.startsWith(
+						"PR close-out: not posted (another verify already claimed",
+					),
+				),
+			).toHaveLength(1);
+		});
+	});
+
+	it("a failed close-out post releases the claim, so a later verify posts it", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const failing = fakeGh({
+				pulls: [openPr(12, head)],
+				failPost: { at: 2, error: new Error("boom") },
+			});
+			const verify = (gh: { runGh: GhRunner }, id: string) =>
+				verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+					},
+					{
+						deps: deps(gh.runGh, {
+							runVerify: verifyRunSeats(repo, id, REVIEW_ID, ROWS, [
+								{ rosterId: "terra", items: [resolved("F-1")] },
+							]),
+						}),
+					},
+				);
+			const first = await verify(failing, "v-1");
+			expect(textOf(first).split("\n").at(-1)).toMatch(
+				/^PR close-out: not posted \(gh failed/,
+			);
+			const second = fakeGh({ pulls: [openPr(12, head)] });
+			await verify(second, "v-2");
+			expect(closeoutPosts(second.calls)).toHaveLength(1);
+		});
+	});
+
+	it("a claim already in the review record stops the close-out", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const { CLOSEOUT_CLAIM_MARKER } = await import(
+				"../src/tool/round-post.js"
+			);
+			writeFileSync(
+				path.join(
+					repo,
+					".review-panel",
+					"runs",
+					REVIEW_ID,
+					CLOSEOUT_CLAIM_MARKER,
+				),
+				"v-0",
+			);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, ROWS, [
+							{ rosterId: "terra", items: [resolved("F-1")] },
+						]),
+					}),
+				},
+			);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+		});
+	});
+});
+
+describe("fix round 1: verify N counts only verifies that posted (L4, L7)", () => {
+	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
+
+	async function roundOf(
+		setup: (repo: string) => void,
+		ownRecord?: { posted?: boolean },
+	): Promise<string> {
+		let heading = "";
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			setup(repo);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(
+							repo,
+							"v-5",
+							REVIEW_ID,
+							ROWS,
+							[
+								{
+									rosterId: "terra",
+									items: [{ id: "F-1", disposition: "still present" }],
+								},
+							],
+							ownRecord === undefined ? {} : { ownRecord },
+						),
+					}),
+				},
+			);
+			heading = bodyOf(posts(gh.calls)[0]).split("\n")[0] ?? "";
+		});
+		return heading;
+	}
+
+	it("an earlier verify that did not post is not counted", async () => {
+		expect(
+			await roundOf((repo) =>
+				writeVerifyRecord(repo, "v-1", REVIEW_ID, { posted: false }),
+			),
+		).toBe("## Review panel · verify 1");
+	});
+
+	it("an earlier verify that posted is counted", async () => {
+		expect(
+			await roundOf((repo) => writeVerifyRecord(repo, "v-1", REVIEW_ID)),
+		).toBe("## Review panel · verify 2");
+	});
+
+	it("a record that is not a verify is not counted", async () => {
+		expect(
+			await roundOf((repo) =>
+				writeVerifyRecord(repo, "v-1", REVIEW_ID, { kind: "review" }),
+			),
+		).toBe("## Review panel · verify 1");
+	});
+
+	it("the verify does not count its own record", async () => {
+		expect(await roundOf(() => undefined, { posted: true })).toBe(
+			"## Review panel · verify 1",
+		);
+	});
+
+	it("a posted verify records it, and the next verify is numbered after it", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const still = [
+				{
+					rosterId: "terra",
+					items: [{ id: "F-1", disposition: "still present" as const }],
+				},
+			];
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const verify = (id: string, runGh: GhRunner) =>
+				verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+					},
+					{
+						deps: deps(runGh, {
+							runVerify: async (input: { headRevision: string }) => {
+								const result = await verifyRunSeats(
+									repo,
+									id,
+									REVIEW_ID,
+									ROWS,
+									still,
+								)(input);
+								writeVerifyRecord(repo, id, REVIEW_ID, { posted: false });
+								return result;
+							},
+						}),
+					},
+				);
+			await verify("v-1", fakeGh({ pulls: [] }).runGh);
+			await verify("v-2", gh.runGh);
+			await verify("v-3", gh.runGh);
+			expect(
+				posts(gh.calls).map((call) => bodyOf(call).split("\n")[0]),
+			).toEqual(["## Review panel · verify 1", "## Review panel · verify 2"]);
+		});
+	});
+});
+
+describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
+	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
+
+	for (const [name, comment] of [
+		[
+			"by another login",
+			{
+				id: 9,
+				user: { login: "mallory" },
+				body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+			},
+		],
+		[
+			"for another review",
+			{
+				id: 9,
+				user: { login: "saeed" },
+				body: "## Review panel · close-out\nReview `other-review`",
+			},
+		],
+		[
+			"under another heading",
+			{
+				id: 9,
+				user: { login: "saeed" },
+				body: `## Review panel · verify 1\nReview \`${REVIEW_ID}\``,
+			},
+		],
+	] as const) {
+		it(`a close-out ${name} does not stop this one`, async () => {
+			await withRepository(async (repo, head) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				const gh = fakeGh({ pulls: [openPr(12, head)], comments: [comment] });
+				const result = await verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+					},
+					{
+						deps: deps(gh.runGh, {
+							runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, ROWS, [
+								{ rosterId: "terra", items: [resolved("F-1")] },
+							]),
+						}),
+					},
+				);
+				expect(posts(gh.calls)).toHaveLength(2);
+				expect(textOf(result).split("\n").at(-1)).toMatch(
+					/^PR close-out: posted to #12/,
+				);
+			});
+		});
+	}
+
+	it("refuses an unknown low/advisory id by name before any seat runs", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			await expect(
+				verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+						lowAdvisory: ["F-9"],
+					},
+					{
+						deps: deps(fakeGh().runGh, {
+							runVerify: async () => {
+								throw new Error("no seat may run");
+							},
+						}),
+					},
+				),
+			).rejects.toThrow(
+				"Verify refused: low/advisory F-9 is not in the review record",
+			);
+		});
+	});
+});
+
+describe("fix round 1: verify honours the posting gates (F-5)", () => {
+	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
+
+	async function cleanVerify(
+		input: { prComment?: boolean; ownerApproved?: boolean },
+		mode?: "auto" | "ownerApproved",
+	) {
+		let gh = fakeGh();
+		let text = "";
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			gh = fakeGh({ pulls: [openPr(12, head)] });
+			text = textOf(
+				await verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: REVIEW_ID,
+						head: "HEAD",
+						keptFindingIds: ["F-1"],
+						...input,
+					},
+					{
+						deps: deps(
+							gh.runGh,
+							{
+								runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, ROWS, [
+									{ rosterId: "terra", items: [resolved("F-1")] },
+								]),
+							},
+							configWith(mode),
+						),
+					},
+				),
+			);
+		});
+		return { gh, text };
+	}
+
+	it("prComment: false makes no gh call, not even for the close-out", async () => {
+		const { gh, text } = await cleanVerify({ prComment: false });
+		expect(gh.calls).toEqual([]);
+		expect(text.split("\n").at(-1)).toBe(
+			"PR comment: not posted (turned off for this run)",
+		);
+	});
+
+	it("ownerApproved mode without approval makes no gh call", async () => {
+		const { gh, text } = await cleanVerify({}, "ownerApproved");
+		expect(gh.calls).toEqual([]);
+		expect(text.split("\n").at(-1)).toBe(
+			"PR comment: not posted (the owner config asks for approval first)",
+		);
+	});
+
+	it("ownerApproved mode with approval posts the verify comment and the close-out", async () => {
+		const { gh } = await cleanVerify({ ownerApproved: true }, "ownerApproved");
+		expect(posts(gh.calls)).toHaveLength(2);
+	});
+});
+
+describe("fix round 1: gh runs in the reviewed repository (F-7)", () => {
+	it("every call of a review and a clean verify has cwd set to the repository", async () => {
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = [{ id: "F-1", severity: "high" }];
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{ deps: deps(gh.runGh, { runReview: reviewRun(repo, "r-1", rows) }) },
+			);
+			writeReviewRecord(repo, REVIEW_ID, rows);
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, rows, [
+							{ rosterId: "terra", items: [resolved("F-1")] },
+						]),
+					}),
+				},
+			);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			expect(gh.calls.length).toBeGreaterThan(5);
+			for (const call of gh.calls) {
+				expect(call.cwd).toBe(repo);
+			}
+		});
+	});
+});
+
+describe("fix round 1: the reply stays under its cap with the PR lines (F-8)", () => {
+	it("a huge review with a long multibyte PR line", async () => {
+		const { MAX_PRESENTATION_BYTES } = await import(
+			"../src/tool/review-presentation.js"
+		);
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = Array.from({ length: 400 }, (_, index) => ({
+				id: `F-${index + 1}`,
+				severity: "medium" as const,
+				title: `t${index} ${"€".repeat(200)}`,
+				evidence: "€".repeat(400),
+			}));
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				htmlUrl: `https://example.test/${"€".repeat(2000)}`,
+			});
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{ deps: deps(gh.runGh, { runReview: reviewRun(repo, "r-1", rows) }) },
+			);
+			const text = textOf(result);
+			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+				MAX_PRESENTATION_BYTES,
+			);
+			expect(text.split("\n").at(-1)).toMatch(/^PR comment: posted to #12/);
+		});
+	});
+
+	it("a verify reply with both PR lines long and multibyte", async () => {
+		const { MAX_PRESENTATION_BYTES } = await import(
+			"../src/tool/review-presentation.js"
+		);
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = Array.from({ length: 300 }, (_, index) => ({
+				id: `F-${index + 1}`,
+				severity: "high" as const,
+				title: `t${index} ${"€".repeat(200)}`,
+			}));
+			writeReviewRecord(repo, REVIEW_ID, rows);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				htmlUrl: `https://example.test/${"€".repeat(2000)}`,
+				failPost: {
+					at: 2,
+					error: Object.assign(new Error("x"), { stderr: "€".repeat(2000) }),
+				},
+			});
+			const ids = rows.map((row) => row.id);
+			const result = await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ids,
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, rows, [
+							{
+								rosterId: "terra",
+								items: ids.map((id) => ({
+									id,
+									disposition: "resolved" as const,
+									evidence: {
+										file: "€".repeat(200),
+										explanation: "€".repeat(900),
+									},
+								})),
+							},
+						]),
+					}),
+				},
+			);
+			const text = textOf(result);
+			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
+				MAX_PRESENTATION_BYTES,
+			);
+			const lines = text.split("\n");
+			expect(lines.at(-2)).toMatch(/^PR comment: posted to #12/);
+			expect(lines.at(-1)).toMatch(/^PR close-out: not posted \(gh failed/);
+		});
 	});
 });

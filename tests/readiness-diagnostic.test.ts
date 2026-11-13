@@ -201,6 +201,32 @@ describe("readiness diagnostic", () => {
 		});
 	});
 
+	it("names the invalid field and its allowed values for a config that does not validate", async () => {
+		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-invalid-"));
+		const repoDir = path.join(root, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const configPath = path.join(root, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				roster: [{ id: "a", provider: "p", model: "m" }],
+				defaults: { seats: ["a"], prComment: "sometimes" },
+			}),
+		);
+		const report = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: configPath },
+			home: path.join(root, "home"),
+			inspectModel: async () => ({ model: true, auth: true }),
+		});
+		expect(report.ready).toBe(false);
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.prerequisite).toBe("configuration");
+		expect(report.rows[0]?.remediation).toContain(
+			'defaults.prComment must be "auto" or "ownerApproved"',
+		);
+	});
+
 	it("reports the configuration failure alone and does not inspect a model", async () => {
 		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-config-"));
 		const repoDir = path.join(root, "repo");
