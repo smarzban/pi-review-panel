@@ -33,10 +33,20 @@ export type ModelInspection = {
 	extensionFailures?: ExtensionFailure[];
 };
 
+/**
+ * A fixed operational bound on one roster row's inspection: loading its
+ * extensions and running its provider auth check. It stops the wait; it makes
+ * no claim about the row. Pi Claude Code bounds its own CLI login check at
+ * 20 seconds, so this leaves room for that plus loading.
+ */
+export const READINESS_ROW_TIMEOUT_MS = 30_000;
+
 export type ReadinessInput = {
 	repoDir: string;
 	env: ConfigEnv;
 	home: string;
+	/** Test seam only; the tool never sets it, so the bound stays fixed. */
+	inspectionTimeoutMs?: number;
 	/** Test seam, production resolves the configured Pi model and provider auth. */
 	inspectModel?: (
 		provider: string,
@@ -76,14 +86,53 @@ async function inspectConfiguredModel(
 	};
 }
 
+const TIMED_OUT = Symbol("readiness row timed out");
+
+/** Settles with `work`, or rejects with `TIMED_OUT` once `ms` pass. */
+async function withinBound<T>(work: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const bound = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(TIMED_OUT), ms);
+	});
+	try {
+		return await Promise.race([work, bound]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * The row for an inspection that did not finish. It names what was running
+ * and says it timed out; it says nothing about whether the row would pass.
+ */
+function timedOutRow(
+	provider: string,
+	model: string,
+	extensions: readonly string[],
+	timeoutMs: number,
+): ReadinessRow {
+	const pair = `${provider}/${model}`;
+	const seconds = `${timeoutMs / 1000} s`;
+	return {
+		prerequisite: `readiness check ${pair}`,
+		remediation:
+			extensions.length > 0
+				? `The readiness check for "${pair}" timed out after ${seconds} while loading its extensions (${extensions.join(", ")}) and checking provider auth. Fix or remove the extension that does not finish.`
+				: `The readiness check for "${pair}" timed out after ${seconds} while checking provider auth. Fix the provider's auth setup.`,
+	};
+}
+
 /**
  * Checks setup only. It neither starts a reviewer session, runs a model, nor
  * executes a scanner/project-check command. It does load each roster row's
  * configured `extraExtensionPaths`, exactly as that row's seat would, because
  * an extension can register the row's provider; that runs the extension's
  * code and its provider auth check (for example asking a provider CLI whether
- * it is logged in). The caller receives exactly one row for each unavailable
- * prerequisite and can repair setup before the first launch.
+ * it is logged in). Each row's inspection is bounded by
+ * `READINESS_ROW_TIMEOUT_MS`, so an extension or check that never finishes
+ * gives a timed-out row instead of stalling every run. The caller receives
+ * exactly one row for each unavailable prerequisite and can repair setup
+ * before the first launch.
  */
 export async function diagnoseReadiness(
 	input: ReadinessInput,
@@ -117,6 +166,7 @@ export async function diagnoseReadiness(
 		}
 	};
 	const inspect = input.inspectModel ?? inspectConfiguredModel;
+	const timeoutMs = input.inspectionTimeoutMs ?? READINESS_ROW_TIMEOUT_MS;
 
 	// Each row is inspected with only its own extensions: a provider that row
 	// A's extension registers must not make row B ready.
@@ -132,13 +182,15 @@ export async function diagnoseReadiness(
 		seenKeys.add(key);
 		let inspection: ModelInspection | undefined;
 		try {
-			inspection = await inspect(
-				roster.provider,
-				roster.model,
-				extensions,
-				input,
+			inspection = await withinBound(
+				inspect(roster.provider, roster.model, extensions, input),
+				timeoutMs,
 			);
-		} catch {
+		} catch (error) {
+			if (error === TIMED_OUT) {
+				push(timedOutRow(roster.provider, roster.model, extensions, timeoutMs));
+				continue;
+			}
 			// A missing runtime, credential store, or auth inspection is a setup
 			// failure, not a tool failure. The pair receives its concrete
 			// model/auth remediation below.

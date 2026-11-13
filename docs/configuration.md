@@ -76,7 +76,11 @@ makes a provider visible to this row.
 The `diagnose` action checks each roster row the same way, so it loads and runs the code of every
 configured extension, including the provider's own authentication check (for `claude-code`, asking
 the Claude Code CLI whether it is logged in). It still starts no reviewer session and runs no model.
-An extension that fails to load gives a row that names it.
+An extension that fails to load, or whose provider registration Pi rejects, gives a row that names
+it. A provider check that throws counts as not authenticated. Each row's check is bounded at 30
+seconds; a row that does not finish in that time gives a timed-out row naming its extensions, and
+`diagnose` moves on to the next row. Because `review` and `audit` run `diagnose` first, the bound
+also keeps one stuck extension from stalling them.
 
 ## Package-owned prompts
 
