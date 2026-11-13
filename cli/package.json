@@ -24,7 +24,7 @@
 		"prepack": "npm run build",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"check": "biome check ."
+		"check": "biome check --config-path=biome.cli.json ."
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "1.5.2"

@@ -1,7 +1,9 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
-	"root": false,
-	"extends": "//",
+	"extends": ["../biome.json"],
+	"vcs": {
+		"root": ".."
+	},
 	"files": {
 		"includes": [
 			"src/**/*.ts",
@@ -10,7 +12,7 @@
 			"package.json",
 			"tsconfig.json",
 			"vitest.config.ts",
-			"biome.json"
+			"biome.cli.json"
 		]
 	}
 }
