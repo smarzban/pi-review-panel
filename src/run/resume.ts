@@ -29,9 +29,10 @@ import {
 	readRegularFile,
 	readSettledOutcomes,
 	recordAt,
-	runLockHolder,
+	runLockState,
 	type SettledSeat,
 	sanitizeBaseRef,
+	unfinishedLockMessage,
 } from "./record.js";
 import { macMatches, planMac } from "./record-key.js";
 import {
@@ -172,9 +173,12 @@ export function loadResumable(
 	const { plan, mac } = readPlan(recordPath, runId, recordKey);
 	checkPanelCaps(plan, runId);
 	checkWritable(recordPath, plan);
-	const holder = runLockHolder(recordPath);
-	if (holder !== undefined && isProcessAlive(holder)) {
-		refuse(`run "${runId}" is still in progress (pid ${holder})`);
+	const lock = runLockState(recordPath);
+	if (lock.kind === "unfinished") {
+		refuse(unfinishedLockMessage(recordPath));
+	}
+	if (lock.kind === "held" && isProcessAlive(lock.pid)) {
+		refuse(`run "${runId}" is still in progress (pid ${lock.pid})`);
 	}
 	for (const [label, oid] of [
 		["head", plan.headOid],

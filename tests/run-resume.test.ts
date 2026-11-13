@@ -676,6 +676,23 @@ describe("resume refusals", () => {
 		}
 	});
 
+	it("refuses a record whose run lock is unfinished, and leaves the lock alone", async () => {
+		const repo = createHostRepo();
+		try {
+			const recordPath = await interruptedReview(repo);
+			const lockPath = path.join(recordPath, RUN_LOCK_FILE);
+			writeFileSync(lockPath, "");
+			expect(() =>
+				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
+			).toThrow(
+				/Resume refused: run ".*" lock .*run\.lock is being written by another process, or was left unfinished by one that crashed; if no review_panel run is active, delete it and try again/,
+			);
+			expect(readFileSync(lockPath, "utf8")).toBe("");
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
 	it("refuses a verify record with the reason", async () => {
 		const repo = createHostRepo();
 		try {
