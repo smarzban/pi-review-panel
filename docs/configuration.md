@@ -230,10 +230,11 @@ lock. If a process dies in that instant, the next resume refuses and names the f
 `run.lock` whose pid now belongs to an unrelated live process also refuses; delete `run.lock` when
 no review_panel run is active. A run publishes `run.lock` whole (written to a temp file, then
 hard-linked into place), so it never exists empty. On a filesystem without hard links (FAT, exFAT,
-some network mounts) it is written in place instead: it can be empty for a moment, and stays empty
-if the process is killed in that moment (a failed write removes it). A `run.lock` that names no pid
-is therefore one another process is still writing, or one a crashed process left unfinished: it is
-refused, never taken over, and the message says to delete it when no review_panel run is active.
+some network mounts) it is written in place instead: it can be empty or half-written for a
+moment, and stays that way if the process is killed in that moment (a failed write or close
+removes it). A `run.lock` that names no pid is therefore one another process is still writing, or
+one a crashed process left unfinished: it is refused, never taken over, and the message says to
+delete it when no review_panel run is active.
 
 ## Snapshot cleanup
 

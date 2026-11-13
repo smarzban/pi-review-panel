@@ -629,18 +629,27 @@ function createExclusive(target: string, text: string): boolean {
  */
 function writeInPlace(target: string, text: string): void {
 	const fd = openSync(target, "wx", 0o600);
+	let open = true;
 	try {
 		const bytes = Buffer.from(text);
 		let written = 0;
 		while (written < bytes.length) {
 			written += writeSync(fd, bytes, written);
 		}
-	} catch (error) {
+		// A network mount can report a deferred write error only at close.
+		open = false;
 		closeSync(fd);
+	} catch (error) {
+		if (open) {
+			try {
+				closeSync(fd);
+			} catch {
+				// The write error is the one to report.
+			}
+		}
 		rmSync(target, { force: true });
 		throw error;
 	}
-	closeSync(fd);
 }
 
 /** `link` failed because this filesystem has no hard links. */

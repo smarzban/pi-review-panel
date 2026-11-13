@@ -51,6 +51,10 @@ const fsLog = vi.hoisted(() => ({
 	linkErrorCode: undefined as string | undefined,
 	/** When set, a write to this path fails with ENOSPC after it was opened. */
 	failWriteTo: undefined as string | undefined,
+	/** When set, closing this path fails with EIO (a deferred network write error). */
+	failCloseOf: undefined as string | undefined,
+	/** When set, each write to this path writes at most one byte. */
+	shortWritesTo: undefined as string | undefined,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -75,7 +79,32 @@ vi.mock("node:fs", async (importOriginal) => {
 					},
 				);
 			}
+			const short = fsLog.shortWritesTo;
+			if (
+				short !== undefined &&
+				typeof args[1] !== "string" &&
+				real.fstatSync(args[0]).ino ===
+					real.statSync(short, { throwIfNoEntry: false })?.ino
+			) {
+				const buffer = args[1] as Buffer;
+				const offset = typeof args[2] === "number" ? args[2] : 0;
+				return real.writeSync(args[0], buffer, offset, 1);
+			}
 			return (real.writeSync as (...a: unknown[]) => number)(...args);
+		},
+		closeSync: (fd: number) => {
+			const target = fsLog.failCloseOf;
+			if (
+				target !== undefined &&
+				real.fstatSync(fd).ino ===
+					real.statSync(target, { throwIfNoEntry: false })?.ino
+			) {
+				real.closeSync(fd);
+				throw Object.assign(new Error("EIO: i/o error, close"), {
+					code: "EIO",
+				});
+			}
+			return real.closeSync(fd);
 		},
 		openSync: (...args: Parameters<typeof real.openSync>) => {
 			const flags = args[1];
@@ -280,6 +309,53 @@ describe("the run lock on a filesystem without hard links", () => {
 	afterEach(() => {
 		fsLog.linkErrorCode = undefined;
 		fsLog.failWriteTo = undefined;
+		fsLog.failCloseOf = undefined;
+		fsLog.shortWritesTo = undefined;
+	});
+
+	it("leaves no lock behind when closing the in-place lock fails", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.failCloseOf = lockPath;
+
+			expect(() => acquireRunLock(record)).toThrow(/EIO/);
+			expect(readdirSync(record)).toEqual([]);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the original write error when the close after it also fails", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.failWriteTo = lockPath;
+			fsLog.failCloseOf = lockPath;
+
+			expect(() => acquireRunLock(record)).toThrow(/ENOSPC/);
+			expect(readdirSync(record)).toEqual([]);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("writes the whole in-place lock even when each write is short", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.shortWritesTo = lockPath;
+
+			const release = acquireRunLock(record);
+
+			expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+			release();
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
 	});
 
 	it("leaves no lock behind when the in-place write fails", () => {
