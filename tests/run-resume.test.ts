@@ -107,7 +107,10 @@ function countingFactory(responses: FakeResponse[] = [{ kind: "default" }]): {
  * Starts a three-seat review whose first seat answers at once while the other
  * two hang, and aborts the run as soon as the first seat has settled.
  */
-async function interruptedReview(repo: string): Promise<string> {
+async function interruptedReview(
+	repo: string,
+	baseRef = "origin/main",
+): Promise<string> {
 	const controller = new AbortController();
 	const fake = createSdkSeatFake([
 		{ kind: "default" },
@@ -115,7 +118,7 @@ async function interruptedReview(repo: string): Promise<string> {
 		{ kind: "pending" },
 	]);
 	const pending = runReview(
-		{ repoDir: repo, baseRef: "origin/main", seats: threeSeats() },
+		{ repoDir: repo, baseRef, seats: threeSeats() },
 		{
 			abortSignal: controller.signal,
 			recordKey: TEST_RECORD_KEY,
@@ -609,6 +612,26 @@ describe("resume refusals", () => {
 			expect(
 				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY).missing,
 			).toHaveLength(2);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("resumes a review whose base is named verify: the signed plan decides the kind", async () => {
+		const repo = createHostRepo();
+		try {
+			git(repo, ["branch", "verify", "origin/main"]);
+			const recordPath = await interruptedReview(repo, "verify");
+			const loaded = loadResumable(
+				repo,
+				path.basename(recordPath),
+				TEST_RECORD_KEY,
+			);
+			expect(loaded.plan.kind).toBe("review");
+			expect(loaded.missing.map((seat) => seat.lens)).toEqual([
+				"security",
+				"tests",
+			]);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}

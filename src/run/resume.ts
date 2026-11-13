@@ -98,6 +98,19 @@ export type ResumeOptions = RunReviewOptions &
 
 const VERIFY_RUN_SUFFIX = `-${sanitizeBaseRef("verify")}-${digestBaseRef("verify")}`;
 
+/**
+ * A verify run's id: its base is the prior run's head OID, then the verify
+ * role. A review whose base is literally `verify` also ends in the role
+ * suffix, but has no OID part before it.
+ */
+function isVerifyRunId(runId: string): boolean {
+	if (!runId.endsWith(VERIFY_RUN_SUFFIX)) {
+		return false;
+	}
+	const base = runId.slice(0, -VERIFY_RUN_SUFFIX.length);
+	return /-[0-9a-f]{40}(?:[0-9a-f]{24})?-[0-9a-f]{16}$/.test(base);
+}
+
 function refuse(message: string): never {
 	throw new Error(`Resume refused: ${message}`);
 }
@@ -146,7 +159,12 @@ export function loadResumable(
 	if (exists(path.join(recordPath, COMPLETE_MARKER))) {
 		refuse(`run "${runId}" is already complete; there is nothing to resume`);
 	}
-	if (runId.endsWith(VERIFY_RUN_SUFFIX)) {
+	// The signed plan decides the kind. Only a record with no plan at all is
+	// told apart by its id: verify never writes a plan.
+	if (
+		isVerifyRunId(runId) &&
+		readRegularFile(path.join(recordPath, PLAN_FILE)) === undefined
+	) {
 		refuse(
 			`run "${runId}" is a verify run; start a new verify instead (verify runs one or two seats in sequence, so a fresh run costs the same as a resume)`,
 		);
