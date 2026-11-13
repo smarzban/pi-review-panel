@@ -60,13 +60,17 @@ Save these exact bytes as your config file (the entry below names the file locat
 
 ## Pi identity and authentication
 
-`provider` and `model` are passed verbatim to Pi as `--provider` and `--model`. They must be Pi
-identifiers you have already configured and authenticated in Pi itself; the roster does not create
-or configure providers. pi-review-panel stores **no** credentials, endpoints, or provider definitions
-anywhere: the config file, the run record, and the audit `panel.json` carry none of that. A seat run
-uses `--no-extensions`, so the only extensions it loads are the shipped Review panel seat extension plus
-the exact absolute paths named in that roster row's `extraExtensionPaths`. If a seat needs a
-provider or authentication extension, name it there.
+A seat runs as a Pi SDK session inside the Pi process that called `review_panel`, not as a separate
+`pi` process. `provider` and `model` are resolved by exact id through Pi's model runtime, after the
+row's own extensions load. They must be Pi identifiers you have already configured and authenticated
+in Pi itself; the roster does not create or configure providers. pi-review-panel stores **no**
+credentials, endpoints, or provider definitions anywhere: the config file, the run record, and the
+audit `panel.json` carry none of that. A seat suppresses Pi's ambient extensions, skills, prompt
+templates, themes, and context files, so the only extensions it loads are the exact absolute paths
+named in that roster row's `extraExtensionPaths`. If a seat needs a provider or authentication
+extension, name it there. Only the seat's role tools are active: read-only `read`, `grep`, `find`,
+and `ls`, `git_diff` in every role except a repository audit, and one submit tool. Findings are
+reported only through that submit tool.
 
 A row's `provider` may come from one of its own `extraExtensionPaths`, for example `claude-code`
 from `pi-claude-code`. The seat loads that row's extensions first, then registers the providers they

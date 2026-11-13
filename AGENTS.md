@@ -17,8 +17,8 @@ frozen one-line pointer and says so in-file.
 **pi-review-panel** runs multi-model code review as a pi package. The public tool is `review_panel`
 (`diagnose` / `review` / `audit` / `verify` / `comment`). The shipped skill is `review-panel`. A run
 fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned lens — over
-one pinned snapshot, as read-only `pi -p` subprocesses that can report findings only through
-`submit_findings`. Seat identity is owner authority: an outside-repository roster config
+one pinned snapshot, as isolated in-process Pi SDK sessions that have only their read-only role
+tools and can report findings only through their submit tool (`submit_findings` for reviewers). Seat identity is owner authority: an outside-repository roster config
 (`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
 rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
 Runs record under `<repo>/.review-panel/runs/`. Verify only reads those trees. The output is a
