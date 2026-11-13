@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { ReviewProgressEvent } from "../src/run/scheduler.js";
-import type {
-	Suggestion,
-	SuggestionsUnavailable,
-} from "../src/run/suggest.js";
+import type { Suggestion, SuggestionsUnavailable } from "../src/run/suggest.js";
 import type { PlannedSeat, SeatOutcomeFacts } from "../src/run/types.js";
 import type { SeatLifecycle } from "../src/seat/classify.js";
 import {

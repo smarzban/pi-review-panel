@@ -15,6 +15,9 @@ export type Suggestion = {
 	evidence: Array<{ file: string; line?: number }>;
 };
 
+/** The diff could not be read, so no rule ran. `unavailable` is the cause. */
+export type SuggestionsUnavailable = { unavailable: string };
+
 type Rule = (changeset: Changeset) => Suggestion | null;
 
 const MIGRATION_DIR_RE = /(^|\/)migrations?\//i;

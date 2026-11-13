@@ -6,7 +6,7 @@ import type {
 	VerifyProgressEvent,
 } from "../run/run-verify.js";
 import type { ReviewProgressEvent } from "../run/scheduler.js";
-import type { Suggestion } from "../run/suggest.js";
+import type { Suggestion, SuggestionsUnavailable } from "../run/suggest.js";
 import type { PlannedSeat, StampedFinding } from "../run/types.js";
 
 /** The public boundary never sends more than this many UTF-8 bytes. */
@@ -220,14 +220,21 @@ export function renderReadiness(
 
 /**
  * Text that reaches a terminal or a model with no control character, no
- * line break and no bidi override: each shows as U+FFFD.
+ * invisible format character (bidi controls, zero-width characters, U+FEFF,
+ * Unicode tag characters) and no line or paragraph separator: each shows as
+ * U+FFFD.
  */
 function inert(text: string): string {
-	return text.replace(
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: the replacement is of control characters
-		/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
-		"\uFFFD",
-	);
+	return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "\uFFFD");
+}
+
+/** The one line that says no rule ran because the diff could not be read. */
+export function formatSuggestionsUnavailable(
+	failure: SuggestionsUnavailable,
+): string {
+	return `- Suggestions unavailable: the diff could not be read (${inert(
+		truncateCodePoints(failure.unavailable, 200),
+	)}).`;
 }
 
 /**
@@ -366,7 +373,7 @@ export function renderReviewResult(input: {
 	recordPath: string;
 	panel: PlannedSeat[];
 	result: RunReviewResult;
-	suggestions?: Suggestion[];
+	suggestions?: Suggestion[] | SuggestionsUnavailable;
 	scopingNote?: string;
 	findings?: StampedFinding[];
 }): string {
@@ -426,10 +433,13 @@ export function renderReviewResult(input: {
 	}
 	// A lens that ran shows in the seats line; only untaken ones are suggested.
 	const ran = new Set(input.panel.map((seat) => seat.lens));
-	const suggestions = (input.suggestions ?? []).filter(
-		(row) => !ran.has(row.lens),
-	);
-	if (suggestions.length > 0) {
+	const offered = input.suggestions ?? [];
+	const suggestions = Array.isArray(offered)
+		? offered.filter((row) => !ran.has(row.lens))
+		: [];
+	if (!Array.isArray(offered)) {
+		lines.push("", "Suggest:", formatSuggestionsUnavailable(offered));
+	} else if (suggestions.length > 0) {
 		lines.push(
 			"",
 			"Suggest:",

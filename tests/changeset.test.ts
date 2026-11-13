@@ -120,10 +120,7 @@ describe("the diff parser reads only real file headers", () => {
 			expect(securityEvidence(range)).toEqual([
 				{ file: "auth/lógin.ts", line: 1 },
 			]);
-			expect(rows(range).map((row) => row.lens)).toEqual([
-				"security",
-				"tests",
-			]);
+			expect(rows(range).map((row) => row.lens)).toEqual(["security", "tests"]);
 		});
 	});
 
@@ -228,10 +225,7 @@ describe("binary detection cannot hide added lines", () => {
 				"src/hidden.ts": 'require("child_process");\n',
 			},
 			(range) => {
-				writeFileSync(
-					path.join(range.repo, ".gitattributes"),
-					"*.ts -diff\n",
-				);
+				writeFileSync(path.join(range.repo, ".gitattributes"), "*.ts -diff\n");
 				expect(securityEvidence(range)).toEqual([
 					{ file: "src/hidden.ts", line: 1 },
 				]);

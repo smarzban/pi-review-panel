@@ -100,6 +100,7 @@ import {
 import {
 	compactPanelRoster,
 	formatSuggestion,
+	formatSuggestionsUnavailable,
 	progressFromAuditEvent,
 	progressFromReviewEvent,
 	progressFromVerifyEvent,
@@ -898,10 +899,11 @@ export async function resumeAction(
 	if (run.plan.kind === "audit") {
 		body = renderAuditResult({ recordPath: result.recordPath, panel, result });
 	} else {
-		const plannedLenses = new Set(panel.map((seat) => seat.lens));
-		const suggestions = resolved
-			.suggest(repoDir, run.plan.baseOid, run.plan.headOid)
-			.filter((row) => !plannedLenses.has(row.lens));
+		const suggestions = resolved.suggest(
+			repoDir,
+			run.plan.baseOid,
+			run.plan.headOid,
+		);
 		const findings = readStampedFindings(result.recordPath);
 		body = renderReviewResult({
 			recordPath: result.recordPath,
@@ -976,10 +978,7 @@ export async function reviewAction(
 				emit({ ...progressFromReviewEvent(event, elapsed()), roster }),
 		},
 	);
-	const plannedLenses = new Set(panel.map((seat) => seat.lens));
-	const suggestions = resolved
-		.suggest(repoDir, baseRevision, headRevision)
-		.filter((row) => !plannedLenses.has(row.lens));
+	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
 	const findings = readStampedFindings(result.recordPath);
 
 	return textResult(
@@ -1027,8 +1026,9 @@ export async function suggestAction(
 					ownerLenses.length === 0 ? "none" : ownerLenses.join(", ")
 				}`,
 			],
-			rows:
-				suggestions.length === 0
+			rows: !Array.isArray(suggestions)
+				? [formatSuggestionsUnavailable(suggestions)]
+				: suggestions.length === 0
 					? ["- No suggestion rule matched this change."]
 					: suggestions.map((row) =>
 							formatSuggestion(row, {

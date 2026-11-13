@@ -92,7 +92,9 @@ From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 lists the lenses the diff's rules point at, each with its reason and evidence,
 and marks the owner's default lenses as already on. The calling agent chooses
 the lenses, with a reason for each, and passes the extras to review. The tool
-never adds a lens by itself.
+never adds a lens by itself. When the diff cannot be read, it says
+"Suggestions unavailable" with the cause; no rule ran, so choose from the
+skill's trigger table.
 
 ```json
 {"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD","lenses":["security"]}
@@ -110,7 +112,8 @@ Record: `…/.review-panel/runs/…`
 `Seats:` groups the seats by lens, failed seats included; a `Lost:` line under
 it names any that failed. After the findings, a `Suggest:` block lists suggested
 lenses that did not run, one per line with its reason and first evidence. Each
-file name is shown as a code span, with any control character replaced:
+file name is shown as a code span, with any control or invisible format
+character replaced:
 
 ```
 Suggest:

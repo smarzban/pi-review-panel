@@ -4,14 +4,57 @@ import {
 	type Changeset,
 	computeSuggestions,
 	type Suggestion,
+	type SuggestionsUnavailable,
 } from "./suggest.js";
 
-function git(repoDir: string, args: string[]): string {
-	return execFileSync("git", args, {
-		cwd: repoDir,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "ignore"],
-	});
+/** How much `git diff` output the rules read before giving up: 256 MiB. */
+export const MAX_DIFF_BYTES = 256 * 1024 * 1024;
+
+/** The diff could not be read; the message is the cause, for the reply. */
+class DiffUnreadable extends Error {}
+
+function git(repoDir: string, args: string[], maxBytes: number): string {
+	try {
+		return execFileSync("git", args, {
+			cwd: repoDir,
+			encoding: "utf8",
+			maxBuffer: maxBytes,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+	} catch (error) {
+		throw new DiffUnreadable(gitFailureCause(error, maxBytes));
+	}
+}
+
+function gitFailureCause(error: unknown, maxBytes: number): string {
+	const failure = error as NodeJS.ErrnoException & {
+		status?: number | null;
+		signal?: string | null;
+	};
+	// execFileSync reports output over maxBuffer as ENOBUFS (and kills git).
+	if (
+		failure.code === "ENOBUFS" ||
+		failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"
+	) {
+		return `the diff is over ${formatBytes(maxBytes)}`;
+	}
+	if (typeof failure.status === "number") {
+		return `git diff exited with status ${failure.status}`;
+	}
+	if (typeof failure.signal === "string") {
+		return `git diff was stopped by ${failure.signal}`;
+	}
+	if (typeof failure.code === "string") {
+		return `git could not run (${failure.code})`;
+	}
+	return "git diff failed";
+}
+
+function formatBytes(bytes: number): string {
+	const mib = 1024 * 1024;
+	return bytes >= mib && bytes % mib === 0
+		? `${bytes / mib} MiB`
+		: `${bytes} bytes`;
 }
 
 const C_ESCAPES: Record<string, number> = {
@@ -29,7 +72,7 @@ const C_ESCAPES: Record<string, number> = {
 /**
  * Undo git's C-style quoting of a path (`"src/a\tb.ts"`, octal bytes for
  * anything else git escapes). Returns undefined for text that is not one
- * whole quoted string. Never throws: suggestions fail open.
+ * whole quoted string. Never throws.
  */
 export function unquoteGitPath(quoted: string): string | undefined {
 	if (!quoted.startsWith('"') || !quoted.endsWith('"') || quoted.length < 2) {
@@ -132,50 +175,73 @@ export function parseAddedLines(diff: string): Changeset["addedLines"] {
 
 /**
  * Git options that keep the diff machine-readable whatever the user's git
- * config says: paths unquoted except where git must (tab, newline, quote,
- * backslash), the standard `a/` and `b/` prefixes, no colour, no external
- * diff or text conversion.
+ * config or the repository's attributes say: paths unquoted except where git
+ * must (tab, newline, quote, backslash), the standard `a/` and `b/` prefixes,
+ * no colour, no external diff or text conversion, and every file diffed as
+ * text, so a NUL byte or a `-diff` attribute cannot hide added lines.
  */
-const DIFF_OPTIONS = ["--no-color", "--no-ext-diff", "--no-textconv"];
+const DIFF_OPTIONS = ["--no-color", "--no-ext-diff", "--no-textconv", "--text"];
 
 export function buildChangeset(
 	repoDir: string,
 	baseOid: string,
 	headOid: string,
+	options: { maxDiffBytes?: number } = {},
 ): Changeset {
+	const maxBytes = options.maxDiffBytes ?? MAX_DIFF_BYTES;
 	const range = `${baseOid}...${headOid}`;
-	const names = git(repoDir, [
-		"-c",
-		"core.quotePath=false",
-		"diff",
-		"--name-only",
-		"-z",
-		...DIFF_OPTIONS,
-		range,
-	]);
+	const names = git(
+		repoDir,
+		[
+			"-c",
+			"core.quotePath=false",
+			"diff",
+			"--name-only",
+			"-z",
+			...DIFF_OPTIONS,
+			range,
+		],
+		maxBytes,
+	);
 	const files = names.split("\0").filter((name) => name.length > 0);
-	const diff = git(repoDir, [
-		"-c",
-		"core.quotePath=false",
-		"diff",
-		"-U0",
-		"--src-prefix=a/",
-		"--dst-prefix=b/",
-		...DIFF_OPTIONS,
-		range,
-	]);
+	const diff = git(
+		repoDir,
+		[
+			"-c",
+			"core.quotePath=false",
+			"diff",
+			"-U0",
+			"--src-prefix=a/",
+			"--dst-prefix=b/",
+			...DIFF_OPTIONS,
+			range,
+		],
+		maxBytes,
+	);
 	return { files, addedLines: parseAddedLines(diff) };
 }
 
-/** Fail-open: a git failure becomes no suggestions. */
+/**
+ * The rules' suggestions, or why the diff could not be read. A diff that
+ * could not be read never reads as "no rule matched": no rule ran. Never
+ * throws, so a review that already ran still gets its reply.
+ */
 export function suggestLenses(
 	repoDir: string,
 	baseOid: string,
 	headOid: string,
-): Suggestion[] {
+	options: { maxDiffBytes?: number } = {},
+): Suggestion[] | SuggestionsUnavailable {
 	try {
-		return computeSuggestions(buildChangeset(repoDir, baseOid, headOid));
-	} catch {
-		return [];
+		return computeSuggestions(
+			buildChangeset(repoDir, baseOid, headOid, options),
+		);
+	} catch (error) {
+		return {
+			unavailable:
+				error instanceof DiffUnreadable
+					? error.message
+					: "the diff could not be parsed",
+		};
 	}
 }
