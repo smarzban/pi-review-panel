@@ -46,6 +46,11 @@ picks one folder when it starts:
 | `~/.pi/agent` has `auth.json` or `models.json` (you use Pi) | `~/.pi/agent`, so your Pi logins and models work as they are |
 | Otherwise | `~/.pi-review-panel/agent`, the CLI's own folder |
 
+When the CLI reuses `~/.pi/agent` (or the folder `PI_CODING_AGENT_DIR` names), it shares
+Pi's logins: `review-panel auth login` and `auth logout` change Pi's own logins too.
+Logging out there logs Pi out as well, and logging in replaces Pi's stored credential for
+that provider.
+
 `review-panel diagnose` prints the folder in use, the CLI version and the bundled SDK
 version. The CLI never copies credentials from one folder to another. If you install Pi
 later, the CLI switches to `~/.pi/agent` once you log in there. To keep using the CLI's own
@@ -96,8 +101,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 ## Output and exit codes
 
 - The report goes to stdout. Progress goes to stderr while seats run.
-- Ctrl-C aborts the run through the same abort signal the tool uses. Press it twice to quit
-  at once.
+- Ctrl-C aborts the run through the same abort signal the tool uses, including while the
+  CLI waits on stdin (`--api-key`, `call -`, `--dismissed -`). Press it twice to quit at once.
 
 | Exit code | Meaning |
 |---|---|
@@ -117,4 +122,7 @@ npm run typecheck && npm test && npm run check
 The build compiles `../src` (the Pi package's source, unchanged) and `cli/src` into
 `dist/` without bundling, keeping the folder layout, and copies `../prompts` to
 `dist/prompts`. `src/tool/review-panel.ts`, the Pi tool's entry point, is left out. Some
-tests run the built bin, so build before testing.
+tests run the built bin, so `npm test` rebuilds `dist/` first (a Vitest global setup).
+
+The CLI lints itself with `biome.cli.json`, which extends the root `biome.json`. It is not
+named `biome.json`, so the root package's own `npm run check` never lints `cli/`.
