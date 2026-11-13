@@ -8,15 +8,18 @@
  * Each action validates its own input with the same checks, in the same order
  * and with the same messages as its parser, so a front end that builds the
  * input itself gets the refusals the tool gives. The parser adds only the
- * refusal of argument keys the action does not take. Each action also
- * resolves `repoDir` to its Git top level, refusing a relative path, as the
- * tool does before it calls one.
+ * refusal of argument keys the action does not take. Each action, and each
+ * exported record-key helper, also resolves `repoDir` to its Git top level as
+ * the tool does: a relative path, `/`, a placeholder path or a path outside
+ * Git is refused.
  *
- * Input is taken as typed. The tool first coerces what models send as
- * strings (a JSON or comma list for `seats`, `lenses`, `passes`,
- * `keptFindingIds` and `lowAdvisory`; JSON for `dismissed`; `"true"` for
- * `ownerApproved`), so a direct caller passing those strings is refused where
- * the tool would accept them. Pass real arrays and `true`.
+ * The tool first coerces what models send as strings. A JSON array string
+ * for `seats`, `lenses`, `passes`, `keptFindingIds` or `lowAdvisory`, JSON
+ * for `dismissed`, and `"true"` for `ownerApproved` are converted (a comma
+ * list is not split; it stays one item). The actions convert the same
+ * strings for `seats`, `lenses`, `passes`, `lowAdvisory` and `dismissed`, but
+ * refuse a string `keptFindingIds` and `ownerApproved: "true"`. Pass real
+ * arrays and `true`.
  *
  * No Pi host and no TypeBox are needed to import or call these. Running a
  * seat (review, audit, verify, resume) and diagnose's model check still load
@@ -178,7 +181,7 @@ export type RecordKeyInput = {
 export function ownerRecordKey(input: RecordKeyInput): Buffer {
 	return loadRecordKey(
 		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
-		{ create: input.create, repoDir: input.repoDir },
+		{ create: input.create, repoDir: canonicalizeRepository(input.repoDir) },
 	);
 }
 
@@ -194,7 +197,7 @@ export function ownerRecordKeyCheck(
 		return undefined;
 	}
 	return checkRecordKey(recordKeyPath(configPath), {
-		repoDir: input.repoDir,
+		repoDir: canonicalizeRepository(input.repoDir),
 	});
 }
 

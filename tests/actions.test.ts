@@ -19,6 +19,8 @@ import {
 	type CommentInput,
 	commentAction,
 	diagnoseAction,
+	ownerRecordKey,
+	ownerRecordKeyCheck,
 	resumeAction,
 	reviewAction,
 	verifyAction,
@@ -743,4 +745,75 @@ describe("each action resolves its own repository", () => {
 			});
 		},
 	);
+
+	it.each(
+		calls.filter(([name]) => ["audit", "review", "resume"].includes(name)),
+	)(
+		"%s hands the record key the repository top level when given a subdirectory",
+		async (_name, call) => {
+			await withRepository(async (repo) => {
+				const sub = path.join(repo, "src");
+				mkdirSync(sub);
+				const seen: string[] = [];
+				await expect(
+					call(
+						sub,
+						deps({
+							recordKey: (input) => {
+								seen.push(input.repoDir);
+								throw new Error("stop at the record key");
+							},
+						}),
+					),
+				).rejects.toThrow("stop at the record key");
+				expect(seen).toEqual([repo]);
+			});
+		},
+	);
+
+	it("review and audit record their run under the repository top level when given a subdirectory", async () => {
+		await withRepository(async (repo) => {
+			const sub = path.join(repo, "src");
+			mkdirSync(sub);
+			const seen: string[] = [];
+			const stop = (repoDir: string): never => {
+				seen.push(repoDir);
+				throw new Error("stop at the runner");
+			};
+			const d = deps({
+				runReview: async (runConfig) => stop(runConfig.repoDir),
+				runAudit: async (input) => stop(input.repoDir),
+			});
+			await expect(
+				reviewAction(
+					{ repoDir: sub, base: "main~1", head: "main" },
+					{ deps: d },
+				),
+			).rejects.toThrow("stop at the runner");
+			await expect(auditAction({ repoDir: sub }, { deps: d })).rejects.toThrow(
+				"stop at the runner",
+			);
+			expect(seen).toEqual([repo, repo]);
+		});
+	});
+
+	it("the record-key helpers judge a key inside the repository from a subdirectory too", async () => {
+		await withRepository(async (repo) => {
+			const sub = path.join(repo, "src");
+			mkdirSync(sub);
+			const env = {
+				PI_REVIEW_PANEL_CONFIG: path.join(repo, ".cfg", "config.json"),
+			};
+			const keyPath = path.join(repo, ".cfg", "record-key");
+			mkdirSync(path.join(repo, ".cfg"), { mode: 0o700 });
+
+			expect(
+				ownerRecordKeyCheck({ repoDir: sub, env, home: HOME }),
+			).toBeDefined();
+			expect(() =>
+				ownerRecordKey({ repoDir: sub, env, home: HOME, create: true }),
+			).toThrow();
+			expect(existsSync(keyPath)).toBe(false);
+		});
+	});
 });
