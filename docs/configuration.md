@@ -68,10 +68,10 @@ credentials, endpoints, or provider definitions anywhere: the config file, the r
 audit `panel.json` carry none of that. A seat suppresses Pi's ambient extensions, skills, prompt
 templates, and themes, and loads no context files, so the only extension files it loads are the
 exact absolute paths named in that roster row's `extraExtensionPaths`; beside them runs only the
-package's own in-process guard that confines tool paths to the seat's snapshot. If a seat needs a provider or authentication
-extension, name it there. Only the seat's role tools are active: read-only `read`, `grep`, `find`,
-and `ls`, `git_diff` in every role except a repository audit, and one submit tool. Findings are
-reported only through that submit tool.
+package's own in-process guard that confines tool paths to the seat's snapshot. If a seat needs a
+provider or authentication extension, name it there. Only the seat's role tools are active:
+read-only `read`, `grep`, `find`, and `ls`, `git_diff` in every role except a repository audit,
+and one submit tool. Findings are reported only through that submit tool.
 
 A row's `provider` may come from one of its own `extraExtensionPaths`, for example `claude-code`
 from `pi-claude-code`. The seat loads that row's extensions first, then registers the providers they
