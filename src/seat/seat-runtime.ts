@@ -157,11 +157,15 @@ export async function resolveSeatRuntime(
  * `getAuth` resolves request credentials but never runs a provider's own
  * `check` (for example "is the Claude Code CLI logged in"), so a provider
  * that one of the row's own extensions registered must also pass `checkAuth`
- * when it defines a check. Every other provider, built-in ones included, is
- * decided by `getAuth` alone, which honours the caller's environment
- * overrides. A built-in provider must not go through `checkAuth`: Pi gives it
- * a composed check as soon as `models.json` has any entry for it, and that
- * check reads only the process environment. When the runtime cannot show
+ * when it defines a check. Every other provider, including a built-in that no
+ * row extension re-registered, is decided by `getAuth` alone, which honours
+ * the caller's environment overrides. Such a built-in must not go through
+ * `checkAuth`: Pi gives it a composed check as soon as `models.json` has any
+ * entry for it, and that check reads only the process environment. A built-in
+ * that a row extension re-registers by name (an auth extension, for example)
+ * counts as an extension provider and does go through `checkAuth`, so its
+ * readiness reads the process environment, not `input.authEnv`; production
+ * passes the process environment. When the runtime cannot show
  * which provider extensions registered or whether it has a check,
  * `checkAuth` runs.
  */

@@ -45,3 +45,74 @@ describe("seat runtime registration diagnostics", () => {
 		]);
 	});
 });
+
+// Each branch of the auth gate, through a fake runtime. `checkAuth` returns
+// undefined (a provider's own check saying "not configured") so that running
+// it is visible as an authentication failure.
+function sdkWithRuntime(runtime: Record<string, unknown>, checks: string[]) {
+	return {
+		SettingsManager: { inMemory: () => ({}) },
+		createAgentSessionServices: async () => ({
+			modelRuntime: {
+				getModel: () => ({ provider: "p", id: "m" }),
+				checkAuth: async (provider: string) => {
+					checks.push(provider);
+					return undefined;
+				},
+				getAuth: async () => ({ auth: {} }),
+				...runtime,
+			},
+			resourceLoader: { getExtensions: () => ({ errors: [] }) },
+			settingsManager: {},
+			diagnostics: [],
+		}),
+	};
+}
+
+async function gate(runtime: Record<string, unknown>) {
+	const checks: string[] = [];
+	const result = await resolveSeatRuntime({
+		sdk: sdkWithRuntime(runtime, checks),
+		cwd: "/repo",
+		agentDir: "/agent",
+		provider: "p",
+		model: "m",
+		extensionPaths: [],
+	});
+	return { authenticated: result.authenticated, checks };
+}
+
+const withCheck = { auth: { apiKey: { check: async () => undefined } } };
+
+describe("seat runtime auth gate", () => {
+	it("skips checkAuth for a provider no extension registered", async () => {
+		expect(
+			await gate({
+				getRegisteredProviderIds: () => ["other"],
+				getProvider: () => withCheck,
+			}),
+		).toEqual({ authenticated: true, checks: [] });
+	});
+
+	it("skips checkAuth for an extension provider that defines no check", async () => {
+		expect(
+			await gate({
+				getRegisteredProviderIds: () => ["p"],
+				getProvider: () => ({ auth: { apiKey: {} } }),
+			}),
+		).toEqual({ authenticated: true, checks: [] });
+	});
+
+	it("runs checkAuth for an extension provider with its own check", async () => {
+		expect(
+			await gate({
+				getRegisteredProviderIds: () => ["p"],
+				getProvider: () => withCheck,
+			}),
+		).toEqual({ authenticated: false, checks: ["p"] });
+	});
+
+	it("runs checkAuth when the runtime cannot show registrations or checks", async () => {
+		expect(await gate({})).toEqual({ authenticated: false, checks: ["p"] });
+	});
+});
