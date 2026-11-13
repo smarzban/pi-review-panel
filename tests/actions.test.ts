@@ -963,6 +963,53 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 		});
 	});
 
+	it("says the suggestions are unavailable when the diff could not be read, never that no rule matched", async () => {
+		await withRepository(async (repo) => {
+			const text = textOf(
+				await suggestAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{
+						deps: nothingRuns({
+							suggestLenses: () => ({
+								unavailable: "git diff exited with status 128",
+							}),
+						}),
+					},
+				),
+			);
+			expect(text.split("\n").slice(2, 3)).toEqual([
+				"- Suggestions unavailable: the diff could not be read (git diff exited with status 128).",
+			]);
+			expect(text).not.toContain("No suggestion rule matched");
+		});
+	});
+
+	it("reads a real diff over 1 MiB and still suggests from it", async () => {
+		await withRepository(async (repo) => {
+			mkdirSync(path.join(repo, "src"), { recursive: true });
+			writeFileSync(
+				path.join(repo, "big.txt"),
+				`${"x".repeat(99)}\n`.repeat(12_000),
+			);
+			writeFileSync(
+				path.join(repo, "src", "run.ts"),
+				'require("child_process");\n',
+			);
+			git(repo, ["add", "."]);
+			git(repo, ["commit", "-m", "big", "--quiet"]);
+			const text = textOf(
+				await suggestAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{ deps: nothingRuns() },
+				),
+			);
+			expect(text).toContain("- security: ");
+			expect(text).toContain("`src/run.ts:1`");
+			expect(text).not.toContain("No suggestion rule matched");
+			expect(text).not.toContain("Suggestions unavailable");
+		});
+	});
+
 	it("says plainly when no rule matched, without implying a pass", async () => {
 		await withRepository(async (repo) => {
 			const text = textOf(

@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { buildChangeset, suggestLenses } from "../src/run/changeset.js";
+import type { Suggestion } from "../src/run/suggest.js";
 
 /**
  * The suggest rules read `git diff` of a real commit range. These tests build
@@ -26,12 +27,14 @@ type Range = { repo: string; base: string; head: string };
 function withRange(
 	files: Record<string, string>,
 	test: (range: Range) => void,
+	setup: (repo: string) => void = () => {},
 ): void {
 	const root = realpathSync(mkdtempSync(path.join(tmpdir(), "changeset-")));
 	try {
 		git(root, ["init", "-b", "main", "--quiet"]);
 		git(root, ["config", "user.email", "changeset@example.test"]);
 		git(root, ["config", "user.name", "Changeset Test"]);
+		setup(root);
 		git(root, ["commit", "--allow-empty", "-m", "base", "--quiet"]);
 		const base = git(root, ["rev-parse", "HEAD"]).trim();
 		for (const [name, content] of Object.entries(files)) {
@@ -51,9 +54,16 @@ function withRange(
 	}
 }
 
-function securityEvidence({ repo, base, head }: Range) {
-	return suggestLenses(repo, base, head).find((row) => row.lens === "security")
-		?.evidence;
+function rows({ repo, base, head }: Range): Suggestion[] {
+	const result = suggestLenses(repo, base, head);
+	if (!Array.isArray(result)) {
+		throw new Error(`suggestions unavailable: ${result.unavailable}`);
+	}
+	return result;
+}
+
+function securityEvidence(range: Range) {
+	return rows(range).find((row) => row.lens === "security")?.evidence;
 }
 
 describe("the diff parser reads only real file headers", () => {
@@ -110,11 +120,10 @@ describe("the diff parser reads only real file headers", () => {
 			expect(securityEvidence(range)).toEqual([
 				{ file: "auth/lógin.ts", line: 1 },
 			]);
-			expect(
-				suggestLenses(range.repo, range.base, range.head).map(
-					(row) => row.lens,
-				),
-			).toEqual(["security", "tests"]);
+			expect(rows(range).map((row) => row.lens)).toEqual([
+				"security",
+				"tests",
+			]);
 		});
 	});
 
@@ -170,6 +179,96 @@ describe("the diff parser reads only real file headers", () => {
 				addedLines: [
 					{ file: "src/z.ts", line: 1, text: 'require("child_process");' },
 				],
+			});
+		});
+	});
+});
+
+describe("the diff parser cannot be steered by the user's git config or quoting", () => {
+	it("decodes git's octal quoting of a file name holding ESC and pins evidence to it", () => {
+		withRange(
+			{ "src/esc\u001b[31m.ts": 'require("child_process");\n' },
+			(range) => {
+				expect(securityEvidence(range)).toEqual([
+					{ file: "src/esc\u001b[31m.ts", line: 1 },
+				]);
+			},
+		);
+	});
+
+	it("keeps the a/ and b/ prefixes when the repository sets diff.noprefix", () => {
+		withRange(
+			{ "src/np.ts": 'require("child_process");\n' },
+			(range) => {
+				expect(securityEvidence(range)).toEqual([
+					{ file: "src/np.ts", line: 1 },
+				]);
+			},
+			(repo) => git(repo, ["config", "diff.noprefix", "true"]),
+		);
+	});
+});
+
+describe("binary detection cannot hide added lines", () => {
+	it("reads the added lines of a source file holding a NUL byte", () => {
+		withRange(
+			{ "src/nul.ts": '// \u0000\nrequire("child_process");\n' },
+			(range) => {
+				expect(securityEvidence(range)).toEqual([
+					{ file: "src/nul.ts", line: 2 },
+				]);
+			},
+		);
+	});
+
+	it("reads the added lines of a file the change itself marks -diff, checked out at head", () => {
+		withRange(
+			{
+				".gitattributes": "*.ts -diff\n",
+				"src/hidden.ts": 'require("child_process");\n',
+			},
+			(range) => {
+				writeFileSync(
+					path.join(range.repo, ".gitattributes"),
+					"*.ts -diff\n",
+				);
+				expect(securityEvidence(range)).toEqual([
+					{ file: "src/hidden.ts", line: 1 },
+				]);
+			},
+		);
+	});
+});
+
+describe("a diff the parser cannot read is reported, never read as no match", () => {
+	it("reads a diff over 1 MiB", () => {
+		withRange(
+			{
+				"fixtures/big.txt": `${"x".repeat(99)}\n`.repeat(12_000),
+				"src/a.ts": 'require("child_process");\n',
+			},
+			(range) => {
+				expect(securityEvidence(range)).toEqual([
+					{ file: "src/a.ts", line: 1 },
+				]);
+			},
+		);
+	});
+
+	it("reports a diff over the bound as unavailable, with the cause", () => {
+		withRange({ "src/a.ts": 'require("child_process");\n' }, (range) => {
+			expect(
+				suggestLenses(range.repo, range.base, range.head, {
+					maxDiffBytes: 16,
+				}),
+			).toEqual({ unavailable: "the diff is over 16 bytes" });
+		});
+	});
+
+	it("reports a git failure as unavailable, with the cause", () => {
+		withRange({ "src/a.ts": "x\n" }, (range) => {
+			expect(suggestLenses(range.repo, "0".repeat(40), range.head)).toEqual({
+				unavailable: "git diff exited with status 128",
 			});
 		});
 	});

@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { ReviewProgressEvent } from "../src/run/scheduler.js";
-import type { Suggestion } from "../src/run/suggest.js";
+import type {
+	Suggestion,
+	SuggestionsUnavailable,
+} from "../src/run/suggest.js";
 import type { PlannedSeat, SeatOutcomeFacts } from "../src/run/types.js";
 import type { SeatLifecycle } from "../src/seat/classify.js";
 import {
@@ -512,7 +515,7 @@ describe("suggest block", () => {
 	};
 
 	function review(
-		suggestions: Suggestion[],
+		suggestions: Suggestion[] | SuggestionsUnavailable,
 		panel: PlannedSeat[] = [seat],
 	): string {
 		return renderReviewResult({
@@ -547,6 +550,16 @@ describe("suggest block", () => {
 			"- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, +2 more)",
 		]);
 		expect(text).not.toContain("- tests:");
+	});
+
+	it("says the suggestions are unavailable, with the cause, when the diff could not be read", () => {
+		const text = review({ unavailable: "the diff is over 16 bytes" });
+		expect(text.split("\n").slice(-3)).toEqual([
+			"",
+			"Suggest:",
+			"- Suggestions unavailable: the diff could not be read (the diff is over 16 bytes).",
+		]);
+		expect(text).not.toContain("No suggestion rule matched");
 	});
 
 	it("has no block when every suggested lens ran", () => {
@@ -588,6 +601,26 @@ describe("suggest block", () => {
 			// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
 			/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/,
 		);
+	});
+
+	it.each([
+		["a Unicode tag character", "\u{E0049}\u{E0047}"],
+		["a zero-width space, joiner and non-joiner", "\u200B\u200C\u200D"],
+		["a word joiner", "\u2060"],
+		["a byte-order mark", "\uFEFF"],
+		["a line separator", "\u2028"],
+		["a paragraph separator", "\u2029"],
+		["a C1 control", "\u0085"],
+	])("replaces %s in a file name", (_label, hidden) => {
+		const line = formatSuggestion({
+			lens: "security",
+			reason: "r",
+			evidence: [{ file: `src/a${hidden}b.ts`, line: 1 }],
+		});
+		expect(line).toBe(
+			`- security: r (\`src/a${"\uFFFD".repeat([...hidden].length)}b.ts:1\`)`,
+		);
+		expect(line).not.toMatch(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u);
 	});
 
 	it("cuts a long file name at 200 code points before the line number and the closing fence", () => {
