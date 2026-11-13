@@ -16,6 +16,11 @@ export type SeatModelRuntime = {
 		provider: string,
 	) => { auth?: { apiKey?: { check?: unknown } } } | undefined;
 	/**
+	 * The providers that extensions registered into this runtime. The runtime
+	 * is fresh per call, so these are exactly the row's own extensions'.
+	 */
+	getRegisteredProviderIds?: () => readonly string[];
+	/**
 	 * Runs the provider's own auth `check` when it defines one. It reads the
 	 * process environment only: Pi gives it no environment override.
 	 */
@@ -151,15 +156,25 @@ export async function resolveSeatRuntime(
 /**
  * `getAuth` resolves request credentials but never runs a provider's own
  * `check` (for example "is the Claude Code CLI logged in"), so a provider
- * that defines one must also pass `checkAuth`. A provider without its own
- * check is decided by `getAuth` alone, which honours the caller's
- * environment overrides; `checkAuth` would read only the process
- * environment. When the runtime cannot show the provider, `checkAuth` runs.
+ * that one of the row's own extensions registered must also pass `checkAuth`
+ * when it defines a check. Every other provider, built-in ones included, is
+ * decided by `getAuth` alone, which honours the caller's environment
+ * overrides. A built-in provider must not go through `checkAuth`: Pi gives it
+ * a composed check as soon as `models.json` has any entry for it, and that
+ * check reads only the process environment. When the runtime cannot show
+ * which provider extensions registered or whether it has a check,
+ * `checkAuth` runs.
  */
 async function providerCheckPasses(
 	runtime: SeatModelRuntime,
 	provider: string,
 ): Promise<boolean> {
+	if (
+		runtime.getRegisteredProviderIds !== undefined &&
+		!runtime.getRegisteredProviderIds().includes(provider)
+	) {
+		return true;
+	}
 	if (
 		runtime.getProvider !== undefined &&
 		typeof runtime.getProvider(provider)?.auth?.apiKey?.check !== "function"

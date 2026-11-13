@@ -102,6 +102,8 @@ async function withinBound<T>(work: Promise<T>, ms: number): Promise<T> {
 /**
  * The row for an inspection that did not finish. It names what was running
  * and says it timed out; it says nothing about whether the row would pass.
+ * Its prerequisite names the row's extensions too, so two roster rows for the
+ * same pair with different extensions each keep their own row.
  */
 function timedOutRow(
 	provider: string,
@@ -112,7 +114,10 @@ function timedOutRow(
 	const pair = `${provider}/${model}`;
 	const seconds = `${timeoutMs / 1000} s`;
 	return {
-		prerequisite: `readiness check ${pair}`,
+		prerequisite:
+			extensions.length > 0
+				? `readiness check ${pair} (${extensions.join(", ")})`
+				: `readiness check ${pair}`,
 		remediation:
 			extensions.length > 0
 				? `The readiness check for "${pair}" timed out after ${seconds} while loading its extensions (${extensions.join(", ")}) and checking provider auth. Fix or remove the extension that does not finish.`
