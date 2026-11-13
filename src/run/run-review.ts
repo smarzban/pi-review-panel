@@ -7,6 +7,7 @@ import {
 	acquireRunLock,
 	complete,
 	projectSeat,
+	type RecordSeal,
 	reserve,
 	writeExecution,
 	writePanel,
@@ -75,6 +76,8 @@ export type ResumeState = {
 	heldLock?: () => void;
 	/** The record named a scoping note that resume did not pass to the seats. */
 	scopingNoteDropped?: boolean;
+	/** Signs the seats this resume runs; absent only for an unsigned record. */
+	seal?: RecordSeal;
 };
 
 export type RunReviewOptions = {
@@ -86,6 +89,11 @@ export type RunReviewOptions = {
 	/** Shared scheduler-owned cap for concurrently executing role panels. */
 	concurrencyGate?: SeatConcurrencyGate;
 	onProgress?: (event: ReviewProgressEvent) => void;
+	/**
+	 * The owner's record key. A first run signs its plan and seat files with
+	 * it; without one the record is unsigned and cannot be resumed.
+	 */
+	recordKey?: Buffer;
 };
 
 export class RunReviewError extends Error {
@@ -179,6 +187,7 @@ export async function executeReview(
 		resume === undefined
 			? undefined
 			: missing.map((index) => config.seats[index]);
+	let seal = resume?.seal;
 	let stage = "panel";
 	let snapshot: PinnedSnapshot | undefined;
 	let released = false;
@@ -209,18 +218,22 @@ export async function executeReview(
 					: { scopingNote: config.scopingNote }),
 				seats: config.seats,
 			});
-			writePlan(record, {
-				version: 1,
-				kind: "review",
-				runId: record.runId,
-				baseRef: config.baseRef,
-				baseOid,
-				headOid,
-				...(config.scopingNote === undefined
-					? {}
-					: { scopingNote: config.scopingNote }),
-				seats: config.seats.map(projectSeat),
-			});
+			seal = writePlan(
+				record,
+				{
+					version: 1,
+					kind: "review",
+					runId: record.runId,
+					baseRef: config.baseRef,
+					baseOid,
+					headOid,
+					...(config.scopingNote === undefined
+						? {}
+						: { scopingNote: config.scopingNote }),
+					seats: config.seats.map(projectSeat),
+				},
+				options.recordKey,
+			);
 		}
 		stage = "pin";
 		snapshot = pin(config.repoDir, headOid);
@@ -250,7 +263,7 @@ export async function executeReview(
 								? {}
 								: { onProgress: options.onProgress }),
 							onSeatSettled: (index, facts) =>
-								writeSeatOutcome(record, missing[index], facts),
+								writeSeatOutcome(record, missing[index], facts, seal),
 						},
 					);
 		const outcomes = mergeOutcomes(settled, missing, fresh);

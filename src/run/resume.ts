@@ -24,12 +24,16 @@ import {
 	COMPLETE_MARKER,
 	digestBaseRef,
 	PLAN_FILE,
+	PLAN_MAC_FILE,
+	type RecordSeal,
 	readRegularFile,
 	readSettledOutcomes,
 	recordAt,
 	runLockHolder,
+	type SettledSeat,
 	sanitizeBaseRef,
 } from "./record.js";
+import { macMatches, planMac } from "./record-key.js";
 import {
 	executeAudit,
 	type RunAuditOptions,
@@ -48,8 +52,13 @@ export type ResumableRun = {
 	runId: string;
 	recordPath: string;
 	plan: RunPlan;
-	/** Settled outcomes by planned index; undefined where a seat must run again. */
-	settled: Array<SeatOutcomeFacts | undefined>;
+	/** The owner's MAC of the record's plan, which the seat files are bound to. */
+	planMac: string;
+	/**
+	 * Settled seats by planned index, with a valid MAC and a checked outcome;
+	 * undefined where a seat must run again.
+	 */
+	settled: Array<SettledSeat | undefined>;
 	/** The planned seat identities that have no settled outcome, in order. */
 	missing: RunPlan["seats"];
 };
@@ -67,6 +76,11 @@ export type ResumeResult = (RunReviewResult | RunAuditResult) & {
 
 export type ResumeOptions = RunReviewOptions &
 	RunAuditOptions & {
+		/**
+		 * The owner's record key. Seat files are checked against it, and the
+		 * seats this resume runs are signed with it.
+		 */
+		recordKey: Buffer;
 		/**
 		 * The owner config. Seat models, extension paths and the seat budget come
 		 * from it, never from the record in the reviewed repository.
@@ -90,12 +104,14 @@ function refuse(message: string): never {
 
 /**
  * Checks that a record can be resumed, before anything runs: it exists, is
- * not complete, is a review or audit with a resume plan, is not held by a
- * live run, and its frozen commits still resolve here.
+ * not complete, is a review or audit with a resume plan signed by the owner's
+ * record key, is not held by a live run, and its frozen commits still resolve
+ * here.
  */
 export function loadResumable(
 	repoDir: string,
 	priorRunId: string,
+	recordKey: Buffer,
 ): ResumableRun {
 	// A symlink at either folder would take reads and writes out of the
 	// repository; reserve() refuses the same.
@@ -135,7 +151,7 @@ export function loadResumable(
 			`run "${runId}" is a verify run; start a new verify instead (verify runs one or two seats in sequence, so a fresh run costs the same as a resume)`,
 		);
 	}
-	const plan = readPlan(recordPath, runId);
+	const { plan, mac } = readPlan(recordPath, runId, recordKey);
 	checkPanelCaps(plan, runId);
 	checkWritable(recordPath, plan);
 	const holder = runLockHolder(recordPath);
@@ -152,9 +168,13 @@ export function loadResumable(
 			);
 		}
 	}
-	const settled = readSettledOutcomes(recordPath, plan.seats);
+	const settled = readSettledOutcomes(recordPath, plan.seats, {
+		key: recordKey,
+		runId,
+		planMac: mac,
+	});
 	const missing = plan.seats.filter((_, index) => settled[index] === undefined);
-	return { repoDir, runId, recordPath, plan, settled, missing };
+	return { repoDir, runId, recordPath, plan, planMac: mac, settled, missing };
 }
 
 /**
@@ -172,6 +192,11 @@ export async function resumeRun(
 	const record = recordAt(run.recordPath);
 	const { plan } = run;
 	const { config, lensTable, passTable, onStart, ...runOptions } = options;
+	const seal: RecordSeal = {
+		key: options.recordKey,
+		runId: run.runId,
+		planMac: run.planMac,
+	};
 	let releaseLock: (() => void) | undefined;
 	try {
 		releaseLock = acquireRunLock(run.recordPath);
@@ -193,7 +218,8 @@ export async function resumeRun(
 				? (lensTable ?? loadLensTable())
 				: (passTable ?? loadAuditPassTable());
 		const rows = new Map(config.roster.map((row) => [row.id, row]));
-		const settled = readSettledOutcomes(run.recordPath, plan.seats);
+		const recorded = readSettledOutcomes(run.recordPath, plan.seats, seal);
+		const settled: Array<SeatOutcomeFacts | undefined> = [];
 		const lost: number[] = [];
 		const seats = plan.seats.map((identity, index): PlannedSeat => {
 			const row = rows.get(identity.rosterId);
@@ -218,9 +244,23 @@ export async function resumeRun(
 						: prompt === undefined
 							? `"${identity.lens}" is not a ${plan.kind === "review" ? "lens" : "audit pass"} this package ships`
 							: undefined;
-			if (settled[index] === undefined && reason !== undefined) {
+			// Every planned seat must still be the owner's: a settled seat whose
+			// row is gone or changed is lost coverage too, never kept.
+			const kept = recorded[index];
+			if (reason !== undefined) {
 				lost.push(index);
 				settled[index] = unrecoverable(seat, plan, reason);
+			} else if (kept !== undefined) {
+				// Only the checked timing and outcome come from the seat file;
+				// the seat and its replay input are rebuilt here.
+				settled[index] = {
+					seat,
+					replay: replayOf(seat, plan),
+					lifecycle: kept.lifecycle,
+					outcome: kept.outcome,
+				};
+			} else {
+				settled[index] = undefined;
 			}
 			return seat;
 		});
@@ -230,6 +270,7 @@ export async function resumeRun(
 			lost,
 			heldLock: releaseLock,
 			scopingNoteDropped,
+			seal,
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
 		const priorRecordPaths =
@@ -332,6 +373,28 @@ function checkPanelCaps(plan: RunPlan, runId: string): void {
 	}
 }
 
+/**
+ * The replay input of a seat resume did not run, rebuilt from the seat (owner
+ * config plus package prompt) and the plan's frozen commit. Its snapshot
+ * worktree is gone, so the path is empty.
+ */
+function replayOf(
+	seat: PlannedSeat,
+	plan: RunPlan,
+): SeatOutcomeFacts["replay"] {
+	return {
+		provider: seat.provider,
+		model: seat.model,
+		lens: seat.lens,
+		lensPrompt: seat.lensPrompt,
+		baseRef: plan.baseOid,
+		worktree: "",
+		...(seat.extraExtensionPaths === undefined
+			? {}
+			: { extraExtensionPaths: [...seat.extraExtensionPaths] }),
+	};
+}
+
 /** A failed outcome for a seat resume could not rebuild; it never runs. */
 function unrecoverable(
 	seat: PlannedSeat,
@@ -341,14 +404,7 @@ function unrecoverable(
 	const now = Date.now();
 	return {
 		seat,
-		replay: {
-			provider: seat.provider,
-			model: seat.model,
-			lens: seat.lens,
-			lensPrompt: seat.lensPrompt,
-			baseRef: plan.baseOid,
-			worktree: "",
-		},
+		replay: replayOf(seat, plan),
 		lifecycle: {
 			startedAtMs: now,
 			settledAtMs: now,
@@ -366,11 +422,26 @@ function unrecoverable(
 	};
 }
 
-function readPlan(recordPath: string, runId: string): RunPlan {
+/**
+ * Reads the plan and checks its MAC over the exact bytes, before anything is
+ * parsed: a plan this owner's review_panel did not sign is refused whatever
+ * it says.
+ */
+function readPlan(
+	recordPath: string,
+	runId: string,
+	key: Buffer,
+): { plan: RunPlan; mac: string } {
 	const text = readRegularFile(path.join(recordPath, PLAN_FILE));
 	if (text === undefined) {
 		refuse(
 			`run "${runId}" has no resume plan, so it cannot be resumed: it stopped before its plan was written, when no seat had run yet, or a version without resume started it. Start a new run instead.`,
+		);
+	}
+	const mac = planMac(key, runId, text);
+	if (!macMatches(mac, readRegularFile(path.join(recordPath, PLAN_MAC_FILE)))) {
+		refuse(
+			`run "${runId}" has no valid signature from this owner's record key, so this owner's review_panel did not write it, or wrote it for another run. Start a new run instead.`,
 		);
 	}
 	let parsed: unknown;
@@ -382,7 +453,7 @@ function readPlan(recordPath: string, runId: string): RunPlan {
 	if (!isRunPlan(parsed)) {
 		refuse(`run "${runId}" has an invalid resume plan`);
 	}
-	return parsed;
+	return { plan: parsed, mac };
 }
 
 function isRunPlan(value: unknown): value is RunPlan {
@@ -393,7 +464,7 @@ function isRunPlan(value: unknown): value is RunPlan {
 	return (
 		plan.version === 1 &&
 		(plan.kind === "review" || plan.kind === "audit") &&
-		typeof plan.baseRef === "string" &&
+		isLineText(plan.baseRef) &&
 		isOid(plan.baseOid) &&
 		isOid(plan.headOid) &&
 		(plan.scopingNote === undefined || typeof plan.scopingNote === "string") &&
@@ -403,12 +474,29 @@ function isRunPlan(value: unknown): value is RunPlan {
 			(seat) =>
 				typeof seat === "object" &&
 				seat !== null &&
-				typeof seat.rosterId === "string" &&
-				typeof seat.provider === "string" &&
-				typeof seat.model === "string" &&
-				typeof seat.lens === "string",
+				isLineText(seat.rosterId) &&
+				isLineText(seat.provider) &&
+				isLineText(seat.model) &&
+				isLineText(seat.lens),
 		)
 	);
+}
+
+/**
+ * Plan text that reaches the report and the tool reply: a string with no
+ * control character, so it cannot start a Markdown heading or a fake finding.
+ */
+function isLineText(value: unknown): value is string {
+	if (typeof value !== "string") {
+		return false;
+	}
+	for (const char of value) {
+		const code = char.codePointAt(0) ?? 0;
+		if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 /** Only a full hex object id; never something git could read as an option. */

@@ -8,7 +8,11 @@ import { Type } from "typebox";
 import { resolveAuditPanel } from "../config/audit-panel.js";
 import { loadAuditPassTable } from "../config/audit-passes.js";
 import { loadLensTable } from "../config/lenses.js";
-import { type ConfigEnv, loadConfig } from "../config/load.js";
+import {
+	type ConfigEnv,
+	loadConfig,
+	resolveConfigPath,
+} from "../config/load.js";
 import { resolvePanel } from "../config/panel.js";
 import {
 	diagnoseReadiness,
@@ -16,6 +20,7 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import { loadRecordKey, recordKeyPath } from "../run/record-key.js";
 import { SCOPING_NOTE_DROPPED } from "../run/render.js";
 import {
 	loadResumable,
@@ -157,7 +162,28 @@ export type ReviewPanelDependencies = {
 		run: ResumableRun,
 		options?: ResumeOptions,
 	) => Promise<ResumeResult>;
+	/**
+	 * The owner's record key. By default it is read from `record-key` beside
+	 * the owner config, and created there by a first review or audit.
+	 */
+	recordKey?: (input: RecordKeyInput) => Buffer;
 };
+
+export type RecordKeyInput = {
+	repoDir: string;
+	env: ConfigEnv;
+	home: string;
+	/** Create the key when it is missing: review and audit do, resume never. */
+	create: boolean;
+};
+
+/** Reads (or creates) the record key in the folder of the owner config. */
+export function ownerRecordKey(input: RecordKeyInput): Buffer {
+	return loadRecordKey(
+		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
+		{ create: input.create, repoDir: input.repoDir },
+	);
+}
 
 export type ReviewPanelTool = {
 	name: "review_panel";
@@ -510,6 +536,7 @@ export function createReviewPanelTool(
 	const verify = deps?.runVerify ?? runVerify;
 	const postComment = deps?.postComment ?? postCloseoutComment;
 	const resume = deps?.resumeRun ?? resumeRun;
+	const keyOf = deps?.recordKey ?? ownerRecordKey;
 
 	return {
 		name: "review_panel",
@@ -527,6 +554,20 @@ export function createReviewPanelTool(
 			if (!isNonEmptyString(args.action)) {
 				throw new Error(USAGE);
 			}
+			const recordKey = (create: boolean, refusal: string): Buffer => {
+				try {
+					return keyOf({
+						repoDir,
+						env: runtime.env,
+						home: runtime.home,
+						create,
+					});
+				} catch (error) {
+					throw new Error(
+						`${refusal}: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			};
 			const action = validateNonEmptyString(args.action, "action");
 			const repoDir = resolveReviewRepository(
 				args.repository,
@@ -593,6 +634,7 @@ export function createReviewPanelTool(
 					...(passes === undefined ? {} : { passes }),
 				});
 				const revision = oidOf(repoDir, "HEAD");
+				const auditKey = recordKey(true, "Audit refused");
 				const roster = compactPanelRoster(panel);
 				emitProgress(onUpdate, {
 					phase: "audit",
@@ -615,6 +657,7 @@ export function createReviewPanelTool(
 					},
 					{
 						...(signal === undefined ? {} : { abortSignal: signal }),
+						recordKey: auditKey,
 						onProgress: (event) =>
 							emitProgress(onUpdate, {
 								...progressFromAuditEvent(event, Date.now() - startedAt),
@@ -750,8 +793,12 @@ export function createReviewPanelTool(
 				if (!report.ready) {
 					throw new Error(renderReadiness(report));
 				}
-				// Seats, lenses and commits all come from the record itself.
-				const run = loadResumable(repoDir, priorRunId);
+				// Resume never creates the key: a record it did not sign is not
+				// this owner's.
+				const resumeKey = recordKey(false, "Resume refused");
+				// Seats, lenses and commits all come from the record itself, once
+				// its plan's signature checks out.
+				const run = loadResumable(repoDir, priorRunId, resumeKey);
 				// Models, extension paths and prompts come from the owner config and
 				// the package, never from the record inside the reviewed repository.
 				const config = load({
@@ -770,6 +817,7 @@ export function createReviewPanelTool(
 						: progressFromReviewEvent;
 				const result = await resume(run, {
 					config,
+					recordKey: resumeKey,
 					...(signal === undefined ? {} : { abortSignal: signal }),
 					// Started once the lock is held and the record re-read, so the
 					// count is what will actually run.
@@ -895,6 +943,7 @@ export function createReviewPanelTool(
 				...(lenses === undefined ? {} : { lenses }),
 			});
 
+			const reviewKey = recordKey(true, "Review refused");
 			const roster = compactPanelRoster(panel);
 			emitProgress(onUpdate, {
 				phase: "review",
@@ -923,6 +972,7 @@ export function createReviewPanelTool(
 				},
 				{
 					...(signal === undefined ? {} : { abortSignal: signal }),
+					recordKey: reviewKey,
 					onProgress: (event) =>
 						emitProgress(onUpdate, {
 							...progressFromReviewEvent(event, Date.now() - startedAt),

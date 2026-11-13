@@ -132,7 +132,7 @@ export function renderReport(input: RenderInput): string {
 	const lines = [
 		`# Review run ${input.meta.runId}`,
 		"",
-		`Base ref: \`${input.meta.baseRef}\``,
+		`Base ref: ${inlineCode(input.meta.baseRef)}`,
 		`Base OID: \`${input.meta.baseOid}\``,
 		`HEAD OID: \`${input.meta.headOid}\``,
 		"",
@@ -299,6 +299,23 @@ function location(finding: Finding): string {
 		return `${finding.file}:${finding.line}`;
 	}
 	return `${finding.file}:${finding.line}-${finding.endLine}`;
+}
+
+/**
+ * One line of record text as a Markdown code span that it cannot close
+ * early: the fence is longer than any backtick run inside, and a control
+ * character (a newline could start a heading) shows as U+FFFD.
+ */
+export function inlineCode(text: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: the replacement is of control characters
+	const line = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "\uFFFD");
+	const longest = Math.max(
+		0,
+		...(line.match(/`+/g) ?? []).map((run) => run.length),
+	);
+	const fence = "`".repeat(longest + 1);
+	const pad = line.startsWith("`") || line.endsWith("`") ? " " : "";
+	return `${fence}${pad}${line}${pad}${fence}`;
 }
 
 function seatLabel(seat: SeatIdentity): string {

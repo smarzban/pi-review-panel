@@ -72,6 +72,11 @@ export type RunAuditOptions = {
 	sessionFactory?: SdkSessionFactory;
 	concurrencyGate?: SeatConcurrencyGate;
 	onProgress?: (event: ReviewProgressEvent) => void;
+	/**
+	 * The owner's record key. A first run signs its plan and seat files with
+	 * it; without one the record is unsigned and cannot be resumed.
+	 */
+	recordKey?: Buffer;
 };
 
 export class RunAuditError extends Error {
@@ -142,6 +147,7 @@ export async function executeAudit(
 		resume === undefined
 			? undefined
 			: missing.map((index) => input.seats[index]);
+	let seal = resume?.seal;
 	let stage = "panel";
 	let snapshot: PinnedSnapshot | undefined;
 	let released = false;
@@ -165,18 +171,22 @@ export async function executeAudit(
 					: { scopingNote: input.scopingNote }),
 				seats: input.seats,
 			});
-			writePlan(record, {
-				version: 1,
-				kind: "audit",
-				runId: record.runId,
-				baseRef: AUDIT_RECORD_REF,
-				baseOid: revision,
-				headOid: revision,
-				...(input.scopingNote === undefined
-					? {}
-					: { scopingNote: input.scopingNote }),
-				seats: input.seats.map(projectSeat),
-			});
+			seal = writePlan(
+				record,
+				{
+					version: 1,
+					kind: "audit",
+					runId: record.runId,
+					baseRef: AUDIT_RECORD_REF,
+					baseOid: revision,
+					headOid: revision,
+					...(input.scopingNote === undefined
+						? {}
+						: { scopingNote: input.scopingNote }),
+					seats: input.seats.map(projectSeat),
+				},
+				options.recordKey,
+			);
 		}
 		stage = "pin";
 		snapshot = pin(input.repoDir, revision);
@@ -211,7 +221,7 @@ export async function executeAudit(
 								? {}
 								: { onProgress: options.onProgress }),
 							onSeatSettled: (index, facts) =>
-								writeSeatOutcome(record, missing[index], facts),
+								writeSeatOutcome(record, missing[index], facts, seal),
 						},
 					);
 		const outcomes = mergeOutcomes(settled, missing, fresh);

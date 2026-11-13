@@ -15,6 +15,7 @@ import path from "node:path";
 
 import { validateFindings } from "../seat/schema.js";
 import { isProcessAlive } from "./liveness.js";
+import { macMatches, planMac, seatMac } from "./record-key.js";
 import type {
 	PanelRecord,
 	PanelRecordInput,
@@ -41,7 +42,13 @@ export const COMPLETE_MARKER = "COMPLETE";
  */
 export const PLAN_FILE = "plan.json";
 
-/** One `<planned index>.json` per seat, written the moment that seat settles. */
+/** The owner's MAC of the exact `plan.json` bytes (see `record-key.ts`). */
+export const PLAN_MAC_FILE = "plan.mac";
+
+/**
+ * One `<planned index>.json` per seat, written the moment that seat settles,
+ * with its MAC beside it as `<planned index>.mac`.
+ */
 export const SEATS_DIR = "seats";
 
 /** Held by the process running the record; removed when the run ends. */
@@ -57,6 +64,7 @@ export const RUN_LOCK_TAKEOVER_FILE = "run.lock.takeover";
 export const RECORD_OUTPUT_FILES = [
 	PANEL_FILE,
 	PLAN_FILE,
+	PLAN_MAC_FILE,
 	EXECUTION_FILE,
 	COMPLETE_MARKER,
 	"report.md",
@@ -286,17 +294,25 @@ export function assertRecordWritable(
 	}
 	for (let index = 0; index < seatCount; index += 1) {
 		assertReplaceable(path.join(seats, `${index}.json`));
+		assertReplaceable(path.join(seats, `${index}.mac`));
 	}
 }
 
 /**
  * Reads a regular file without following a symlink at its last component.
  * Returns undefined when it is missing, a symlink, or anything but a file.
+ * The open never blocks: a FIFO opens at once and is then refused as not a
+ * regular file, instead of waiting for a writer that never comes.
  */
 export function readRegularFile(target: string): string | undefined {
 	let fd: number;
 	try {
-		fd = openSync(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+		fd = openSync(
+			target,
+			constants.O_RDONLY |
+				(constants.O_NOFOLLOW ?? 0) |
+				(constants.O_NONBLOCK ?? 0),
+		);
 	} catch {
 		return undefined;
 	}
@@ -312,34 +328,71 @@ export function readRegularFile(target: string): string | undefined {
 	}
 }
 
-/** Persists the resume plan before the snapshot is pinned. */
-export function writePlan(record: ReservedRecord, plan: RunPlan): void {
-	writeRecordFile(
-		path.join(record.recordPath, PLAN_FILE),
-		`${JSON.stringify(plan, null, 2)}\n`,
-	);
+/**
+ * What signs a record's seat files: the owner's record key, the run id, and
+ * the MAC of the record's plan.
+ */
+export type RecordSeal = { key: Buffer; runId: string; planMac: string };
+
+/**
+ * Persists the resume plan before the snapshot is pinned. With the owner's
+ * record key it also writes the MAC of the exact plan bytes, bound to the run
+ * id, and returns the seal for the seat files. Without a key the record is
+ * unsigned, and resume refuses it.
+ */
+export function writePlan(
+	record: ReservedRecord,
+	plan: RunPlan,
+	key?: Buffer,
+): RecordSeal | undefined {
+	const bytes = `${JSON.stringify(plan, null, 2)}\n`;
+	writeRecordFile(path.join(record.recordPath, PLAN_FILE), bytes);
+	if (key === undefined) {
+		return undefined;
+	}
+	const mac = planMac(key, record.runId, bytes);
+	writeRecordFile(path.join(record.recordPath, PLAN_MAC_FILE), mac);
+	return { key, runId: record.runId, planMac: mac };
 }
 
-/** Persists one settled seat under its planned index, atomically. */
+/**
+ * Persists one settled seat under its planned index, atomically, then its
+ * MAC. A crash between the two leaves a seat file whose MAC does not match,
+ * which resume treats as unsettled.
+ */
 export function writeSeatOutcome(
 	record: ReservedRecord,
 	index: number,
 	facts: SeatOutcomeFacts,
+	seal?: RecordSeal,
 ): void {
 	const dir = path.join(record.recordPath, SEATS_DIR);
 	ensureRealDirectory(dir);
-	writeRecordFile(
-		path.join(dir, `${index}.json`),
-		`${JSON.stringify({ index, facts }, null, 2)}\n`,
-	);
+	const bytes = `${JSON.stringify({ index, facts }, null, 2)}\n`;
+	writeRecordFile(path.join(dir, `${index}.json`), bytes);
+	if (seal !== undefined) {
+		writeRecordFile(
+			path.join(dir, `${index}.mac`),
+			seatMac(seal.key, seal.runId, seal.planMac, index, bytes),
+		);
+	}
 }
+
+/**
+ * The parts of a settled seat file resume keeps: its timing and its outcome.
+ * The seat and its replay input are rebuilt from the owner config and the
+ * package, never taken from the file.
+ */
+export type SettledSeat = Pick<SeatOutcomeFacts, "lifecycle" | "outcome">;
 
 /**
  * Reads the settled seats of a record, by planned index. The record lives in
  * the reviewed repository, so each file is untrusted: one that is missing,
- * not a regular file, unreadable, names a different seat than the plan, or
- * does not match the outcome schema counts as unsettled, and resume runs that
- * seat again. What is returned is rebuilt from the checked fields only.
+ * not a regular file, unreadable, without a valid MAC from the owner's record
+ * key (bound to this run, this plan and this index), names a different seat
+ * than the plan, or does not match the outcome schema counts as unsettled,
+ * and resume runs that seat again. Only the checked lifecycle and outcome are
+ * returned; the caller rebuilds the seat and its replay input.
  */
 export function readSettledOutcomes(
 	recordPath: string,
@@ -349,7 +402,8 @@ export function readSettledOutcomes(
 		model: string;
 		lens: string;
 	}>,
-): Array<SeatOutcomeFacts | undefined> {
+	seal: RecordSeal,
+): Array<SettledSeat | undefined> {
 	const dir = path.join(recordPath, SEATS_DIR);
 	if (!isRealDirectory(dir)) {
 		return seats.map(() => undefined);
@@ -357,6 +411,12 @@ export function readSettledOutcomes(
 	return seats.map((seat, index) => {
 		const text = readRegularFile(path.join(dir, `${index}.json`));
 		if (text === undefined) {
+			return undefined;
+		}
+		const mac = readRegularFile(path.join(dir, `${index}.mac`));
+		if (
+			!macMatches(seatMac(seal.key, seal.runId, seal.planMac, index, text), mac)
+		) {
 			return undefined;
 		}
 		try {
@@ -379,11 +439,11 @@ const FAILURE_CLASSES = new Set([
 	"no-submit",
 ]);
 
-/** The checked copy of one seat file's facts, or undefined if any part is off. */
+/** The checked lifecycle and outcome of one seat file, or undefined if any part is off. */
 function settledFacts(
 	value: unknown,
 	identity: { rosterId: string; provider: string; model: string; lens: string },
-): SeatOutcomeFacts | undefined {
+): SettledSeat | undefined {
 	if (!isRecord(value)) {
 		return undefined;
 	}
@@ -428,17 +488,6 @@ function settledFacts(
 		return undefined;
 	}
 	return {
-		seat: {
-			rosterId: identity.rosterId,
-			provider: identity.provider,
-			model: identity.model,
-			lens: identity.lens,
-			lensPrompt: seat.lensPrompt,
-			...(seat.extraExtensionPaths === undefined
-				? {}
-				: { extraExtensionPaths: [...(seat.extraExtensionPaths as string[])] }),
-		},
-		replay: replay as SeatOutcomeFacts["replay"],
 		lifecycle: {
 			startedAtMs: lifecycle.startedAtMs,
 			settledAtMs: lifecycle.settledAtMs,
