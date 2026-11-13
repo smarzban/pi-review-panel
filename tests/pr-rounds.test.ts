@@ -2816,18 +2816,25 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 				},
 				{
 					deps: deps(gh.runGh, {
-						runVerify: verifyRun(repo, "v-1", REVIEW_ID, rows, [
-							{
-								id: "F-1",
-								disposition: "still present",
-								evidence: { file: "src/a.ts", explanation: "===" },
-							},
-							{
-								id: "F-2",
-								disposition: "still present",
-								evidence: { file: "src/a.ts", explanation: "> q" },
-							},
-						]),
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							rows,
+							[
+								{
+									id: "F-1",
+									disposition: "still present",
+									evidence: { file: "src/a.ts", explanation: "===" },
+								},
+								{
+									id: "F-2",
+									disposition: "still present",
+									evidence: { file: "src/a.ts", explanation: "> q" },
+								},
+							],
+							[{ title: "r", file: "src/c.ts", evidence: "===" }],
+						),
 					}),
 				},
 			);
