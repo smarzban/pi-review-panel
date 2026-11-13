@@ -538,6 +538,12 @@ describe("resume checks every settled seat file against the outcome schema", () 
 			},
 		],
 		[
+			"another seat's index inside it",
+			(file) => {
+				file.index = 1;
+			},
+		],
+		[
 			"a different roster row",
 			(file) => {
 				(file.facts.seat as Record<string, unknown>).rosterId = "elsewhere";

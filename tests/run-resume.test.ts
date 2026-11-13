@@ -319,7 +319,9 @@ describe("resume", () => {
 		const repo = createHostRepo();
 		try {
 			const recordPath = await interruptedReview(repo);
+			// Both are signed, so what makes them unsettled is their content.
 			writeFileSync(path.join(recordPath, SEATS_DIR, "1.json"), "{not json");
+			signSeat(recordPath, 1);
 			const zero = JSON.parse(
 				readFileSync(path.join(recordPath, SEATS_DIR, "0.json"), "utf8"),
 			);
@@ -328,6 +330,7 @@ describe("resume", () => {
 				path.join(recordPath, SEATS_DIR, "0.json"),
 				JSON.stringify(zero),
 			);
+			signSeat(recordPath, 0);
 			const loaded = loadResumable(
 				repo,
 				path.basename(recordPath),
