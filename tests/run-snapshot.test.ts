@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	existsSync,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
@@ -22,7 +24,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  */
 const fsHook = vi.hoisted(() => ({
 	afterMkdtemp: undefined as ((made: string) => void) | undefined,
+	/** Folders (by name) whose `lstat` reports another user as the owner. */
+	otherUserFolders: new Set<string>(),
+	/** When set, every `fstat` reports this uid as the owner. */
+	fstatUid: undefined as number | undefined,
 }));
+
+/** Every git command `snapshot.ts` runs, by its arguments. */
+const gitLog = vi.hoisted(() => ({ calls: [] as string[][] }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+	const real = await importOriginal<typeof import("node:child_process")>();
+	return {
+		...real,
+		execFileSync: (...args: Parameters<typeof real.execFileSync>) => {
+			if (args[0] === "git" && Array.isArray(args[1])) {
+				gitLog.calls.push(args[1].map(String));
+			}
+			return real.execFileSync(...args);
+		},
+	};
+});
 
 vi.mock("node:fs", async (importOriginal) => {
 	const real = await importOriginal<typeof import("node:fs")>();
@@ -35,11 +57,31 @@ vi.mock("node:fs", async (importOriginal) => {
 			act?.(String(made));
 			return made;
 		},
+		lstatSync: (...args: Parameters<typeof real.lstatSync>) => {
+			const stats = real.lstatSync(...args);
+			if (
+				stats !== undefined &&
+				fsHook.otherUserFolders.has(path.basename(String(args[0])))
+			) {
+				stats.uid = Number(stats.uid) + 1;
+			}
+			return stats;
+		},
+		fstatSync: (...args: Parameters<typeof real.fstatSync>) => {
+			const stats = real.fstatSync(...args);
+			if (fsHook.fstatUid !== undefined) {
+				stats.uid = fsHook.fstatUid;
+			}
+			return stats;
+		},
 	};
 });
 
 afterEach(() => {
 	fsHook.afterMkdtemp = undefined;
+	fsHook.otherUserFolders.clear();
+	fsHook.fstatUid = undefined;
+	gitLog.calls.length = 0;
 	vi.restoreAllMocks();
 });
 
@@ -599,6 +641,135 @@ describe("pinSnapshot writes its owner file safely", () => {
 			expect(existsSync(holder)).toBe(false);
 		} finally {
 			removeFixture(repo, pin.worktreePath);
+		}
+	});
+});
+
+describe("each guard on what the sweep trusts holds on its own", () => {
+	/** A snapshot this user made whose owner process has exited. */
+	function deadSnapshot(repo: string): { worktree: string; holder: string } {
+		const pin = pinSnapshot(repo);
+		ownedBy(pin.worktreePath, deadPid());
+		return {
+			worktree: pin.worktreePath,
+			holder: path.dirname(pin.worktreePath),
+		};
+	}
+
+	function expectKept(repo: string, worktree: string, registered = true): void {
+		const swept = sweepStaleSnapshots(repo);
+		expect(swept.removed).toEqual([]);
+		expect(existsSync(path.join(worktree, "committed.txt"))).toBe(true);
+		expect(worktreeCount(repo)).toBe(registered ? 2 : 1);
+	}
+
+	it("never trusts the owner file of a folder that is itself a worktree", () => {
+		const repo = createHostRepo();
+		const { worktree, holder } = deadSnapshot(repo);
+		try {
+			// Unregistered, so only the `.git` check stops the owner file being read.
+			rmSync(path.join(repo, ".git", "worktrees", path.basename(worktree)), {
+				recursive: true,
+				force: true,
+			});
+			writeFileSync(path.join(holder, ".git"), "gitdir: elsewhere\n");
+
+			expectKept(repo, worktree, false);
+		} finally {
+			removeFixture(repo, worktree);
+		}
+	});
+
+	it.skipIf(process.platform === "win32").each([0o720, 0o702])(
+		"never trusts the owner file in a holder with mode %o that others can write",
+		(mode) => {
+			const repo = createHostRepo();
+			const { worktree, holder } = deadSnapshot(repo);
+			try {
+				chmodSync(holder, mode);
+				expectKept(repo, worktree);
+			} finally {
+				chmodSync(holder, 0o700);
+				removeFixture(repo, worktree);
+			}
+		},
+	);
+
+	it("never trusts an owner file with a second hard link", () => {
+		const repo = createHostRepo();
+		const { worktree, holder } = deadSnapshot(repo);
+		try {
+			linkSync(snapshotOwnerPath(worktree), path.join(holder, "second-link"));
+			expectKept(repo, worktree);
+		} finally {
+			removeFixture(repo, worktree);
+		}
+	});
+
+	it.skipIf(typeof process.getuid !== "function")(
+		"never trusts an owner file another user owns, in a holder this user owns",
+		() => {
+			const repo = createHostRepo();
+			const { worktree } = deadSnapshot(repo);
+			try {
+				fsHook.fstatUid = (process.getuid as () => number)() + 1;
+				expectKept(repo, worktree);
+			} finally {
+				fsHook.fstatUid = undefined;
+				removeFixture(repo, worktree);
+			}
+		},
+	);
+
+	it.skipIf(typeof process.getuid !== "function")(
+		"never touches a holder another user owns, even with this user's dead owner file",
+		() => {
+			const repo = createHostRepo();
+			const { worktree, holder } = deadSnapshot(repo);
+			try {
+				fsHook.otherUserFolders.add(path.basename(holder));
+				expectKept(repo, worktree);
+			} finally {
+				fsHook.otherUserFolders.clear();
+				removeFixture(repo, worktree);
+			}
+		},
+	);
+
+	it("never hands git the path of a dead snapshot whose folder is gone", () => {
+		const repo = createHostRepo();
+		const { worktree } = deadSnapshot(repo);
+		try {
+			rmSync(worktree, { recursive: true, force: true });
+			gitLog.calls.length = 0;
+
+			sweepStaleSnapshots(repo);
+
+			expect(worktreeCount(repo)).toBe(1);
+			const named = gitLog.calls.filter((args) =>
+				args.some((arg) => arg.includes(path.basename(worktree))),
+			);
+			expect(named).toEqual([]);
+		} finally {
+			removeFixture(repo, worktree);
+		}
+	});
+
+	it("keeps the registration of a gone snapshot that is locked", () => {
+		const repo = createHostRepo();
+		const { worktree } = deadSnapshot(repo);
+		try {
+			rmSync(worktree, { recursive: true, force: true });
+			writeFileSync(
+				path.join(repo, ".git", "worktrees", path.basename(worktree), "locked"),
+				"",
+			);
+
+			sweepStaleSnapshots(repo);
+
+			expect(worktreeCount(repo)).toBe(2);
+		} finally {
+			removeFixture(repo, worktree);
 		}
 	});
 });
