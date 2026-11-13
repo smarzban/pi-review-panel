@@ -265,17 +265,27 @@ function assertReplaceable(target: string): void {
 
 /**
  * Checks, before anything runs, that every file a run writes into an
- * existing record can be written: nothing at those names is a folder or
- * another non-file, and `seats` is a real folder when present. Symlinks pass,
+ * existing record can be written: nothing at those names, or at any planned
+ * seat file name, is a folder or another non-file, and `seats` is a real
+ * folder when present. Symlinks pass,
  * because {@link writeRecordFile} replaces them.
  */
-export function assertRecordWritable(recordPath: string): void {
+export function assertRecordWritable(
+	recordPath: string,
+	seatCount: number,
+): void {
 	for (const name of [...RECORD_OUTPUT_FILES, RUN_LOCK_FILE]) {
 		assertReplaceable(path.join(recordPath, name));
 	}
 	const seats = path.join(recordPath, SEATS_DIR);
-	if (exists(seats) && !isRealDirectory(seats)) {
+	if (!exists(seats)) {
+		return;
+	}
+	if (!isRealDirectory(seats)) {
 		throw new Error(`${seats} is not a real directory`);
+	}
+	for (let index = 0; index < seatCount; index += 1) {
+		assertReplaceable(path.join(seats, `${index}.json`));
 	}
 }
 

@@ -137,11 +137,7 @@ export function loadResumable(
 	}
 	const plan = readPlan(recordPath, runId);
 	checkPanelCaps(plan, runId);
-	try {
-		assertRecordWritable(recordPath);
-	} catch (error) {
-		refuse(error instanceof Error ? error.message : String(error));
-	}
+	checkWritable(recordPath, plan);
 	const holder = runLockHolder(recordPath);
 	if (holder !== undefined && isProcessAlive(holder)) {
 		refuse(`run "${runId}" is still in progress (pid ${holder})`);
@@ -191,6 +187,7 @@ export async function resumeRun(
 				`run "${run.runId}" is already complete; there is nothing to resume`,
 			);
 		}
+		checkWritable(run.recordPath, plan);
 		const prompts =
 			plan.kind === "review"
 				? (lensTable ?? loadLensTable())
@@ -235,9 +232,14 @@ export async function resumeRun(
 			scopingNoteDropped,
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
+		const priorRecordPaths =
+			plan.kind === "review"
+				? discoverPriorRecords(run.repoDir).map((entry) => entry.path)
+				: [];
 		onStart?.({
 			toRun: settled.filter((facts) => facts === undefined).length,
 		});
+		// From here the run owns the lock and releases it when it ends.
 		handedOver = true;
 		const result =
 			plan.kind === "review"
@@ -250,9 +252,7 @@ export async function resumeRun(
 							headOid: plan.headOid,
 							seats,
 							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
-							priorRecordPaths: discoverPriorRecords(run.repoDir).map(
-								(entry) => entry.path,
-							),
+							priorRecordPaths,
 						},
 						runOptions,
 						resume,
@@ -282,6 +282,15 @@ export async function resumeRun(
 		if (!handedOver) {
 			releaseLock?.();
 		}
+	}
+}
+
+/** Refuses a record that holds something a run could not safely write over. */
+function checkWritable(recordPath: string, plan: RunPlan): void {
+	try {
+		assertRecordWritable(recordPath, plan.seats.length);
+	} catch (error) {
+		refuse(error instanceof Error ? error.message : String(error));
 	}
 }
 
