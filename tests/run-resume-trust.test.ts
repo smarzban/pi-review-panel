@@ -1015,32 +1015,76 @@ describe("resume plan validation", () => {
 	});
 });
 
+/**
+ * Runs `loadResumable` in a child process and waits for it to exit. Nothing
+ * is timed: the only bound is a watchdog that kills a child still running
+ * after `WATCHDOG_MS`, which only a call blocked for ever reaches.
+ */
+const WATCHDOG_MS = 30_000;
+
+function loadResumableInChild(
+	repo: string,
+	runId: string,
+): Promise<{
+	code: number | null;
+	signal: NodeJS.Signals | null;
+	out: string;
+}> {
+	const fixtures = path.join(import.meta.dirname, "fixtures", "child");
+	const child = spawn(
+		process.execPath,
+		[
+			"--import",
+			path.join(fixtures, "source-hooks.ts"),
+			path.join(fixtures, "load-resumable.ts"),
+			repo,
+			runId,
+		],
+		{ stdio: ["ignore", "pipe", "inherit"] },
+	);
+	let out = "";
+	child.stdout.setEncoding("utf8");
+	child.stdout.on("data", (chunk: string) => {
+		out += chunk;
+	});
+	const watchdog = setTimeout(() => child.kill("SIGKILL"), WATCHDOG_MS);
+	return new Promise((resolve, reject) => {
+		child.on("error", reject);
+		child.on("close", (code, signal) => {
+			clearTimeout(watchdog);
+			resolve({ code, signal, out });
+		});
+	});
+}
+
 describe("resume never blocks on a record file that is not a regular file", () => {
 	it.skipIf(process.platform === "win32")(
-		"refuses a plan.json FIFO at once instead of waiting for a writer",
+		"refuses a plan.json FIFO with no writer instead of waiting for one",
 		async () => {
 			const repo = createHostRepo();
-			let writer: ChildProcess | undefined;
 			try {
 				const recordPath = await interruptedReview(repo);
 				const planPath = path.join(recordPath, PLAN_FILE);
 				rmSync(planPath);
+				// No process ever opens this FIFO for writing: a blocking open
+				// would wait for ever, and the watchdog would kill the child.
 				execFileSync("mkfifo", [planPath]);
-				// A blocking open would wait for this writer, two seconds out; it
-				// also bounds the test if the open does block.
-				writer = spawn("sh", ["-c", `sleep 2; : > "${planPath}"`], {
-					stdio: "ignore",
-				});
-				const started = Date.now();
-				expect(() =>
-					loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
-				).toThrow(/Resume refused: run ".*" has no resume plan/);
-				expect(Date.now() - started).toBeLessThan(1000);
+
+				const result = await loadResumableInChild(
+					repo,
+					path.basename(recordPath),
+				);
+
+				expect(result.signal).toBeNull();
+				expect(result.code).toBe(0);
+				expect(JSON.parse(result.out).refused).toMatch(
+					/^Resume refused: run ".*" has no resume plan, so it cannot be resumed/,
+				);
 			} finally {
-				writer?.kill("SIGKILL");
 				rmSync(repo, { recursive: true, force: true });
 			}
 		},
+		WATCHDOG_MS + 30_000,
 	);
 });
 
@@ -1219,12 +1263,12 @@ describe("resume trusts only records signed with the owner's record key", () => 
 			// A MAC made with some other key does not pass either.
 			signPlan(recordPath, Buffer.alloc(32, 9));
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/has no valid signature/,
+				/has no valid signature from this owner's record key/,
 			);
 			// Nor does a malformed one.
 			writeFileSync(path.join(recordPath, "plan.mac"), "not-a-mac");
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/has no valid signature/,
+				/has no valid signature from this owner's record key/,
 			);
 			expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(false);
 		} finally {
@@ -1255,7 +1299,7 @@ describe("resume trusts only records signed with the owner's record key", () => 
 			// the package can leave; it is refused as unsigned.
 			symlinkSync(path.join(recordPath, "plan.json"), macPath);
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/has no valid signature/,
+				/has no valid signature from this owner's record key/,
 			);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
@@ -1273,7 +1317,7 @@ describe("resume trusts only records signed with the owner's record key", () => 
 			renameSync(recordPath, moved);
 			expect(() =>
 				loadResumable(repo, path.basename(moved), TEST_RECORD_KEY),
-			).toThrow(/has no valid signature/);
+			).toThrow(/has no valid signature from this owner's record key/);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}

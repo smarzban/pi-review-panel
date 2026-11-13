@@ -23,6 +23,27 @@ import {
 } from "../src/run/record-key.js";
 import { testPlanMac, testSeatMac } from "./fixtures/record-key.js";
 
+/**
+ * `linkSync` passes through, except that a test can run something at the
+ * moment a key's temp file is written and not yet linked into place.
+ */
+const linkHook = vi.hoisted(() => ({
+	beforeLink: undefined as (() => void) | undefined,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const real = await importOriginal<typeof import("node:fs")>();
+	return {
+		...real,
+		linkSync: (existing: string, target: string) => {
+			const act = linkHook.beforeLink;
+			linkHook.beforeLink = undefined;
+			act?.();
+			return real.linkSync(existing, target);
+		},
+	};
+});
+
 // Every test works in a temporary config folder; none touches the owner's
 // real ~/.pi-review-panel/.
 let root: string;
@@ -34,8 +55,8 @@ beforeEach(() => {
 	root = mkdtempSync(path.join(tmpdir(), "record-key-"));
 	configDir = path.join(root, "config");
 	repoDir = path.join(root, "repo");
-	// 0700 explicitly: a group-writable key folder is refused, and a bare
-	// mkdirSync under a permissive umask would make one.
+	// 0700 explicitly: a bare mkdirSync under a permissive umask would make a
+	// group-writable folder, which diagnose warns about.
 	mkdirSync(configDir, { mode: 0o700 });
 	chmodSync(configDir, 0o700);
 	mkdirSync(repoDir);
@@ -178,21 +199,65 @@ describe("the record key's owner and folder", () => {
 	);
 
 	it.skipIf(!posix)(
-		"refuses a key folder writable by group or other users, with or without a key in it",
+		"refuses a key folder other users can write, with or without a key in it",
 		() => {
-			for (const mode of [0o770, 0o707, 0o777, 0o1777]) {
+			for (const mode of [0o707, 0o757, 0o777, 0o1777]) {
 				chmodSync(configDir, mode);
 				expect(() => loadRecordKey(keyPath, { create: true, repoDir })).toThrow(
-					/record-key is refused: its folder .* is writable by group or other users/,
+					/record-key is refused: its folder .* is writable by other users/,
 				);
 			}
 			expect(readdirSync(configDir)).toEqual([]);
 			chmodSync(configDir, 0o700);
 			loadRecordKey(keyPath, { create: true, repoDir });
-			chmodSync(configDir, 0o775);
+			chmodSync(configDir, 0o777);
 			expect(() => loadRecordKey(keyPath, { create: false, repoDir })).toThrow(
-				/is writable by group or other users/,
+				/is writable by other users/,
 			);
+		},
+	);
+
+	it.skipIf(!posix)(
+		"accepts a group-writable key folder (the umask 002 default), creating and reading the key",
+		() => {
+			for (const mode of [0o775, 0o770]) {
+				rmSync(keyPath, { force: true });
+				chmodSync(configDir, mode);
+				const created = loadRecordKey(keyPath, { create: true, repoDir });
+				expect(
+					loadRecordKey(keyPath, { create: false, repoDir }).equals(created),
+				).toBe(true);
+			}
+		},
+	);
+
+	it.skipIf(!posix)(
+		"suggests chmod go-w only for a folder you own that is not sticky",
+		() => {
+			const fixFor = (): string | undefined => {
+				try {
+					loadRecordKey(keyPath, { create: true, repoDir });
+				} catch (error) {
+					return (error as { fix?: string }).fix;
+				}
+				return undefined;
+			};
+			chmodSync(configDir, 0o777);
+			expect(fixFor()).toMatch(new RegExp(`chmod go-w ${configDir}`));
+			// A sticky shared folder such as /tmp: chmod would break it for
+			// everyone, so move the config instead.
+			chmodSync(configDir, 0o1777);
+			const sticky = fixFor();
+			expect(sticky).not.toMatch(/chmod/);
+			expect(sticky).toMatch(/PI_REVIEW_PANEL_CONFIG/);
+			// A folder another user owns: chmod would fail anyway.
+			chmodSync(configDir, 0o777);
+			const me = process.getuid?.() ?? 0;
+			vi.spyOn(process, "getuid").mockReturnValue(me + 1);
+			const foreign = fixFor();
+			expect(foreign).not.toMatch(/chmod/);
+			expect(foreign).toMatch(/PI_REVIEW_PANEL_CONFIG/);
+			expect(readdirSync(configDir)).toEqual([]);
 		},
 	);
 
@@ -210,15 +275,12 @@ describe("the record key's owner and folder", () => {
 describe("the record key creation race", () => {
 	it("gives two creators one key: the loser reads the winner's bytes", () => {
 		let other: Buffer | undefined;
-		const mine = loadRecordKey(keyPath, {
-			create: true,
-			repoDir,
-			// The second creator runs in full between the first one's temp
-			// write and its link, so the first one's link meets EEXIST.
-			beforeLink: () => {
-				other = loadRecordKey(keyPath, { create: true, repoDir });
-			},
-		});
+		// The second creator runs in full between the first one's temp write
+		// and its link, so the first one's link meets EEXIST.
+		linkHook.beforeLink = () => {
+			other = loadRecordKey(keyPath, { create: true, repoDir });
+		};
+		const mine = loadRecordKey(keyPath, { create: true, repoDir });
 		expect(other).toBeDefined();
 		expect(mine.equals(other as Buffer)).toBe(true);
 		expect(readFileSync(keyPath).equals(mine)).toBe(true);
@@ -307,7 +369,7 @@ describe("checking the record key without writing (diagnose)", () => {
 				plant: () => {
 					chmodSync(configDir, 0o777);
 				},
-				cause: /is writable by group or other users/,
+				cause: /is writable by other users/,
 				fix: /chmod go-w/,
 			},
 		];
@@ -321,6 +383,44 @@ describe("checking the record key without writing (diagnose)", () => {
 			expect(problem?.cause).toContain(keyPath);
 			expect(problem?.fix).toMatch(fix);
 			expect(listing()).toEqual(before);
+		}
+	});
+
+	it.skipIf(!posix)(
+		"warns, without blocking, about a group-writable folder, with or without a key",
+		() => {
+			chmodSync(configDir, 0o775);
+			const empty = checkRecordKey(keyPath, { repoDir });
+			expect(empty?.warning).toBe(true);
+			expect(empty?.cause).toMatch(
+				/record key .*record-key: its folder .* is writable by its group/,
+			);
+			expect(empty?.fix).toMatch(new RegExp(`chmod g-w ${configDir}`));
+			expect(listing()).toEqual([]);
+			chmodSync(configDir, 0o700);
+			loadRecordKey(keyPath, { create: true, repoDir });
+			chmodSync(configDir, 0o775);
+			expect(checkRecordKey(keyPath, { repoDir })?.warning).toBe(true);
+			expect(listing()).toEqual([RECORD_KEY_FILE]);
+		},
+	);
+
+	it.skipIf(!posix)(
+		"reports a blocking key problem, not the warning, in a group-writable folder",
+		() => {
+			writeFileSync(keyPath, Buffer.alloc(32, 1));
+			chmodSync(keyPath, 0o644);
+			chmodSync(configDir, 0o775);
+			const problem = checkRecordKey(keyPath, { repoDir });
+			expect(problem?.warning).toBeUndefined();
+			expect(problem?.cause).toMatch(/readable by group or other users/);
+		},
+	);
+
+	it.skipIf(!posix)("gives no warning for a folder only you can write", () => {
+		for (const mode of [0o700, 0o755]) {
+			chmodSync(configDir, mode);
+			expect(checkRecordKey(keyPath, { repoDir })).toBeUndefined();
 		}
 	});
 

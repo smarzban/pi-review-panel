@@ -275,6 +275,32 @@ describe("review_panel actions without Pi", () => {
 		});
 	});
 
+	it("diagnose stays ready on a record-key warning and shows it after the report", async () => {
+		await withRepository(async (repo) => {
+			const result = await diagnoseAction(
+				{ repoDir: repo },
+				{
+					deps: deps({
+						checkRecordKey: () => ({
+							cause: "record key folder is group-writable",
+							fix: "Run chmod g-w on it.",
+							warning: true,
+						}),
+					}),
+				},
+			);
+			expect(textOf(result)).toBe(
+				[
+					"# Review panel readiness",
+					"- Status: ready",
+					"- All configured prerequisites are available.",
+					"## Warnings",
+					"- record key folder is group-writable. Run chmod g-w on it.",
+				].join("\n"),
+			);
+		});
+	});
+
 	it("review runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
 			const result = await reviewAction(

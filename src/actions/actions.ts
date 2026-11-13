@@ -95,6 +95,7 @@ import {
 	renderReadiness,
 	renderReviewResult,
 	renderVerifyResult,
+	truncateCodePoints,
 } from "../tool/review-presentation.js";
 
 export type ActionResult = {
@@ -617,7 +618,7 @@ export async function diagnoseAction(
 		home: resolved.home,
 	});
 	const shown =
-		keyProblem === undefined
+		keyProblem === undefined || keyProblem.warning
 			? report
 			: {
 					ready: false,
@@ -629,7 +630,15 @@ export async function diagnoseAction(
 						},
 					],
 				};
-	return textResult(renderReadiness(shown));
+	// A warning never changes readiness: it is shown after the report,
+	// outside its remediation rows, at most 1,500 characters, and the
+	// report keeps room for it so the reply stays within the cap. The
+	// cause already names the record key, so it is not prefixed again.
+	const warning = keyProblem?.warning
+		? `\n## Warnings\n- ${truncateCodePoints(`${keyProblem.cause}. ${keyProblem.fix}`, 1_500)}`
+		: "";
+	const reserve = new TextEncoder().encode(warning).length;
+	return textResult(`${renderReadiness(shown, reserve)}${warning}`);
 }
 
 export async function auditAction(
