@@ -19,7 +19,8 @@
  *   fence longer than any backtick run inside, so it cannot be closed early.
  *   Nothing is escaped or joined inside it: GitHub shows a code span
  *   literally and forms no mention, reference or link there, and a joiner
- *   would hide in a copied path.
+ *   would hide in a copied path. A value with nothing visible renders as
+ *   `(empty)`.
  *
  * {@link fitCommentBody} cuts a body by whole rows to stay under GitHub's
  * comment limit; every posted body goes through it.
@@ -92,8 +93,19 @@ export function postedText(text: string, maxChars = POSTED_TEXT_CHARS): string {
 	return breakLinks(line.replace(/[\\`*_[\]()#!<>|~&$]/gu, "\\$&"));
 }
 
-/** A file name or id as one code span it cannot close. */
+/** Nothing a reader could see: only space and invisible characters. */
+const NOTHING_VISIBLE =
+	/^[\s\u0085\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]*$/u;
+
+/**
+ * A file name or id as one code span it cannot close. A value with nothing
+ * visible in it renders as `(empty)`, never as a bare pair of backticks,
+ * which could pair with a later fence on the same line.
+ */
 export function postedCode(text: string, maxChars = POSTED_CODE_CHARS): string {
+	if (NOTHING_VISIBLE.test(text)) {
+		return "(empty)";
+	}
 	return inlineCode(
 		inertKeepingEmoji(truncateCodePoints(foldLines(text), maxChars)),
 	);

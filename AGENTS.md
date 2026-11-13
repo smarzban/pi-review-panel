@@ -26,8 +26,8 @@ Runs record under `<repo>/.review-panel/runs/`, each seat as it settles. `resume
 interrupted review or audit record, running only its unsettled seats at the recorded head. Review
 and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
 the repository); resume refuses an unsigned plan and re-runs an unsigned seat. Verify reads
-those trees and writes only its posting claims into the review's record (`round-<N>.claim`, which
-becomes `round-<N>.posted`, and `closeout.posted`). The output is a
+those trees and writes only its posting claims and markers into the review's record
+(`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
 review-derived semantic stop signal: agents judge, and the human is the merge gate.
@@ -41,9 +41,10 @@ GitHub comment. Review and verify post each round to the one open PR whose head 
 run's head, by default, as a new comment (`## Review panel · review`, `## Review panel · verify N`);
 a verify where every verify seat voted, each marked every kept id resolved, and none reported a
 regression also posts the close-out card on its own (`## Review panel · close-out`, once per
-review). The card is presentation, not a verdict: the agents judge and the owner merges. `prComment: false` (CLI `--no-pr-comment`)
-turns posting off for a run, and owner config `defaults.prComment: "ownerApproved"` makes every
-post need `ownerApproved: true`. A post that cannot be made is one reply line, never a run failure.
+review). The card is presentation, not a verdict: the agents judge and the owner merges.
+`prComment: false` (CLI `--no-pr-comment`) turns posting off for a run, and owner config
+`defaults.prComment: "ownerApproved"` makes every post need `ownerApproved: true`. A post that
+cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card after the owner says yes
 (`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
 list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
@@ -64,20 +65,29 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR by default, always as a new comment that is
-  never edited or deleted; audit and resume never post. The automatic close-out posts once per
-  review (an exclusive `closeout.posted` claim in the review's run record, then a check of the PR's
-  comments; a claim left by a crash goes stale and is taken over), only after a verify with no lost seat, every voting seat marking every kept id
-  resolved, and no regressions. An explicit `pr` must be open with the run's head as its head.
+  never edited or deleted; audit and resume never post. The automatic close-out posts only after
+  a verify with no lost seat, every voting seat marking every kept id resolved, and no
+  regressions. An explicit `pr` must be open with the run's head as its head.
   Every posted body (review, verify, the automatic close-out and the manual `comment` card) goes
   through `src/tool/posted-text.ts`: seat text, record fields and refs are one line of
   backslash-escaped plain text with a zero-width joiner after every `@`, `＠` and `#`, in `GH-123`
   and in `://`, the dot of `www.` backslash-escaped, and control, bidi and invisible characters
   replaced (an emoji keeps its U+FE0F and in-sequence joiners); file names and ids are code spans
-  with a fence longer than any backtick run inside, with nothing escaped or joined in them. Bodies
-  are capped under 65,536 characters and sent to `gh` on stdin; `gh` runs asynchronously within
-  one deadline per round, and an interrupt kills it. Each verify claims its round number
-  atomically (`round-<N>.claim` in the review's record), so concurrent verifies post distinct,
-  sequential numbers.
+  with a fence longer than any backtick run inside, with nothing escaped or joined in them, and a
+  value with nothing visible renders as `(empty)`. Bodies are capped under 65,536 characters and
+  sent to `gh` on stdin; `gh` runs asynchronously within one deadline per round, and an interrupt
+  kills it.
+- Posting claims (`src/tool/round-claim.ts`) are fresh exclusive creates (`wx`) in the review's
+  run record, and nothing else: no claim is ever taken over, renamed or put back. A verify claims
+  `round-<N>.claim`, checks `round-<N>.posted` again after the create, and on a post writes
+  `round-<N>.posted` (`wx`) and then deletes its claim. A stale claim (older than the round
+  deadline plus 5 s, or made on this host by a process that is gone) stays where it is and is
+  skipped, so a crash can leave a gap in the verify numbering, never a duplicate. The close-out
+  uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify to the PR's
+  comments, then to the next generation; only a generation's creator posts, and a posted card
+  writes `closeout.posted` (`wx`), which stops every later verify. The close-out posts at most once
+  per review, except after a crash between GitHub accepting the card and `closeout.posted` being
+  written; the PR-comment check catches that case.
   Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.

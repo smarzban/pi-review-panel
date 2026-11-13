@@ -2445,7 +2445,11 @@ describe("fix round 2: concurrent verifies get distinct, sequential round number
 describe("fix round 3: close-out claims are generations, never taken over", () => {
 	const clean: SeatVote[] = [{ rosterId: "terra", items: [resolved("F-1")] }];
 
-	function writeClaim(repo: string, name: string, info: object | string): string {
+	function writeClaim(
+		repo: string,
+		name: string,
+		info: object | string,
+	): string {
 		const file = path.join(reviewRecordDir(repo), name);
 		writeFileSync(file, typeof info === "string" ? info : JSON.stringify(info));
 		return file;
@@ -2570,7 +2574,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
 			expect(
-				gh.calls.filter((call) => call.args.some((arg) => arg.includes("/comments"))),
+				gh.calls.filter((call) => call.args.includes("--paginate")),
 			).toHaveLength(0);
 			expect(textOf(result).split("\n").at(-1)).toBe(
 				"PR close-out: not posted (this review's close-out is already posted)",
@@ -2618,7 +2622,13 @@ describe("fix round 3: round markers and claims through the verify action", () =
 			expect(
 				JSON.parse(
 					readFileSync(
-						path.join(repo, ".review-panel", "runs", "v-1", ROUND_POSTED_MARKER),
+						path.join(
+							repo,
+							".review-panel",
+							"runs",
+							"v-1",
+							ROUND_POSTED_MARKER,
+						),
 						"utf8",
 					),
 				),
@@ -2989,9 +2999,12 @@ describe("fix round 3: nits", () => {
 		["NEL", "\u0085"],
 		["zero-width space", "​"],
 		["bidi and joiner", "‮‍⁠"],
-	])("a code value with nothing visible (%s) renders as (empty), never as a bare fence", (_name, value) => {
-		expect(postedCode(value)).toBe("(empty)");
-	});
+	])(
+		"a code value with nothing visible (%s) renders as (empty), never as a bare fence",
+		(_name, value) => {
+			expect(postedCode(value)).toBe("(empty)");
+		},
+	);
 
 	it("a visible code value is still a code span", () => {
 		expect(postedCode(" a ")).toBe("`a`");

@@ -36,15 +36,16 @@ import { loadCloseoutRun } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
 import { fitCommentBody, postedCode, postedText } from "./posted-text.js";
 import {
+	CLOSEOUT_GENERATIONS,
+	CLOSEOUT_POSTED_FILE,
+	claimCloseout,
 	claimRound,
 	type HeldClaim,
 	isRealFile,
-	markPosted,
 	ROUND_DEADLINE_MS,
 	type RoundClaim,
-	releaseClaim,
+	settleCloseout,
 	settleRound,
-	takeClaim,
 } from "./round-claim.js";
 
 export { fitCommentBody, GITHUB_COMMENT_LIMIT } from "./posted-text.js";
@@ -79,12 +80,11 @@ const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
 export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
 /**
- * Created exclusively in the review's run record by the one verify that
- * posts its close-out, holding `{verifyRunId, pid, claimedAt}` and, once
- * the card is on the PR, `postedAt`; removed again if that post fails. A
- * claim left by a crash goes stale (see `round-claim.ts`).
+ * Written exclusively in the review's run record once its close-out card is
+ * on the PR; no verify posts a close-out after it. The card is claimed
+ * first with `closeout.claim-<g>` (see `round-claim.ts`).
  */
-export const CLOSEOUT_CLAIM_MARKER = "closeout.posted";
+export const CLOSEOUT_CLAIM_MARKER = CLOSEOUT_POSTED_FILE;
 /**
  * Written in a verify's run record once its comment is on the PR. The
  * review's record also gets `round-<N>.posted` (see `round-claim.ts`).
@@ -878,31 +878,39 @@ async function closeoutAlreadyPosted(
 }
 
 /**
- * Claims this review's one close-out by creating
- * {@link CLOSEOUT_CLAIM_MARKER} exclusively in its run record. Only the
- * claimer posts; another verify, even a concurrent one, finds it there. A
- * stale claim, left by a verify that crashed, is taken over, and the PR
- * check that follows is what stops a second card.
+ * Claims this review's one close-out (see `claimCloseout` in
+ * `round-claim.ts`), asking the PR's comments only when an earlier claim
+ * was left stale. Returns the claim, or why nothing is posted.
  */
-function claimCloseout(
+async function claimReviewCloseout(
 	card: CloseoutCard,
 	verifyRunId: string,
-): HeldClaim | { reason: string } {
-	const taken = takeClaim(
-		path.join(card.reviewRecord, CLOSEOUT_CLAIM_MARKER),
-		verifyRunId,
+	gh: Gh,
+	target: PrTarget,
+): Promise<HeldClaim | { reason: string }> {
+	const claim = await claimCloseout(card.reviewRecord, verifyRunId, () =>
+		closeoutAlreadyPosted(gh, target, card.reviewRunId),
 	);
-	if (taken.kind === "taken") {
-		return taken.claim;
+	switch (claim.kind) {
+		case "taken":
+			return claim.claim;
+		case "posted":
+			return {
+				reason: claim.onPr
+					? `a close-out for this review is already on PR #${target.pr}`
+					: "this review's close-out is already posted",
+			};
+		case "busy":
+			return { reason: "another verify is posting this review's close-out" };
+		case "exhausted":
+			return {
+				reason: `closeout.claim-1 to closeout.claim-${CLOSEOUT_GENERATIONS} were all left by verifies that stopped; delete them from the review's run record to post it`,
+			};
+		default:
+			return {
+				reason: `the close-out could not be claimed: ${inert(truncateCodePoints(oneLine(errorText(claim.error)), 200))}`,
+			};
 	}
-	if (taken.kind === "held") {
-		return {
-			reason: "another verify already claimed this review's close-out",
-		};
-	}
-	return {
-		reason: `the close-out could not be claimed: ${inert(truncateCodePoints(oneLine(errorText(taken.error)), 200))}`,
-	};
 }
 
 /** Records in the verify's run record that its comment is on the PR. */
@@ -989,7 +997,18 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", card.reason));
 		return lines;
 	}
-	const claim = claimCloseout(card, verifyRunId);
+	let claim: HeldClaim | { reason: string };
+	try {
+		claim = await claimReviewCloseout(
+			card,
+			verifyRunId,
+			verify.gh,
+			verify.target,
+		);
+	} catch (error) {
+		lines.push(notPosted("PR close-out", ghReason(error)));
+		return lines;
+	}
 	if ("reason" in claim) {
 		lines.push(notPosted("PR close-out", claim.reason));
 		return lines;
@@ -998,8 +1017,9 @@ export async function postVerifyRound(
 		if (
 			await closeoutAlreadyPosted(verify.gh, verify.target, card.reviewRunId)
 		) {
-			// The card is there: keep the claim, marked posted.
-			markPosted(claim);
+			// The card is there already (a manual card, or a post whose
+			// marker a crash lost): record it, and post nothing.
+			settleCloseout(claim, true);
 			lines.push(
 				notPosted(
 					"PR close-out",
@@ -1009,10 +1029,10 @@ export async function postVerifyRound(
 			return lines;
 		}
 		const url = await createComment(verify.gh, verify.target, card.body);
-		markPosted(claim);
+		settleCloseout(claim, true);
 		lines.push(posted("PR close-out", verify.target, url));
 	} catch (error) {
-		releaseClaim(claim);
+		settleCloseout(claim, false);
 		lines.push(notPosted("PR close-out", ghReason(error)));
 	}
 	return lines;

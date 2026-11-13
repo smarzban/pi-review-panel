@@ -251,13 +251,28 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 - A review posts `## Review panel · review`: the reply's summary, `Seats:`, `Lost:`, findings and
   `Suggest:`, with the run id instead of the local record path.
 - Each verify posts `## Review panel · verify N`. N starts one past the earlier verifies of the
-  same review whose comment reached the PR (each records that in its run record), and is then
-  claimed atomically: the verify creates `round-<N>.claim` exclusively in the review's run record,
-  moving on past a `round-<N>.posted`, and waiting while another verify is still posting that
-  number. Once the comment is on the PR the claim becomes `round-<N>.posted`; if the post fails,
-  the claim is removed and the reply says so (`… ; verify 1 is left for the next verify`), so a
-  waiting or later verify takes that number. Concurrent verifies therefore post distinct,
-  sequential numbers, and the PR never shows `verify 2` without a `verify 1`.
+  same review whose comment reached the PR (each records that in its run record). The number is
+  then claimed in the review's run record, by these rules:
+  - The verify skips every N with a `round-<N>.posted`, then creates `round-<N>.claim`
+    exclusively (`wx`), holding the verify run id, its process id, the host name and when.
+  - After the create it checks `round-<N>.posted` again: another verify can post N and settle
+    between the first check and the create. If it is there now, the verify deletes its claim and
+    tries N+1.
+  - Once the comment is on the PR, the verify writes `round-<N>.posted` exclusively and then
+    deletes its claim. If the post fails, it deletes its claim and the reply says so
+    (`… ; verify 1 is left for the next verify`), so a waiting or later verify takes that number.
+  - A claim another verify still holds is waited on. The verify stops waiting while 30 s of the
+    round's 60 s deadline are still left, so a claim it wins always has time for its POST. When it
+    gives up it posts no comment for that round, and the reply says
+    `PR comment: not posted (another verify is still posting verify N)`.
+  - A stale claim, left by a verify that crashed, is never taken over, renamed or removed. It
+    stays where it is and the verify tries N+1. A claim is stale when it is older than the round
+    deadline plus 5 s (65 s), or when it was made on this host and its process is gone. A claim
+    from another host (a shared or synced folder, a container and its host) is judged by age
+    alone. A claim with unreadable content is judged by its age on disk.
+  - Mutual exclusion comes only from the exclusive create, so two verifies never post the same
+    number. A crash can leave a gap in the numbering (`verify 3` after `verify 1`), never a
+    duplicate.
   It lists each kept id as resolved, still present or inconclusive with the panel's one-line
   evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept, and the
   regressions as new findings. Verify checks `dismissed` and `lowAdvisory` against the review
@@ -271,16 +286,30 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card's `Lost:` line
   names the review's lost seats; it never names a verify seat, because a lost verify seat stops
   the automatic card.
-- The close-out posts once per review. The verify that posts it first creates `closeout.posted`
-  exclusively in the review's run record, holding the verify run id, its process id and when it
-  claimed, and, once the card is on the PR, when it posted. Two verifies, even concurrent ones,
-  cannot both post it; a close-out for the same review already on the PR by the same author also
-  stops it. If the post fails, the claim is removed so a later verify can post it. A claim left by
-  a verify that crashed (older than the 60 s round deadline plus 5 s, or whose process is gone,
-  and not marked posted) is stale: the next verify takes it over and checks the PR's comments
-  before posting. A stale `round-<N>.claim` is taken over the same way. When the card cannot be built
-  (for example a high or medium finding that was neither kept nor dismissed with a reason), the
-  reply says why.
+- The close-out posts at most once per review, by these rules:
+  - A `closeout.posted` in the review's run record means it is posted. The verify does not ask the
+    PR, and the reply says `PR close-out: not posted (this review's close-out is already posted)`.
+  - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
+    round claim, and checks `closeout.posted` again after the create. Only the creator of a claim
+    posts. Before posting it checks the PR's comments for a close-out of this review by the same
+    author (the manual card does not count; its heading differs). If one is there it writes
+    `closeout.posted` and posts nothing: `PR close-out: not posted (a close-out for this review is
+    already on PR #12)`.
+  - A posted card writes `closeout.posted` exclusively, then deletes the claim. A failed post
+    deletes the claim, so a later verify can post it.
+  - A live claim means another verify is posting it:
+    `PR close-out: not posted (another verify is posting this review's close-out)`.
+  - A stale claim (the same rule as for rounds) is never taken over. The verify checks the PR's
+    comments for the card. If it is there, the verify writes `closeout.posted` and stops. If not,
+    it tries `closeout.claim-2`, and so on up to `closeout.claim-5`. When all five are stale and
+    the card is not on the PR, nothing is posted, and the reply says
+    `PR close-out: not posted (closeout.claim-1 to closeout.claim-5 were all left by verifies that
+    stopped; delete them from the review's run record to post it)`.
+  - One case is set aside: a verify that crashes after GitHub accepted the card but before it
+    wrote `closeout.posted`. The PR-comment check catches it, so the next verify finds the card
+    and posts no second one.
+- When the card cannot be built (for example a high or medium finding that was neither kept nor
+  dismissed with a reason), the reply says why.
 - An explicit `pr` must be an open pull request whose head is the run's head. Otherwise nothing is
   posted and the reply says why, such as `PR comment: not posted (PR #7 is not open)`.
 - Every post is a new comment. Nothing edits or deletes an earlier one. Audit and resume never post.
@@ -303,8 +332,10 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   GitHub's 65,536-character limit (saying how many were cut) and goes to `gh` on stdin.
 - `gh` runs asynchronously, so a slow call never blocks Pi; each call has a 30 s limit and one
   round's calls share a 60 s deadline. Interrupting the run (Esc in Pi, Ctrl-C in the CLI) kills a
-  running `gh` call, and the reply says `not posted (the run was interrupted)`. Comment listings
-  read every page.
+  running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`. When
+  the interrupt comes after a verify claimed its round number, the claim is given back and the
+  reply says so: `PR comment: not posted (the run was interrupted; verify N is left for the next
+  verify)`. Comment listings read every page.
 
 The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
 or updates its own card with the heading `## Review panel`, separate from the automatic

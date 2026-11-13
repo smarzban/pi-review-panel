@@ -555,31 +555,44 @@ describe("close-out generations", () => {
 });
 
 describe("close-out across processes over a stale claim", () => {
-	it("five concurrent verifies over a stale closeout.claim-1 post exactly one card", async () => {
-		for (let trial = 0; trial < 4; trial += 1) {
+	it("five concurrent verifies, all judging a stale closeout.claim-1 before any acts, post exactly one card", async () => {
+		for (let trial = 0; trial < 3; trial += 1) {
 			const dir = record();
 			seed(closeoutClaimFile(dir, 1), staleByAge());
 			const posts = path.join(dir, "posts");
-			const go = path.join(dir, "go");
-			const runs = [1, 2, 3, 4, 5].map((n) =>
+			const release = path.join(dir, "release");
+			const ids = ["v-1", "v-2", "v-3", "v-4", "v-5"];
+			const parked = (id: string) => path.join(dir, `parked-${id}`);
+			const runs = ids.map((id) =>
 				child({
 					kind: "closeout",
 					dir,
-					id: `v-${n}`,
+					id,
 					posts,
-					startAfter: go,
+					parkInCardCheck: true,
+					parked: parked(id),
+					release,
 					postMs: 5,
 				}),
 			);
-			writeFileSync(go, "");
+			// Every verify has judged claim-1 stale and is in its PR check.
+			const until = Date.now() + 20_000;
+			while (!ids.every((id) => existsSync(parked(id)))) {
+				if (Date.now() > until) {
+					throw new Error("the verifies did not all reach the PR check");
+				}
+				await new Promise((resolve) => setTimeout(resolve, 5));
+			}
+			writeFileSync(release, "");
 			const results = await Promise.all(runs);
 			expect(postLines(posts)).toHaveLength(1);
 			expect(
 				results.filter(
-					(result) => (result as { kind?: string }).kind === "posted",
+					(result) => (result as { kind?: string }).kind === "card-posted",
 				),
 			).toHaveLength(1);
 			expect(existsSync(closeoutPostedFile(dir))).toBe(true);
+			expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);
 		}
 	}, 60_000);
 
@@ -607,7 +620,7 @@ describe("close-out across processes over a stale claim", () => {
 				settled: at("winner-settled"),
 			}),
 		]);
-		expect(winner).toEqual({ kind: "posted" });
+		expect(winner).toEqual({ kind: "card-posted" });
 		expect(late).toEqual({ kind: "posted", onPr: false });
 		expect(postLines(posts)).toEqual(["v-winner close-out"]);
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);

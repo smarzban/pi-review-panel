@@ -1,4 +1,9 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import {
 	claimCloseout,
 	claimRound,
@@ -34,6 +39,8 @@ type Spec = {
 	parked?: string;
 	/** Leave the park once this file exists. */
 	release?: string;
+	/** Park in the first PR check (after judging a claim stale, before acting). */
+	parkInCardCheck?: boolean;
 	/** Milliseconds the post takes. */
 	postMs?: number;
 	/** Claim and post this many rounds, one after another. */
@@ -74,7 +81,13 @@ function beforeCreate(at: number): void {
 	}
 }
 
+let checkedOnce = false;
 function cardOnPr(): Promise<boolean> {
+	if (spec.parkInCardCheck === true && !checkedOnce) {
+		checkedOnce = true;
+		touch(spec.parked);
+		waitFor(spec.release as string);
+	}
 	return Promise.resolve(
 		existsSync(spec.posts) &&
 			readFileSync(spec.posts, "utf8").includes(" close-out"),
@@ -131,7 +144,7 @@ async function main(): Promise<unknown> {
 	appendFileSync(spec.posts, `${spec.id} close-out\n`);
 	settleCloseout(claim.claim, true);
 	touch(spec.settled);
-	return { kind: "posted" };
+	return { kind: "card-posted" };
 }
 
 main().then(

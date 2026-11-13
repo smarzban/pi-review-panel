@@ -1,37 +1,54 @@
 /**
  * Exclusive claims in a review's run record, so concurrent verifies of one
  * review never post the same thing twice: `round-<N>.claim` for the number
- * of a verify round, and `closeout.posted` for the review's one close-out.
+ * of a verify round, and `closeout.claim-<g>` for the review's one
+ * close-out.
  *
- * A claim is a file created with `O_EXCL` that holds who took it and when
- * (`{verifyRunId, pid, claimedAt}`). A claim whose owner is still posting
- * is live. One older than the round deadline, or whose process is gone,
- * was left by a crash: it is stale, and the next verify takes it over by
- * renaming it aside, so only one taker wins.
+ * Every claim is a fresh file created with `O_EXCL` (`wx`), holding who
+ * made it and when (`{verifyRunId, pid, host, claimedAt}`). Mutual
+ * exclusion comes only from that create: no claim is ever taken over,
+ * renamed or put back. A claim older than the round deadline, or one made
+ * on this host whose process is gone, was left by a crash. It is stale and
+ * stays where it is; the next verify moves past it, to round N+1 or to
+ * close-out generation g+1. A crash can therefore leave a gap in the verify
+ * numbering, never a duplicate.
+ *
+ * Only node builtins are imported here, so a plain `node` child process can
+ * load this module directly (the tests race real processes over it).
  */
 import {
 	closeSync,
 	lstatSync,
 	openSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	writeSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import path from "node:path";
 
 /** Every `gh` call of one round together gets at most this long. */
 export const ROUND_DEADLINE_MS = 60_000;
+/**
+ * A verify waiting on another's round claim stops waiting while this much
+ * of its round deadline is left, so a claim it wins always has time for
+ * its POST (one `gh` call's own limit).
+ */
+export const POST_RESERVE_MS = 30_000;
 /** A claim older than this was left by a verify that is no longer posting. */
 const CLAIM_STALE_MS = ROUND_DEADLINE_MS + 5_000;
+/** Close-out claims tried before the verify gives up: `closeout.claim-1` … `-5`. */
+export const CLOSEOUT_GENERATIONS = 5;
 const POLL_MS = 100;
+
+export const CLOSEOUT_POSTED_FILE = "closeout.posted";
 
 export type ClaimInfo = {
 	verifyRunId: string;
 	pid: number;
+	/** The pid is judged only on the host that wrote it. */
+	host: string;
 	claimedAt: number;
-	/** Set once the claimed comment is on the PR; such a claim never goes stale. */
-	postedAt?: number;
 };
 
 export type HeldClaim = { file: string; info: ClaimInfo };
@@ -62,12 +79,12 @@ function exists(target: string): boolean {
 	}
 }
 
+/** Only `ESRCH` means gone; `EPERM` means it runs as someone else. */
 function processIsGone(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
 		return false;
 	} catch (error) {
-		// EPERM: it exists and belongs to someone else.
 		return (error as { code?: unknown }).code === "ESRCH";
 	}
 }
@@ -85,161 +102,108 @@ function parseInfo(text: string): ClaimInfo | undefined {
 			return value as ClaimInfo;
 		}
 	} catch {
-		// Not a claim this module wrote; judged by its age on disk.
+		// Not a claim this module wrote, or one still being written.
 	}
 	return undefined;
 }
 
-type Existing = { text: string; posted: boolean; stale: boolean };
-
-/** What is in an existing claim, or undefined when it is gone. */
-function readExisting(file: string, now: number): Existing | undefined {
-	let text: string;
+/**
+ * Whether the claim at `file` was left by a crash, or undefined when there
+ * is none. A claim this module did not write (or is still writing, or that
+ * is not a regular file) is judged by its age on disk alone. The pid rule
+ * applies only to a claim made on this host.
+ */
+function claimIsStale(file: string, now: number): boolean | undefined {
 	let mtimeMs: number;
+	let text = "";
 	try {
 		const stat = lstatSync(file);
-		if (!stat.isFile()) {
-			// Not ours to judge or take over: it stays held.
-			return { text: "", posted: false, stale: false };
-		}
 		mtimeMs = stat.mtimeMs;
-		text = readFileSync(file, "utf8");
+		if (stat.isFile()) {
+			text = readFileSync(file, "utf8");
+		}
 	} catch {
 		return undefined;
 	}
 	const info = parseInfo(text);
-	if (info?.postedAt !== undefined) {
-		return { text, posted: true, stale: false };
+	if (now - (info?.claimedAt ?? mtimeMs) > CLAIM_STALE_MS) {
+		return true;
 	}
-	const claimedAt = info?.claimedAt ?? mtimeMs;
-	const stale =
-		now - claimedAt > CLAIM_STALE_MS ||
-		(info !== undefined && info.pid !== process.pid && processIsGone(info.pid));
-	return { text, posted: false, stale };
+	return (
+		info !== undefined &&
+		info.host === hostname() &&
+		info.pid !== process.pid &&
+		processIsGone(info.pid)
+	);
 }
 
-function create(file: string, info: ClaimInfo): "taken" | "exists" {
+/** Creates `file` exclusively with `content`; false when it already exists. */
+function createExclusive(file: string, content: string): boolean {
 	let fd: number;
 	try {
 		fd = openSync(file, "wx", 0o600);
 	} catch (error) {
 		if ((error as { code?: unknown }).code === "EEXIST") {
-			return "exists";
+			return false;
 		}
 		throw error;
 	}
 	try {
-		writeSync(fd, `${JSON.stringify(info)}\n`);
+		writeSync(fd, content);
 	} finally {
 		closeSync(fd);
 	}
-	return "taken";
+	return true;
 }
 
-/**
- * Moves a stale claim aside. Only one taker's rename succeeds; it then
- * checks that what it moved is the claim it judged stale, and puts back a
- * fresh claim it moved by mistake.
- */
-function removeStale(file: string, judged: string): void {
-	const aside = `${file}.stale-${process.pid}-${Date.now()}-${Math.random()
-		.toString(36)
-		.slice(2)}`;
-	try {
-		renameSync(file, aside);
-	} catch {
-		return;
-	}
-	let moved = "";
-	try {
-		moved = readFileSync(aside, "utf8");
-	} catch {
-		// Unreadable: treat it as the stale claim.
-		moved = judged;
-	}
-	if (moved !== judged) {
-		try {
-			// A fresh claim came between: give it back unless one is there again.
-			if (!exists(file)) {
-				renameSync(aside, file);
-				return;
-			}
-		} catch {
-			// Fall through and drop it.
-		}
-	}
-	rmSync(aside, { force: true });
+function createClaim(file: string, verifyRunId: string): HeldClaim | undefined {
+	const info: ClaimInfo = {
+		verifyRunId,
+		pid: process.pid,
+		host: hostname(),
+		claimedAt: Date.now(),
+	};
+	return createExclusive(file, `${JSON.stringify(info)}\n`)
+		? { file, info }
+		: undefined;
 }
 
-export type TakeResult =
-	| { kind: "taken"; claim: HeldClaim }
-	| { kind: "held"; posted: boolean }
-	| { kind: "error"; error: unknown };
-
-/**
- * Takes the claim at `file`, taking over a stale one. A live or posted
- * claim stays with its owner.
- */
-export function takeClaim(file: string, verifyRunId: string): TakeResult {
-	for (let attempt = 0; attempt < 3; attempt += 1) {
-		const info: ClaimInfo = {
-			verifyRunId,
-			pid: process.pid,
-			claimedAt: Date.now(),
-		};
-		try {
-			if (create(file, info) === "taken") {
-				return { kind: "taken", claim: { file, info } };
-			}
-		} catch (error) {
-			return { kind: "error", error };
-		}
-		const existing = readExisting(file, Date.now());
-		if (existing === undefined) {
-			// Released between the two calls: try again.
-			continue;
-		}
-		if (!existing.stale) {
-			return { kind: "held", posted: existing.posted };
-		}
-		removeStale(file, existing.text);
-	}
-	return { kind: "held", posted: false };
-}
-
-/** Marks a claim posted, so it never goes stale. */
-export function markPosted(claim: HeldClaim): void {
-	const temp = `${claim.file}.${process.pid}.tmp`;
-	try {
-		const fd = openSync(temp, "wx", 0o600);
-		try {
-			writeSync(
-				fd,
-				`${JSON.stringify({ ...claim.info, postedAt: Date.now() })}\n`,
-			);
-		} finally {
-			closeSync(fd);
-		}
-		renameSync(temp, claim.file);
-	} catch {
-		rmSync(temp, { force: true });
-		// The claim still stands; it is judged by its time if it goes stale.
-	}
-}
-
-/** Gives a claim back, if it is still this verify's. */
+/** Gives a claim back, if what is at its path is still this verify's. */
 export function releaseClaim(claim: HeldClaim): void {
 	try {
 		const info = parseInfo(readFileSync(claim.file, "utf8"));
 		if (
 			info?.verifyRunId === claim.info.verifyRunId &&
-			info.claimedAt === claim.info.claimedAt
+			info.claimedAt === claim.info.claimedAt &&
+			info.pid === claim.info.pid
 		) {
 			rmSync(claim.file, { force: true });
 		}
 	} catch {
 		// Gone already, or unreadable: nothing of ours to give back.
 	}
+}
+
+/**
+ * Writes a posted marker exclusively, then gives the claim back. When the
+ * marker cannot be written the claim stays: it goes stale and is skipped,
+ * a gap rather than a duplicate.
+ */
+function settlePosted(claim: HeldClaim, marker: string): void {
+	try {
+		createExclusive(
+			marker,
+			`${JSON.stringify({ verifyRunId: claim.info.verifyRunId, postedAt: Date.now() })}\n`,
+		);
+	} catch {
+		return;
+	}
+	releaseClaim(claim);
+}
+
+function errorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.replace(/\s+/g, " ").slice(0, 200);
 }
 
 export function roundClaimFile(recordDir: string, round: number): string {
@@ -250,6 +214,17 @@ export function roundPostedFile(recordDir: string, round: number): string {
 	return path.join(recordDir, `round-${round}.posted`);
 }
 
+export function closeoutClaimFile(
+	recordDir: string,
+	generation: number,
+): string {
+	return path.join(recordDir, `closeout.claim-${generation}`);
+}
+
+export function closeoutPostedFile(recordDir: string): string {
+	return path.join(recordDir, CLOSEOUT_POSTED_FILE);
+}
+
 export type RoundClaim = HeldClaim & { round: number };
 
 const sleep = (ms: number) =>
@@ -258,48 +233,75 @@ const sleep = (ms: number) =>
 	});
 
 /**
- * Allocates the next verify round number of a review, from `floor` up. A
- * posted round is skipped. A round another verify is still posting is
- * waited on until that post settles, so a failed post gives its number
- * back and no round is skipped. Gives up at `deadline` or on an interrupt,
- * saying why.
+ * Allocates the next verify round number of a review, from `floor` up.
+ *
+ * - A posted round (`round-<N>.posted`) is skipped.
+ * - `round-<N>.claim` is created exclusively; after the create, the posted
+ *   marker is checked again, because another verify can post N and settle
+ *   between the first check and the create. If it is there, the claim is
+ *   given back and N+1 is tried.
+ * - A stale claim stays where it is and N+1 is tried.
+ * - A live claim is waited on, so a failed post gives its number back and
+ *   no round is skipped. Waiting stops on an interrupt, or once less than
+ *   `reserveMs` (default {@link POST_RESERVE_MS}) of `deadline` is left;
+ *   the verify then posts no round, and the reason says so.
+ *
+ * `beforeCreate` runs just before each create (tests park there).
  */
 export async function claimRound(
 	recordDir: string,
 	floor: number,
 	verifyRunId: string,
-	options: { deadline: number; signal?: AbortSignal; pollMs?: number },
+	options: {
+		deadline: number;
+		signal?: AbortSignal;
+		pollMs?: number;
+		reserveMs?: number;
+		beforeCreate?: (round: number) => void;
+	},
 ): Promise<RoundClaim | { reason: string }> {
 	if (!isRealDirectory(recordDir)) {
 		return { reason: "the review's run record is missing" };
 	}
+	const reserve = options.reserveMs ?? POST_RESERVE_MS;
 	let round = Math.max(1, floor);
 	for (;;) {
 		if (options.signal?.aborted) {
 			return { reason: "the run was interrupted" };
 		}
-		if (exists(roundPostedFile(recordDir, round))) {
+		const posted = roundPostedFile(recordDir, round);
+		if (exists(posted)) {
 			round += 1;
 			continue;
 		}
-		const taken = takeClaim(roundClaimFile(recordDir, round), verifyRunId);
-		if (taken.kind === "taken") {
-			return { ...taken.claim, round };
-		}
-		if (taken.kind === "error") {
-			const message =
-				taken.error instanceof Error
-					? taken.error.message
-					: String(taken.error);
+		const file = roundClaimFile(recordDir, round);
+		options.beforeCreate?.(round);
+		let claim: HeldClaim | undefined;
+		try {
+			claim = createClaim(file, verifyRunId);
+		} catch (error) {
 			return {
-				reason: `verify ${round} could not be claimed: ${message.replace(/\s+/g, " ").slice(0, 200)}`,
+				reason: `verify ${round} could not be claimed: ${errorMessage(error)}`,
 			};
 		}
-		if (taken.posted) {
+		if (claim !== undefined) {
+			if (exists(posted)) {
+				releaseClaim(claim);
+				round += 1;
+				continue;
+			}
+			return { ...claim, round };
+		}
+		const stale = claimIsStale(file, Date.now());
+		if (stale === undefined) {
+			// Given back between the create and the look: try it again.
+			continue;
+		}
+		if (stale) {
 			round += 1;
 			continue;
 		}
-		if (Date.now() >= options.deadline) {
+		if (Date.now() >= options.deadline - reserve) {
 			return { reason: `another verify is still posting verify ${round}` };
 		}
 		await sleep(options.pollMs ?? POLL_MS);
@@ -307,21 +309,116 @@ export async function claimRound(
 }
 
 /**
- * Settles a round claim: once the comment is on the PR the round becomes
- * `round-<N>.posted`; otherwise the number is given back.
+ * Settles a round claim: once the comment is on the PR, `round-<N>.posted`
+ * is written exclusively and the claim removed; otherwise the claim is
+ * removed, giving the number back.
  */
 export function settleRound(claim: RoundClaim, posted: boolean): void {
-	if (!posted) {
-		releaseClaim(claim);
+	if (posted) {
+		settlePosted(claim, roundPostedFile(path.dirname(claim.file), claim.round));
 		return;
 	}
-	try {
-		renameSync(
-			claim.file,
-			roundPostedFile(path.dirname(claim.file), claim.round),
-		);
-	} catch {
-		// The claim stays; it goes stale and is taken over, at worst
-		// repeating this number once.
+	releaseClaim(claim);
+}
+
+export type CloseoutClaimResult =
+	| { kind: "taken"; claim: HeldClaim }
+	/** Already posted: `closeout.posted` was there, or the card was on the PR. */
+	| { kind: "posted"; onPr: boolean }
+	/** A live claim: another verify is posting it. */
+	| { kind: "busy" }
+	/** Every generation was left stale and the card is not on the PR. */
+	| { kind: "exhausted" }
+	| { kind: "error"; error: unknown };
+
+/**
+ * Claims a review's one close-out.
+ *
+ * - `closeout.posted` there: already posted.
+ * - Otherwise `closeout.claim-<g>` is created exclusively, from g = 1. After
+ *   the create, `closeout.posted` is checked again, as for rounds.
+ * - A live claim: another verify is posting it.
+ * - A stale claim: `cardOnPr` asks the PR's comments. If the card is there,
+ *   `closeout.posted` is written and nothing more is done. If not, the
+ *   next generation is tried, up to {@link CLOSEOUT_GENERATIONS}.
+ *
+ * Only the creator of a generation posts. `cardOnPr` may throw (a `gh`
+ * failure); that propagates, with no claim held.
+ */
+export async function claimCloseout(
+	recordDir: string,
+	verifyRunId: string,
+	cardOnPr: () => Promise<boolean>,
+	options: { beforeCreate?: (generation: number) => void } = {},
+): Promise<CloseoutClaimResult> {
+	if (!isRealDirectory(recordDir)) {
+		return {
+			kind: "error",
+			error: new Error("the review's run record is missing"),
+		};
 	}
+	const posted = closeoutPostedFile(recordDir);
+	if (exists(posted)) {
+		return { kind: "posted", onPr: false };
+	}
+	let generation = 1;
+	let retries = 0;
+	while (generation <= CLOSEOUT_GENERATIONS) {
+		const file = closeoutClaimFile(recordDir, generation);
+		options.beforeCreate?.(generation);
+		let claim: HeldClaim | undefined;
+		try {
+			claim = createClaim(file, verifyRunId);
+		} catch (error) {
+			return { kind: "error", error };
+		}
+		if (claim !== undefined) {
+			if (exists(posted)) {
+				releaseClaim(claim);
+				return { kind: "posted", onPr: false };
+			}
+			return { kind: "taken", claim };
+		}
+		const stale = claimIsStale(file, Date.now());
+		if (stale === undefined) {
+			// Given back by a failed post: try this generation again.
+			retries += 1;
+			if (retries > 3) {
+				return { kind: "busy" };
+			}
+			continue;
+		}
+		if (!stale) {
+			return { kind: "busy" };
+		}
+		if (await cardOnPr()) {
+			try {
+				createExclusive(
+					posted,
+					`${JSON.stringify({ verifyRunId, postedAt: Date.now(), foundOnPr: true })}\n`,
+				);
+			} catch {
+				// The PR check still stops every later verify.
+			}
+			return { kind: "posted", onPr: true };
+		}
+		if (exists(posted)) {
+			return { kind: "posted", onPr: false };
+		}
+		generation += 1;
+	}
+	return { kind: "exhausted" };
+}
+
+/**
+ * Settles a close-out claim: once the card is on the PR (posted now or
+ * found there), `closeout.posted` is written exclusively and the claim
+ * removed; otherwise the claim is removed so a later verify can post it.
+ */
+export function settleCloseout(claim: HeldClaim, posted: boolean): void {
+	if (posted) {
+		settlePosted(claim, closeoutPostedFile(path.dirname(claim.file)));
+		return;
+	}
+	releaseClaim(claim);
 }
