@@ -995,3 +995,57 @@ describe("the tool and the parsers take the new arguments", () => {
 		).toMatchObject({ prComment: false, ownerApproved: true });
 	});
 });
+
+describe("the default runner sends the body to a real gh process on stdin", () => {
+	it("posts through a scripted gh first on PATH", async () => {
+		const bin = mkdtempSync(path.join(tmpdir(), "rounds-gh-"));
+		const log = path.join(bin, "log");
+		writeFileSync(
+			path.join(bin, "gh"),
+			[
+				"#!/bin/sh",
+				`echo "ARGS $*" >> "${log}"`,
+				'case "$*" in',
+				'  "api user"*) echo saeed ;;',
+				`  "repo view"*) echo ${REPO_SLUG} ;;`,
+				'  *"/pulls") printf \'[{"number":12,"state":"open","head":{"sha":"%s"}}]\' "$ROUNDS_HEAD" ;;',
+				`  *"--method POST"*) echo "STDIN $(cat)" >> "${log}"; echo '{"id":1,"html_url":"https://example.test/c/1"}' ;;`,
+				"  *) exit 1 ;;",
+				"esac",
+			].join("\n"),
+			{ mode: 0o755 },
+		);
+		const savedPath = process.env.PATH;
+		try {
+			await withRepository(async (repo, head) => {
+				process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ""}`;
+				process.env.ROUNDS_HEAD = head;
+				const { runGh: _unused, ...rest } = deps(fakeGh().runGh, {
+					runReview: reviewRun(repo, "r-1", [
+						{ id: "F-1", severity: "high", title: "uses $(rm -rf) and `x`" },
+					]),
+				});
+				const result = await reviewAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{ deps: rest },
+				);
+				expect(textOf(result).split("\n").at(-1)).toBe(
+					"PR comment: posted to #12 (https://example.test/c/1)",
+				);
+			});
+			const written = execFileSync("cat", [log], { encoding: "utf8" });
+			const argLines = written
+				.split("\n")
+				.filter((line) => line.startsWith("ARGS"));
+			expect(argLines.some((line) => line.includes("issues/12/comments"))).toBe(
+				true,
+			);
+			expect(argLines.join("\n")).not.toContain("Review panel");
+			expect(written).toContain('STDIN {"body":"## Review panel · review');
+		} finally {
+			process.env.PATH = savedPath;
+			delete process.env.ROUNDS_HEAD;
+			rmSync(bin, { recursive: true, force: true });
+		}
+	});
+});
