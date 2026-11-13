@@ -8,7 +8,7 @@ import { transformSync } from "rolldown/experimental";
  * way Pi and vitest do: a relative `.js` import from a `.ts` file resolves to
  * the `.ts` file, and each `.ts` file is transformed (Node's own type
  * stripping refuses parameter properties). The transform is the one vitest
- * already installs (rolldown, through vite); it is a test-only dependency.
+ * already installs (rolldown, through vite), declared as an exact devDependency.
  * Load it with `node --import <this file> <script.ts>`.
  */
 registerHooks({
