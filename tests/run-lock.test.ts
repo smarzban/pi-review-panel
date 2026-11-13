@@ -55,6 +55,8 @@ const fsLog = vi.hoisted(() => ({
 	failCloseOf: undefined as string | undefined,
 	/** When set, each write to this path writes at most one byte. */
 	shortWritesTo: undefined as string | undefined,
+	/** Each fd number `closeSync` was called with. */
+	closes: [] as number[],
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -93,6 +95,7 @@ vi.mock("node:fs", async (importOriginal) => {
 			return (real.writeSync as (...a: unknown[]) => number)(...args);
 		},
 		closeSync: (fd: number) => {
+			fsLog.closes.push(fd);
 			const target = fsLog.failCloseOf;
 			if (
 				target !== undefined &&
@@ -319,9 +322,20 @@ describe("the run lock on a filesystem without hard links", () => {
 			const lockPath = path.join(record, RUN_LOCK_FILE);
 			fsLog.linkErrorCode = "ENOTSUP";
 			fsLog.failCloseOf = lockPath;
+			const lockFds: number[] = [];
+			const opened = fsLog.closes.length;
 
 			expect(() => acquireRunLock(record)).toThrow(/EIO/);
 			expect(readdirSync(record)).toEqual([]);
+			// The failed close is not retried: a second close of the same number
+			// could shut an unrelated file that reused it.
+			const after = fsLog.closes.slice(opened);
+			for (const fd of after) {
+				if (after.indexOf(fd) !== after.lastIndexOf(fd)) {
+					lockFds.push(fd);
+				}
+			}
+			expect(lockFds).toEqual([]);
 		} finally {
 			rmSync(record, { recursive: true, force: true });
 		}

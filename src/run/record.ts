@@ -624,8 +624,9 @@ function createExclusive(target: string, text: string): boolean {
 
 /**
  * Creates `target` exclusively and writes `text` into it. If the write fails
- * (a full disk), the file this call just created is removed again, so it
- * never leaves an empty lock that every later run would refuse.
+ * (a full disk) or the close does (a deferred network write error), the file
+ * this call just created is removed again, so it never leaves an empty lock
+ * that every later run would refuse.
  */
 function writeInPlace(target: string, text: string): void {
 	const fd = openSync(target, "wx", 0o600);
