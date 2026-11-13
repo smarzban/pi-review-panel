@@ -808,11 +808,19 @@ describe("each action resolves its own repository", () => {
 			mkdirSync(path.join(repo, ".cfg"), { mode: 0o700 });
 
 			expect(
-				ownerRecordKeyCheck({ repoDir: sub, env, home: HOME }),
-			).toBeDefined();
+				ownerRecordKeyCheck({ repoDir: sub, env, home: HOME })?.cause,
+			).toMatch(/is inside the reviewed repository/);
 			expect(() =>
 				ownerRecordKey({ repoDir: sub, env, home: HOME, create: true }),
-			).toThrow();
+			).toThrow(/is inside the reviewed repository/);
+			// A bad config override does not skip the repository check.
+			expect(() =>
+				ownerRecordKeyCheck({
+					repoDir: "relative",
+					env: { PI_REVIEW_PANEL_CONFIG: "relative.json" },
+					home: HOME,
+				}),
+			).toThrow("repository must be a non-empty absolute path");
 			expect(existsSync(keyPath)).toBe(false);
 		});
 	});

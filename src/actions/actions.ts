@@ -189,6 +189,7 @@ export function ownerRecordKey(input: RecordKeyInput): Buffer {
 export function ownerRecordKeyCheck(
 	input: Omit<RecordKeyInput, "create">,
 ): RecordKeyProblem | undefined {
+	const repoDir = canonicalizeRepository(input.repoDir);
 	let configPath: string;
 	try {
 		configPath = resolveConfigPath({ env: input.env, home: input.home });
@@ -196,9 +197,7 @@ export function ownerRecordKeyCheck(
 		// A bad config override is the configuration row's to report.
 		return undefined;
 	}
-	return checkRecordKey(recordKeyPath(configPath), {
-		repoDir: canonicalizeRepository(input.repoDir),
-	});
+	return checkRecordKey(recordKeyPath(configPath), { repoDir });
 }
 
 export function isNonEmptyString(value: unknown): value is string {
