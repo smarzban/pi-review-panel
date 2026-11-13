@@ -364,6 +364,9 @@ export function renderStatus(result: StatusResult): string {
 					? ""
 					: ` (${row.check.type}${row.check.source ? `, ${row.check.source}` : ""})`;
 			state = `logged in${how}`;
+		} else if (row.extensionPaths.length > 0) {
+			// The provider comes from an extension, which owns its login.
+			state = "not logged in. Log in the way its extension documents";
 		} else {
 			state = `not logged in. Run: review-panel auth login ${row.provider}`;
 		}

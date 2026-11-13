@@ -82,6 +82,7 @@ const code = await run(
 );
 process.off("SIGINT", onInterrupt);
 process.exitCode = code;
-// The SDK can leave idle handles (keep-alive sockets, timers) open. Give
-// pending writes a moment, then exit even if something still holds the loop.
-setTimeout(() => process.exit(code), 3_000).unref();
+// The SDK can leave idle handles (keep-alive sockets, timers) open. Every
+// credential write was settled above; give anything else ample time, then
+// exit even if something still holds the loop.
+setTimeout(() => process.exit(code), 30_000).unref();

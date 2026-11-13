@@ -84,6 +84,12 @@ export const realAuthSdk: AuthSdk = {
 		} catch (error) {
 			checkError = error instanceof Error ? error.message : String(error);
 		}
+		// A check may refresh an OAuth token; let that write finish.
+		await (
+			runtime.services.modelRuntime as {
+				settleCredentialWrites?: () => Promise<void>;
+			}
+		).settleCredentialWrites?.();
 		const error = runtime.authError ?? checkError;
 		return {
 			authenticated: runtime.authenticated,

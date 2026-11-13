@@ -31,6 +31,11 @@ async function ask(
 		output,
 		terminal: process.stdin.isTTY === true,
 	});
+	// On a terminal, readline takes Ctrl-C as a key and would only pause.
+	// Hand it to the process handler, which aborts the login.
+	rl.on("SIGINT", () => {
+		process.emit("SIGINT");
+	});
 	try {
 		if (hidden) {
 			process.stderr.write(message);

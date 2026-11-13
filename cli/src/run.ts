@@ -9,6 +9,8 @@ import {
 	type ActionContext,
 	type ActionResult,
 	auditAction,
+	coerceJsonValue,
+	coerceStringList,
 	commentAction,
 	diagnoseAction,
 	parseAuditArguments,
@@ -177,6 +179,12 @@ async function runAction(
 		context: ActionContext,
 	) => Promise<ActionResult>;
 	let result = await run({ repoDir, ...input }, context);
+	if (io.signal.aborted) {
+		// A run that still returned after Ctrl-C is printed, but did not
+		// complete as asked.
+		io.stdout(render(result, json));
+		throw new Error("interrupted before the action finished");
+	}
 	if (action === "diagnose") {
 		const header = [
 			`review-panel ${deps.cliVersion} (Pi SDK ${await deps.sdkVersion()})`,
@@ -198,7 +206,36 @@ function parseCallPayload(text: string): Record<string, unknown> {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) {
 		throw new UsageError("call: the argument must be a JSON object");
 	}
-	return value as Record<string, unknown>;
+	return coerceLikeTheTool(value as Record<string, unknown>);
+}
+
+/**
+ * The tool's `prepareArguments` coercions, so `call` accepts what the tool
+ * accepts: a string for a list, JSON text for `dismissed`, and
+ * `"ownerApproved": "true"`.
+ */
+function coerceLikeTheTool(
+	args: Record<string, unknown>,
+): Record<string, unknown> {
+	const next: Record<string, unknown> = { ...args };
+	for (const key of [
+		"seats",
+		"lenses",
+		"passes",
+		"keptFindingIds",
+		"lowAdvisory",
+	]) {
+		if (Object.hasOwn(next, key)) {
+			next[key] = coerceStringList(next[key]);
+		}
+	}
+	if (typeof next.dismissed === "string") {
+		next.dismissed = coerceJsonValue(next.dismissed);
+	}
+	if (next.ownerApproved === "true") {
+		next.ownerApproved = true;
+	}
+	return next;
 }
 
 async function execute(

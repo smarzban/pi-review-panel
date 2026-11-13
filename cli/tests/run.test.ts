@@ -266,6 +266,29 @@ describe("call takes the tool's own object", () => {
 		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
 	});
 
+	it('coerces like the tool: a string list, JSON-text dismissed, ownerApproved "true"', async () => {
+		const h = harness();
+		expect(
+			await h.run([
+				"call",
+				JSON.stringify({
+					action: "comment",
+					priorRunId: "r",
+					ownerApproved: "true",
+					lowAdvisory: "F-3",
+					dismissed: '[{"id":"F-1","reason":"dup"}]',
+				}),
+			]),
+		).toBe(EXIT_OK);
+		expect(h.calls.comment?.[0]?.input).toMatchObject({
+			ownerApproved: true,
+			lowAdvisory: ["F-3"],
+			dismissed: [{ id: "F-1", reason: "dup" }],
+		});
+		await h.run(["call", '{"action":"audit","seats":"sol"}']);
+		expect(h.calls.audit?.[0]?.input).toMatchObject({ seats: ["sol"] });
+	});
+
 	it("refuses --repo together with repository", async () => {
 		const h = harness();
 		expect(
@@ -352,6 +375,14 @@ describe("exit codes never encode review content", () => {
 			]),
 		).toBe(EXIT_USAGE);
 		expect(h.calls).toEqual({});
+	});
+
+	it("exits 1 when the action returned after Ctrl-C, still printing what it returned", async () => {
+		const h = harness();
+		h.controller.abort();
+		expect(await h.run(["audit"])).toBe(EXIT_FAILED);
+		expect(h.out()).toBe("audit report\n");
+		expect(h.err()).toContain("interrupted");
 	});
 
 	it("exits 1, not 0, when the run was aborted", async () => {

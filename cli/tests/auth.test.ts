@@ -408,7 +408,7 @@ describe("auth status", () => {
 			[
 				"Agent folder: /agent",
 				"anthropic [seats: opus, sonnet]: logged in (oauth, stored credential)",
-				"claude-code [seats: cc]: not logged in. Run: review-panel auth login claude-code",
+				"claude-code [seats: cc]: not logged in. Log in the way its extension documents",
 				"  error: claude CLI missing",
 			].join("\n"),
 		);
