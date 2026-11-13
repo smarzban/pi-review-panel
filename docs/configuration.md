@@ -121,30 +121,65 @@ credentials, or endpoints. Because it is written before the work begins, an abor
 
 A review or audit also writes `plan.json` before pinning: its kind, the frozen base and head
 commits, the scoping note, and the planned seat rows (`rosterId`, `lens`, `provider`, `model`, as in
-`panel.json`). It holds no prompt text and no extension paths. Each seat's outcome is written to `seats/<planned index>.json` the moment that seat settles, by a
-temp file and a rename. A seat torn down because the run was cancelled is not written there. While
-a run is going, `run.lock` names its process; the run removes it when it ends.
+`panel.json`). It holds no prompt text and no extension paths. Each seat's outcome is written to
+`seats/<planned index>.json` the moment that seat settles, by a temp file and a rename. A seat torn
+down because the run was cancelled is not written there. While a run is going, `run.lock` names its
+process; the run removes it when it ends.
+
+### The record key
+
+The record lives in the reviewed repository, which anyone who can get a file into the checkout (a
+pushed branch, an applied patch) can write to. So the package signs the files resume relies on
+with a key only the owner holds:
+
+- The key is `record-key`, 32 random bytes, in the folder of the owner config:
+  `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
+  It never lives in the reviewed repository, and nothing secret is written to the record.
+- The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
+- A key that is a symlink, not a regular file, readable by group or other users, not exactly 32
+  bytes, or inside the reviewed repository is refused, and so is the run that needs it.
+- A review or audit writes `plan.mac`, an HMAC-SHA256 of the exact `plan.json` bytes bound to the
+  run id. Each seat file gets `seats/<planned index>.mac`, an HMAC of its exact bytes bound to the run
+  id, the plan's MAC and the seat's index. So a signed file cannot be edited, moved to another index,
+  or copied in from another run.
+- Deleting the key makes every interrupted record unresumable; a new one is created by the next
+  review or audit. To keep resuming records across machines, copy the key with the config.
+
+### Resuming
 
 `{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It runs the
 same readiness check as review and audit first. It takes no seats, lenses, or commits: those come
-from `plan.json`. The record lives in the reviewed repository, which anyone with commit access can
-write to, so resume treats every file in it as untrusted and trusts it only for names:
+from `plan.json`. What resume trusts, and what it rebuilds:
 
-- Each seat is rebuilt from the owner config: the roster row with that `rosterId` must still name
-  the same `provider` and `model`, and `extraExtensionPaths` and the seat budget come from the
-  config. The prompt comes from the package's own lens or audit-pass table. A seat that cannot be
-  rebuilt does not run; it is reported as lost coverage.
-- The scoping note in `plan.json` is not passed to the re-run seats, since resume takes no prompt
-  text from the record. The report and the tool's reply say so when the record had one.
-- A plan with more seats than a review panel (16) or an audit (24) may have, a review lens other
-  than `holistic` on more than 2 seats, an audit pass on more than 3, or one seat twice, is refused.
-- A seat file must name the planned roster row, provider, model and lens and match the outcome
-  schema (findings exactly as `submit_findings` accepts them). Anything else, including a file that
-  is unreadable or a symlink, counts as unsettled and that seat runs again.
-- Resume never follows a symlink in the record. Each output is written to a new temp file that is
-  renamed over the old name, so a planted symlink is replaced, not written through. A symlinked
-  `.review-panel`, `runs` or `seats` folder, or a folder where an output file belongs, is refused
-  before any seat runs.
+- **The plan must carry a valid signature.** A `plan.json` whose `plan.mac` is missing or does not
+  match the owner's key is refused before it is read: this owner's review_panel did not write it. A
+  signed plan must also have the expected shape. Its `baseRef` and seat names must hold no control
+  characters, so record text cannot add a heading or a fake finding to the report or the reply.
+- **A seat file is kept only when it is signed, names its seat, and has a valid outcome.** It needs a
+  valid MAC, must name the planned roster row, provider, model and lens, and must match the outcome
+  schema (findings exactly as `submit_findings` accepts them). Anything else counts as unsettled,
+  and that seat runs again: an unsigned or forged file, an unreadable file, or a symlink.
+- **Only the timing and the outcome are taken from a kept seat file.** Its seat, prompt, extension
+  paths and replay input in `execution.json` are rebuilt from the owner config and the package.
+- **Every planned seat is checked against the owner config, settled or not.** The roster row with
+  that `rosterId` must still exist and name the same `provider` and `model`. `extraExtensionPaths`
+  and the seat budget come from the config. The prompt comes from the package's own lens or
+  audit-pass table. A seat that fails this check does not run and is not kept, even if it had
+  settled; it is reported as lost coverage.
+- **The scoping note is not passed on.** The scoping note in `plan.json` does not reach the re-run
+  seats, since resume takes no prompt text from the record. The report and the tool's reply say so
+  when the record had one.
+- **The panel caps still apply.** A plan with more seats than a review panel (16) or an audit (24)
+  may have, a review lens other than `holistic` on more than 2 seats, an audit pass on more than 3,
+  or one seat twice, is refused.
+- **Resume never follows a symlink, and never waits on a FIFO.** Record files are opened without
+  following a symlink and without blocking, and anything but a regular file is not read. Each output
+  is written to a new temp file that is renamed over the old name, so a planted symlink is replaced,
+  not written through. A symlinked `.review-panel`, `runs` or `seats` folder, or a folder where an
+  output file belongs, is refused before any seat runs.
+
+The signatures cover what resume reads. `verify` and `comment` still read a complete record
+without checking a signature.
 
 Resume takes the run lock before it re-reads the record, pins the recorded head commit, runs only
 the planned seats with no settled outcome, then writes `execution.json`, `report.md`,

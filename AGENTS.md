@@ -23,7 +23,9 @@ Seat identity is owner authority: an outside-repository roster config
 (`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
 rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
 Runs record under `<repo>/.review-panel/runs/`, each seat as it settles. `resume` finishes an
-interrupted review or audit record, running only its unsettled seats at the recorded head. Verify
+interrupted review or audit record, running only its unsettled seats at the recorded head. Review
+and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
+the repository); resume refuses an unsigned plan and re-runs an unsigned seat. Verify
 only reads those trees. The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
