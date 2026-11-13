@@ -1208,7 +1208,13 @@ describe("edge cases of the lookup and the run", () => {
 // ---------------------------------------------------------------------------
 
 type SeatVote =
-	| { rosterId: string; items: Item[]; regressions?: number }
+	| {
+			rosterId: string;
+			items: Item[];
+			regressions?: number;
+			/** Title and evidence text of each regression. */
+			regressionText?: string;
+	  }
 	| { rosterId: string; failed: true };
 
 /** A fake runVerify with one outcome per seat; it can write its own record. */
@@ -1258,10 +1264,10 @@ function verifyRunSeats(
 								{ length: vote.regressions ?? 0 },
 								(_, index) => ({
 									regressionId: `R-${index + 1}`,
-									title: "broke",
+									title: vote.regressionText ?? "broke",
 									file: "src/c.ts",
 									line: 1,
-									evidence: "e",
+									evidence: vote.regressionText ?? "e",
 								}),
 							),
 						},
@@ -2240,47 +2246,36 @@ describe("fix round 1: the reply stays under its cap with the PR lines (F-8)", (
 		});
 	});
 
-	it("a verify reply with both PR lines long and multibyte", async () => {
+	it("a verify reply that fills its cap, with both PR lines long and multibyte", async () => {
 		const { MAX_PRESENTATION_BYTES } = await import(
 			"../src/tool/review-presentation.js"
 		);
 		await withRepository(async (repo, head) => {
-			const rows: Row[] = Array.from({ length: 300 }, (_, index) => ({
-				id: `F-${index + 1}`,
-				severity: "high" as const,
-				title: `t${index} ${"€".repeat(200)}`,
-			}));
+			const rows: Row[] = [{ id: "F-1", severity: "high" }];
 			writeReviewRecord(repo, REVIEW_ID, rows);
 			const gh = fakeGh({
 				pulls: [openPr(12, head)],
-				htmlUrl: `https://example.test/${"€".repeat(2000)}`,
-				failPost: {
-					at: 2,
-					error: Object.assign(new Error("x"), { stderr: "€".repeat(2000) }),
-				},
+				htmlUrl: `https://example.test/${"\u20AC".repeat(2000)}`,
 			});
-			const ids = rows.map((row) => row.id);
 			const result = await verifyAction(
 				{
 					repoDir: repo,
 					priorRunId: REVIEW_ID,
 					head: "HEAD",
-					keptFindingIds: ids,
+					keptFindingIds: ["F-1"],
 				},
 				{
 					deps: deps(gh.runGh, {
 						runVerify: verifyRunSeats(repo, "v-1", REVIEW_ID, rows, [
 							{
 								rosterId: "terra",
-								items: ids.map((id) => ({
-									id,
-									disposition: "resolved" as const,
-									evidence: {
-										file: "€".repeat(200),
-										explanation: "€".repeat(900),
-									},
-								})),
+								items: [resolved("F-1")],
+								// Regressions fill the report up to its reserve.
+								regressions: 300,
+								regressionText: "\u20AC".repeat(20),
 							},
+							// A lost seat with a long name makes the close-out line long.
+							{ rosterId: "\u20AC".repeat(400), failed: true },
 						]),
 					}),
 				},
@@ -2291,7 +2286,9 @@ describe("fix round 1: the reply stays under its cap with the PR lines (F-8)", (
 			);
 			const lines = text.split("\n");
 			expect(lines.at(-2)).toMatch(/^PR comment: posted to #12/);
-			expect(lines.at(-1)).toMatch(/^PR close-out: not posted \(gh failed/);
+			expect(lines.at(-1)).toMatch(
+				/^PR close-out: not posted \(lost verify coverage: /,
+			);
 		});
 	});
 });
