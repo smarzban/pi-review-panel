@@ -8,7 +8,15 @@
  * Each action validates its own input with the same checks, in the same order
  * and with the same messages as its parser, so a front end that builds the
  * input itself gets the refusals the tool gives. The parser adds only the
- * refusal of argument keys the action does not take.
+ * refusal of argument keys the action does not take. Each action also
+ * resolves `repoDir` to its Git top level, refusing a relative path, as the
+ * tool does before it calls one.
+ *
+ * Input is taken as typed. The tool first coerces what models send as
+ * strings (a JSON or comma list for `seats`, `lenses`, `passes`,
+ * `keptFindingIds` and `lowAdvisory`; JSON for `dismissed`; `"true"` for
+ * `ownerApproved`), so a direct caller passing those strings is refused where
+ * the tool would accept them. Pass real arrays and `true`.
  *
  * No Pi host and no TypeBox are needed to import or call these. Running a
  * seat (review, audit, verify, resume) and diagnose's model check still load
@@ -97,6 +105,7 @@ import {
 	renderVerifyResult,
 	truncateCodePoints,
 } from "../tool/review-presentation.js";
+import { canonicalizeRepository } from "./repository.js";
 
 export type ActionResult = {
 	content: Array<{ type: "text"; text: string }>;
@@ -604,7 +613,7 @@ export async function diagnoseAction(
 	context: ActionContext = {},
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
-	const { repoDir } = input;
+	const repoDir = canonicalizeRepository(input.repoDir);
 	const report = await resolved.diagnose({
 		repoDir,
 		env: resolved.env,
@@ -647,7 +656,7 @@ export async function auditAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir } = input;
+	const repoDir = canonicalizeRepository(input.repoDir);
 	const { seats, passes, scopingNote } = validateAuditInput(input);
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
@@ -697,7 +706,7 @@ export async function verifyAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir } = input;
+	const repoDir = canonicalizeRepository(input.repoDir);
 	const { priorRunId, head, keptFindingIds, seats, scopingNote } =
 		validateVerifyInput(input);
 	await requireReady(resolved, repoDir);
@@ -741,7 +750,7 @@ export async function commentAction(
 	context: ActionContext = {},
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
-	const { repoDir } = input;
+	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateCommentInput(input);
 	const { priorRunId, dismissed, lowAdvisory } = valid;
 	const facts = loadCloseoutRun(repoDir, priorRunId);
@@ -793,7 +802,7 @@ export async function resumeAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir } = input;
+	const repoDir = canonicalizeRepository(input.repoDir);
 	const { priorRunId } = validateResumeInput(input);
 	await requireReady(resolved, repoDir);
 	// Resume never creates the key: a record it did not sign is not
@@ -872,7 +881,7 @@ export async function reviewAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir } = input;
+	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateReviewInput(input);
 	const { base, head } = valid;
 	const baseRevision = resolved.oidOf(repoDir, base);

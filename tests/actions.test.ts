@@ -301,6 +301,24 @@ describe("review_panel actions without Pi", () => {
 		});
 	});
 
+	it("diagnose cuts a long record-key warning to 1,500 characters and stays ready", async () => {
+		await withRepository(async (repo) => {
+			const cause = "x".repeat(2_000);
+			const result = await diagnoseAction(
+				{ repoDir: repo },
+				{
+					deps: deps({
+						checkRecordKey: () => ({ cause, fix: "Fix it.", warning: true }),
+					}),
+				},
+			);
+			const text = textOf(result);
+			expect(text).toContain("- Status: ready");
+			const line = text.split("\n").at(-1) ?? "";
+			expect(line).toBe(`- ${"x".repeat(1_500)}…`);
+		});
+	});
+
 	it("review runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
 			const result = await reviewAction(
@@ -652,4 +670,77 @@ describe("each action refuses a bad input itself, as the tool does", () => {
 			expect(direct.bodies).toEqual(viaTool.bodies);
 		});
 	});
+});
+
+describe("each action resolves its own repository", () => {
+	type Call = (repoDir: string, d: ActionDependencies) => Promise<ActionResult>;
+	const calls: Array<[string, Call]> = [
+		["diagnose", (repoDir, d) => diagnoseAction({ repoDir }, { deps: d })],
+		["audit", (repoDir, d) => auditAction({ repoDir }, { deps: d })],
+		[
+			"review",
+			(repoDir, d) =>
+				reviewAction({ repoDir, base: "main~1", head: "main" }, { deps: d }),
+		],
+		[
+			"verify",
+			(repoDir, d) =>
+				verifyAction(
+					{ repoDir, priorRunId: "r-1", head: "main", keptFindingIds: [] },
+					{ deps: d },
+				),
+		],
+		[
+			"resume",
+			(repoDir, d) => resumeAction({ repoDir, priorRunId: "r-1" }, { deps: d }),
+		],
+		[
+			"comment",
+			(repoDir, d) =>
+				commentAction(
+					{
+						repoDir,
+						ownerApproved: true,
+						priorRunId: "r-1",
+						dismissed: [],
+						lowAdvisory: [],
+					},
+					{ deps: d },
+				),
+		],
+	];
+
+	it.each(calls)(
+		"%s refuses a relative repository path",
+		async (_name, call) => {
+			await expect(call("repo", deps())).rejects.toThrow(
+				"repository must be a non-empty absolute path",
+			);
+		},
+	);
+
+	// comment reads no readiness; its relative-path refusal above proves it
+	// resolves the repository through the same call.
+	it.each(calls.filter(([name]) => name !== "comment"))(
+		"%s works on the repository top level when given a subdirectory",
+		async (_name, call) => {
+			await withRepository(async (repo) => {
+				const sub = path.join(repo, "src");
+				mkdirSync(sub);
+				const seen: string[] = [];
+				await expect(
+					call(
+						sub,
+						deps({
+							diagnose: async (input) => {
+								seen.push(input.repoDir);
+								throw new Error("stop after readiness");
+							},
+						}),
+					),
+				).rejects.toThrow("stop after readiness");
+				expect(seen).toEqual([repo]);
+			});
+		},
+	);
 });
