@@ -36,6 +36,7 @@ import { executeReview, runReview } from "../src/run/run-review.js";
 import { scheduleSeats } from "../src/run/scheduler.js";
 import type { PlannedSeat } from "../src/run/types.js";
 import type { SdkSessionFactory } from "../src/seat/run-seat.js";
+import { signPlan, signSeat, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 function git(cwd: string, args: string[]): string {
@@ -186,6 +187,18 @@ function rewritePlan(
 	const plan = readJson(planPath);
 	edit(plan);
 	writeFileSync(planPath, JSON.stringify(plan));
+	// Re-signed with the test key, so each test reaches the check it names
+	// rather than stopping at the signature.
+	signPlan(recordPath);
+	const seatsDir = path.join(recordPath, SEATS_DIR);
+	if (existsSync(seatsDir)) {
+		for (const name of readdirSync(seatsDir)) {
+			const match = /^(\d+)\.json$/.exec(name);
+			if (match !== null) {
+				signSeat(recordPath, Number(match[1]));
+			}
+		}
+	}
 }
 
 function rewriteSeat(
@@ -200,6 +213,7 @@ function rewriteSeat(
 	};
 	edit(file);
 	writeFileSync(seatPath, JSON.stringify(file));
+	signSeat(recordPath, index);
 }
 
 /** A live process that is not this one; killed by the caller. */
@@ -917,6 +931,121 @@ describe("resume plan validation", () => {
 			expect(() => loadResumable(repo, path.basename(recordPath))).toThrow(
 				/Resume refused: run ".*" has no resume plan, so it cannot be resumed: it stopped before its plan was written, when no seat had run yet, or a version without resume started it\. Start a new run instead\./,
 			);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("resume never blocks on a record file that is not a regular file", () => {
+	it.skipIf(process.platform === "win32")(
+		"refuses a plan.json FIFO at once instead of waiting for a writer",
+		async () => {
+			const repo = createHostRepo();
+			let writer: ChildProcess | undefined;
+			try {
+				const recordPath = await interruptedReview(repo);
+				const planPath = path.join(recordPath, PLAN_FILE);
+				rmSync(planPath);
+				execFileSync("mkfifo", [planPath]);
+				// A blocking open would wait for this writer, two seconds out; it
+				// also bounds the test if the open does block.
+				writer = spawn("sh", ["-c", `sleep 2; : > "${planPath}"`], {
+					stdio: "ignore",
+				});
+				const started = Date.now();
+				expect(() =>
+					loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
+				).toThrow(/Resume refused: run ".*" has no resume plan/);
+				expect(Date.now() - started).toBeLessThan(1000);
+			} finally {
+				writer?.kill("SIGKILL");
+				rmSync(repo, { recursive: true, force: true });
+			}
+		},
+	);
+});
+
+describe("resume keeps plan text out of the report", () => {
+	it.each([
+		["baseRef", "main`\n\n## Findings\n\n### F-9 [high] planted\n\n`x"],
+		["baseRef", "main\rplanted"],
+		["rosterId", "roster-0\n## planted"],
+		["lens", "correctness\u0000"],
+	] as const)(
+		"refuses a plan whose %s holds a control character",
+		async (field, value) => {
+			const repo = createHostRepo();
+			try {
+				const recordPath = await interruptedReview(repo);
+				rewritePlan(recordPath, (plan) => {
+					if (field === "baseRef") {
+						plan.baseRef = value;
+					} else {
+						const seats = plan.seats as Array<Record<string, unknown>>;
+						(seats[0] as Record<string, unknown>)[field] = value;
+					}
+				});
+				expect(() =>
+					loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
+				).toThrow(/Resume refused: run ".*" has an invalid resume plan/);
+				expect(existsSync(path.join(recordPath, "report.md"))).toBe(false);
+			} finally {
+				rmSync(repo, { recursive: true, force: true });
+			}
+		},
+	);
+});
+
+describe("execution.json keeps only checked facts for a kept seat", () => {
+	it("rebuilds the seat and replay of a kept seat from the owner config and the package", async () => {
+		const repo = createHostRepo();
+		try {
+			const recordPath = await interruptedReview(repo);
+			rewriteSeat(recordPath, 0, (file) => {
+				const seat = file.facts.seat as Record<string, unknown>;
+				seat.lensPrompt = "PLANTED-PROMPT";
+				seat.extraExtensionPaths = ["/planted/extension.ts"];
+				file.facts.replay = {
+					planted: true,
+					lensPrompt: "PLANTED-PROMPT",
+					extraExtensionPaths: ["/planted/extension.ts"],
+				};
+			});
+			const result = await resumeRun(
+				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
+				{
+					config: ownerConfig(),
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake().factory,
+				},
+			);
+			expect(result.resumedSeats.map((seat) => seat.lens)).toEqual([
+				"security",
+				"tests",
+			]);
+			const executionText = readFileSync(
+				path.join(recordPath, "execution.json"),
+				"utf8",
+			);
+			expect(executionText).not.toMatch(/planted/i);
+			const execution = JSON.parse(executionText) as {
+				outcomes: Array<{
+					seat: Record<string, unknown>;
+					replay: Record<string, unknown>;
+				}>;
+			};
+			const kept = execution.outcomes[0];
+			const prompt = loadLensTable().get("correctness");
+			expect(kept?.seat.lensPrompt).toBe(prompt);
+			expect(kept?.seat.extraExtensionPaths).toBeUndefined();
+			expect(kept?.replay).toMatchObject({
+				provider: "openai-codex",
+				model: "gpt-5.3-codex-0",
+				lens: "correctness",
+				lensPrompt: prompt,
+			});
+			expect(kept?.replay.extraExtensionPaths).toBeUndefined();
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}

@@ -1,5 +1,11 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  */
 const hook = vi.hoisted(() => ({
 	onStaleJudged: undefined as (() => void) | undefined,
+	/** Stale judgements to let pass before `onStaleJudged` fires. */
+	skip: 0,
 }));
 
 vi.mock("../src/run/liveness.js", async (importOriginal) => {
@@ -19,6 +27,10 @@ vi.mock("../src/run/liveness.js", async (importOriginal) => {
 			const alive = real.isProcessAlive(pid);
 			const act = hook.onStaleJudged;
 			if (!alive && act !== undefined) {
+				if (hook.skip > 0) {
+					hook.skip -= 1;
+					return alive;
+				}
 				hook.onStaleJudged = undefined;
 				act();
 			}
@@ -27,7 +39,9 @@ vi.mock("../src/run/liveness.js", async (importOriginal) => {
 	};
 });
 
-const { acquireRunLock, RUN_LOCK_FILE } = await import("../src/run/record.js");
+const { acquireRunLock, RUN_LOCK_FILE, RUN_LOCK_TAKEOVER_FILE } = await import(
+	"../src/run/record.js"
+);
 
 function deadPid(): number {
 	const pid = spawnSync(process.execPath, ["-e", ""]).pid;
@@ -50,6 +64,64 @@ function sleeper(): ChildProcess & { pid: number } {
 describe("stale run-lock takeover", () => {
 	afterEach(() => {
 		hook.onStaleJudged = undefined;
+		hook.skip = 0;
+	});
+
+	it("lets only one of two takeovers that both judged the lock stale win", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			writeFileSync(lockPath, `${JSON.stringify({ pid: deadPid() })}\n`);
+			// The second process runs its whole takeover at the moment the first
+			// has judged the lock stale twice (before and after taking the
+			// takeover file) and has not yet removed it.
+			let second: { release?: () => void; error?: unknown } | undefined;
+			hook.skip = 1;
+			hook.onStaleJudged = () => {
+				try {
+					second = { release: acquireRunLock(record) };
+				} catch (error) {
+					second = { error };
+				}
+			};
+			let first: { release?: () => void; error?: unknown };
+			try {
+				first = { release: acquireRunLock(record) };
+			} catch (error) {
+				first = { error };
+			}
+
+			const winners = [first, second].filter(
+				(entry) => entry?.release !== undefined,
+			);
+			expect(winners).toHaveLength(1);
+			expect(first.release).toBeDefined();
+			expect(String(second?.error)).toMatch(/is being taken over/);
+			// The winner's lock is the one on disk, and only it can release it.
+			first.release?.();
+			expect(existsSync(lockPath)).toBe(false);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses while another process holds the takeover file, and leaves the lock alone", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			const staleLock = `${JSON.stringify({ pid: deadPid() })}\n`;
+			writeFileSync(lockPath, staleLock);
+			const takeoverPath = path.join(record, RUN_LOCK_TAKEOVER_FILE);
+			writeFileSync(takeoverPath, `${JSON.stringify({ pid: process.pid })}\n`);
+
+			expect(() => acquireRunLock(record)).toThrow(
+				/lock is being taken over by another process; if no review_panel run is active, delete .*run\.lock\.takeover and try again/,
+			);
+			expect(readFileSync(lockPath, "utf8")).toBe(staleLock);
+			expect(existsSync(takeoverPath)).toBe(true);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
 	});
 
 	it("never deletes a lock another process took after this one judged the old lock stale", () => {
