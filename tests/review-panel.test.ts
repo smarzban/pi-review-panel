@@ -3,6 +3,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
@@ -14,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Config } from "../src/config/schema.js";
 import { resumeRun } from "../src/run/resume.js";
+import { runAudit } from "../src/run/run-audit.js";
 import { type RunReviewResult, runReview } from "../src/run/run-review.js";
 import type { PlannedSeat, RunConfig } from "../src/run/types.js";
 import reviewPanelExtension, {
@@ -1268,6 +1270,179 @@ describe("review_panel resume action", () => {
 			expect(text).toContain("3/3 voted");
 			expect(text).toContain("Not a merge decision.");
 			expect(updates[0]).toMatch(/review started/);
+		});
+	});
+
+	function rosterOf(seats: PlannedSeat[]): Config {
+		return {
+			roster: seats.map((seat) => ({
+				id: seat.rosterId,
+				provider: seat.provider,
+				model: seat.model,
+			})),
+			defaults: { seats: [seats[0]?.rosterId ?? "seat-0"] },
+		};
+	}
+
+	function countingResume(sessions: string[]) {
+		const fake = createSdkSeatFake();
+		return (
+			run: Parameters<typeof resumeRun>[0],
+			options: Parameters<typeof resumeRun>[1] | undefined,
+		) =>
+			resumeRun(run, {
+				...(options as NonNullable<typeof options>),
+				sessionFactory: async (input) => {
+					sessions.push(input.spec.lens);
+					return fake.factory(input);
+				},
+			});
+	}
+
+	it("finishes an interrupted audit with the audit rendering", async () => {
+		await withRepository(async (repository) => {
+			const seats = threeSeats()
+				.slice(0, 2)
+				.map((seat, index) => ({
+					...seat,
+					lens: index === 0 ? "code-health" : "security",
+				}));
+			const controller = new AbortController();
+			const interrupted = createSdkSeatFake([
+				{ kind: "default" },
+				{ kind: "pending" },
+			]);
+			await expect(
+				runAudit(
+					{ repoDir: repository, seats },
+					{
+						abortSignal: controller.signal,
+						sessionFactory: interrupted.factory,
+						onProgress: (event) => {
+							if (event.kind === "seat-finished") {
+								controller.abort();
+							}
+						},
+					},
+				),
+			).rejects.toThrow(/cancel/i);
+			const runId = readdirSync(
+				path.join(repository, ".review-panel", "runs"),
+			)[0] as string;
+			const sessions: string[] = [];
+			const updates: string[] = [];
+			const tool = toolWith({
+				loadConfig: () => rosterOf(seats),
+				resumeRun: countingResume(sessions),
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "resume", repository, priorRunId: runId },
+				undefined,
+				(update: { content: Array<{ text: string }> }) =>
+					updates.push(update.content[0]?.text ?? ""),
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(sessions).toEqual(["security"]);
+			expect(text).toContain(
+				`Resumed ${runId}: ran 1 of 2 planned seats again (seat-1/security); kept 1 as recorded.`,
+			);
+			expect(text).toContain("# Repository audit");
+			expect(text).toContain("2/2 voted");
+			expect(text).not.toContain("# Review panel");
+			expect(updates[0]).toMatch(/audit started/);
+		});
+	});
+
+	it("counts a seat it could not rebuild as lost coverage, not as kept", async () => {
+		await withRepository(async (repository) => {
+			const runId = await interruptedRecord(repository);
+			const sessions: string[] = [];
+			const config = rosterOf(threeSeats());
+			// The owner removed the row of seat 2 since the run started.
+			config.roster = config.roster.slice(0, 2);
+			const tool = toolWith({
+				loadConfig: () => config,
+				resumeRun: countingResume(sessions),
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "resume", repository, priorRunId: runId },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(sessions).toEqual(["security"]);
+			expect(text).toContain(
+				`Resumed ${runId}: ran 1 of 3 planned seats again (seat-1/security); kept 1 as recorded; lost 1 that could not be rebuilt from the owner config (seat-2/tests).`,
+			);
+		});
+	});
+
+	it("says when the record's scoping note was not passed to the re-run seats", async () => {
+		await withRepository(async (repository) => {
+			const runId = await interruptedRecord(repository);
+			const planPath = path.join(
+				repository,
+				".review-panel",
+				"runs",
+				runId,
+				"plan.json",
+			);
+			const plan = JSON.parse(readFileSync(planPath, "utf8"));
+			plan.scopingNote = "Only README.md is in scope.";
+			writeFileSync(planPath, JSON.stringify(plan));
+			const tool = toolWith({
+				loadConfig: () => rosterOf(threeSeats()),
+				resumeRun: countingResume([]),
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "resume", repository, priorRunId: runId },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text).toContain(
+				"The interrupted run had a scoping note. It is stored in the record, so the re-run seats did not get it.",
+			);
+			expect(text).not.toContain("Only README.md is in scope.");
+		});
+	});
+
+	it("runs the readiness check before resuming", async () => {
+		await withRepository(async (repository) => {
+			const runId = await interruptedRecord(repository);
+			let resumed = 0;
+			const tool = toolWith({
+				loadConfig: () => rosterOf(threeSeats()),
+				diagnose: async () => ({
+					ready: false,
+					rows: [
+						{
+							prerequisite: "configuration",
+							remediation: "Create the outside-repository config.",
+						},
+					],
+				}),
+				resumeRun: async () => {
+					resumed += 1;
+					throw new Error("resumeRun must not be called");
+				},
+			});
+			await expect(
+				tool.execute(
+					"tool-call",
+					{ action: "resume", repository, priorRunId: runId },
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(/needs setup/);
+			expect(resumed).toBe(0);
 		});
 	});
 });

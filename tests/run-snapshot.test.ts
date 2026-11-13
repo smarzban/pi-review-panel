@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdtempSync,
 	readFileSync,
+	renameSync,
 	rmSync,
 	utimesSync,
 	writeFileSync,
@@ -192,7 +193,7 @@ describe("sweepStaleSnapshots", () => {
 		}
 	});
 
-	it("removes a snapshot left by a dead run and prunes its registration", () => {
+	it("removes a snapshot left by a dead run and its registration", () => {
 		const repo = createHostRepo();
 		const pin = pinSnapshot(repo);
 		try {
@@ -296,6 +297,42 @@ describe("sweepStaleSnapshots", () => {
 
 			expect(sweepStaleSnapshots(repo).removed).toEqual([pin.worktreePath]);
 			expect(existsSync(pin.worktreePath)).toBe(false);
+			expect(worktreeCount(repo)).toBe(1);
+		} finally {
+			removeFixture(repo, pin.worktreePath);
+		}
+	});
+
+	it("leaves an unrelated worktree registered while its folder is away", () => {
+		const repo = createHostRepo();
+		const away = mkdtempSync(path.join(tmpdir(), "run-snapshot-away-"));
+		const feature = path.join(away, "feature");
+		const parked = path.join(away, "parked");
+		try {
+			git(repo, ["worktree", "add", "--quiet", "--detach", feature]);
+			// The folder is briefly elsewhere: an unmounted disk, a move.
+			renameSync(feature, parked);
+
+			sweepStaleSnapshots(repo);
+
+			renameSync(parked, feature);
+			expect(worktreeCount(repo)).toBe(2);
+			expect(git(feature, ["status", "--porcelain"])).toBe("");
+		} finally {
+			removeFixture(repo, away);
+		}
+	});
+
+	it("drops a dead snapshot's registration by its own path when its folder is gone", () => {
+		const repo = createHostRepo();
+		const pin = pinSnapshot(repo);
+		try {
+			ownedBy(pin.worktreePath, deadPid());
+			rmSync(pin.worktreePath, { recursive: true, force: true });
+			expect(worktreeCount(repo)).toBe(2);
+
+			sweepStaleSnapshots(repo);
+
 			expect(worktreeCount(repo)).toBe(1);
 		} finally {
 			removeFixture(repo, pin.worktreePath);
