@@ -1719,6 +1719,145 @@ describe("review_panel record key", () => {
 		},
 	);
 
+	/** Creates the owner's key, then leaves its folder group-writable (umask 002). */
+	function groupWritableKey(configDir: string, repository: string): Buffer {
+		const key = loadRecordKey(path.join(configDir, "record-key"), {
+			create: true,
+			repoDir: repository,
+		});
+		chmodSync(configDir, 0o775);
+		return key;
+	}
+
+	it.skipIf(process.platform === "win32")(
+		"review and audit run with a valid key in a group-writable (0775) folder",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					const key = groupWritableKey(configDir, repository);
+					const given: Array<Buffer | undefined> = [];
+					const tool = ownerTool(configDir, {
+						loadConfig: () => ({
+							...roster,
+							defaults: { seats: ["seat-0", "seat-1"] },
+						}),
+						runReview: async (config: RunConfig, options) => {
+							given.push(options?.recordKey);
+							return {
+								recordPath: path.join(repository, ".review-panel", "runs", "r"),
+								outcomes: config.seats.map((seat) => ({
+									seat,
+									outcome: { kind: "voted" as const, findings: [] },
+								})),
+							} as unknown as RunReviewResult;
+						},
+						runAudit: async (_config, options) => {
+							given.push(options?.recordKey);
+							throw new Error("audit stub reached with the key");
+						},
+					});
+					await tool.execute(
+						"tool-call",
+						{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+						undefined,
+						undefined,
+						{},
+					);
+					await expect(
+						tool.execute(
+							"tool-call",
+							{ action: "audit", repository, passes: ["security"] },
+							undefined,
+							undefined,
+							{},
+						),
+					).rejects.toThrow(/audit stub reached with the key/);
+					expect(given).toHaveLength(2);
+					for (const each of given) {
+						expect(each?.equals(key)).toBe(true);
+					}
+				}),
+			);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"review, audit and resume refuse a key folder other users can write",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					for (const mode of [0o777, 0o757]) {
+						loadRecordKey(path.join(configDir, "record-key"), {
+							create: true,
+							repoDir: repository,
+						});
+						chmodSync(configDir, mode);
+						const tool = ownerTool(configDir, {
+							loadConfig: () => ({
+								...roster,
+								defaults: { seats: ["seat-0", "seat-1"] },
+							}),
+							runReview: async () => {
+								throw new Error("runReview must not be called");
+							},
+							runAudit: async () => {
+								throw new Error("runAudit must not be called");
+							},
+						});
+						for (const [args, refusal] of [
+							[
+								{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+								"Review",
+							],
+							[{ action: "audit", repository, passes: ["security"] }, "Audit"],
+							[
+								{ action: "resume", repository, priorRunId: "any-run" },
+								"Resume",
+							],
+						] as const) {
+							await expect(
+								tool.execute("tool-call", args, undefined, undefined, {}),
+							).rejects.toThrow(
+								new RegExp(
+									`${refusal} refused: record key .*record-key is refused: its folder .* is writable by other users`,
+								),
+							);
+						}
+						chmodSync(configDir, 0o700);
+					}
+				}),
+			);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"diagnose stays ready on a group-writable (0775) key folder, with a warning, and writes nothing",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					groupWritableKey(configDir, repository);
+					const before = readdirSync(configDir);
+					const tool = ownerTool(configDir);
+					const response = await tool.execute(
+						"tool-call",
+						{ action: "diagnose", repository },
+						undefined,
+						undefined,
+						{},
+					);
+					const text = response.content[0]?.text ?? "";
+					expect(text).toContain("- Status: ready");
+					expect(text).not.toContain("Required remediation");
+					expect(text).toMatch(
+						/## Warnings\n- record key .*record-key: record key .*record-key: its folder .* is writable by its group/,
+					);
+					expect(text).toContain(`chmod g-w ${configDir}`);
+					expect(readdirSync(configDir)).toEqual(before);
+				}),
+			);
+		},
+	);
+
 	it("resume never creates the key, and refuses without one", async () => {
 		await withRepository((repository) =>
 			withConfigDir(async (configDir) => {
@@ -1736,6 +1875,58 @@ describe("review_panel record key", () => {
 			}),
 		);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"resumes with a valid key in a group-writable (0775) folder",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					const recordKey = groupWritableKey(configDir, repository);
+					const controller = new AbortController();
+					const interrupted = createSdkSeatFake([
+						{ kind: "default" },
+						{ kind: "pending" },
+					]);
+					await expect(
+						runReview(
+							{ repoDir: repository, baseRef: "HEAD~1", seats },
+							{
+								abortSignal: controller.signal,
+								recordKey,
+								sessionFactory: interrupted.factory,
+								onProgress: (event) => {
+									if (event.kind === "seat-finished") {
+										controller.abort();
+									}
+								},
+							},
+						),
+					).rejects.toThrow(/cancel/i);
+					const runId = readdirSync(
+						path.join(repository, ".review-panel", "runs"),
+					)[0] as string;
+					const fake = createSdkSeatFake();
+					const tool = ownerTool(configDir, {
+						resumeRun: (run, options) =>
+							resumeRun(run, {
+								...(options as NonNullable<typeof options>),
+								sessionFactory: fake.factory,
+							}),
+					});
+					const response = await tool.execute(
+						"tool-call",
+						{ action: "resume", repository, priorRunId: runId },
+						undefined,
+						undefined,
+						{},
+					);
+					expect(response.content[0]?.text).toContain(
+						`Resumed ${runId}: ran 1 of 2 planned seats again (seat-1/security); kept 1 as recorded.`,
+					);
+				}),
+			);
+		},
+	);
 
 	it("resumes a record signed with the owner's key, and keeps a forged finding out of the reply", async () => {
 		await withRepository((repository) =>

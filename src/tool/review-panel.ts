@@ -626,20 +626,33 @@ export function createReviewPanelTool(
 					env: runtime.env,
 					home: runtime.home,
 				});
-				const shown =
+				const keyRow =
 					keyProblem === undefined
+						? undefined
+						: `record key ${recordKeyPath(resolveConfigPath({ env: runtime.env, home: runtime.home }))}`;
+				const shown =
+					keyProblem === undefined || keyProblem.warning
 						? report
 						: {
 								ready: false,
 								rows: [
 									...report.rows,
 									{
-										prerequisite: `record key ${recordKeyPath(resolveConfigPath({ env: runtime.env, home: runtime.home }))}`,
+										prerequisite: keyRow as string,
 										remediation: `${keyProblem.cause}. ${keyProblem.fix}`,
 									},
 								],
 							};
-				return { content: [{ type: "text", text: renderReadiness(shown) }] };
+				// A warning never changes readiness: it is shown after the report,
+				// outside its remediation rows, at most 1,500 characters.
+				const warning = keyProblem?.warning
+					? `\n## Warnings\n- ${Array.from(`${keyRow}: ${keyProblem.cause}. ${keyProblem.fix}`).slice(0, 1_500).join("")}`
+					: "";
+				return {
+					content: [
+						{ type: "text", text: `${renderReadiness(shown)}${warning}` },
+					],
+				};
 			}
 
 			if (action === "audit") {
