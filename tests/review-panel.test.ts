@@ -551,6 +551,34 @@ describe("review_panel public tool adapter", () => {
 		});
 	});
 
+	it("says in the review summary when the suggestions are unavailable, never that none matched", async () => {
+		await withRepository(async (repository) => {
+			const tool = toolWith({
+				suggestLenses: () => ({ unavailable: "the diff is over 256 MiB" }),
+				runReview: async (config: RunConfig) =>
+					({
+						recordPath: path.join(repository, ".review-panel", "runs", "run-6"),
+						outcomes: config.seats.map((seat) => ({
+							seat,
+							outcome: { kind: "voted" as const, findings: [] },
+						})),
+					}) as unknown as RunReviewResult,
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text).toContain(
+				"\n\nSuggest:\n- Suggestions unavailable: the diff could not be read (the diff is over 256 MiB).",
+			);
+			expect(text).not.toContain("No suggestion rule matched");
+		});
+	});
+
 	it("drops a suggestion for a lens the panel already ran", async () => {
 		await withRepository(async (repository) => {
 			const tool = toolWith({
