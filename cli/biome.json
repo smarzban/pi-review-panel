@@ -1,0 +1,16 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+	"root": false,
+	"extends": "//",
+	"files": {
+		"includes": [
+			"src/**/*.ts",
+			"tests/**/*.ts",
+			"build.mjs",
+			"package.json",
+			"tsconfig.json",
+			"vitest.config.ts",
+			"biome.json"
+		]
+	}
+}

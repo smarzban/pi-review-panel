@@ -20,3 +20,15 @@ jobs:
 
       - name: Verify
         run: npm run typecheck && npm test && npm run check
+
+      - name: Install CLI
+        working-directory: cli
+        run: npm ci
+
+      - name: Build CLI
+        working-directory: cli
+        run: npm run build
+
+      - name: Verify CLI
+        working-directory: cli
+        run: npm run typecheck && npm test && npm run check

@@ -1,0 +1,39 @@
+{
+	"name": "review-panel",
+	"version": "0.1.0",
+	"description": "Standalone command-line front end for the pi-review-panel multi-model review panel",
+	"license": "MIT",
+	"author": "Saeed Marzban",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/smarzban/pi-review-panel.git",
+		"directory": "cli"
+	},
+	"type": "module",
+	"engines": {
+		"node": ">=26.0.0"
+	},
+	"bin": {
+		"review-panel": "dist/cli/src/main.js"
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "node build.mjs",
+		"prepack": "npm run build",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"check": "biome check ."
+	},
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "1.5.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.6",
+		"@types/node": "26.6.6",
+		"esbuild": "0.28.2",
+		"typescript": "7.0.2",
+		"vitest": "4.1.10"
+	}
+}
