@@ -247,8 +247,8 @@ or that belongs to another repository, is never removed.
 
 The temp folder can be shared with other users (`/tmp` on Linux), so the sweep trusts nothing it
 finds there on sight. It touches only folders you own directly in the temp folder, and never
-follows a symlink. It reads an owner file only inside a holder you own that no one else can write,
-and only when the file is a regular file you own with a single link. A `<name>.owner.json` file
+follows a symlink. It reads an owner file only inside a holder you own that no one else can write
+and that is not itself a worktree, and only when the file is a regular file you own with a single link. A `<name>.owner.json` file
 beside a folder is never read. A snapshot with no trusted owner file (made by an earlier version)
 is removed only when it is registered as a worktree of this repository and is more than 24 hours
 old.

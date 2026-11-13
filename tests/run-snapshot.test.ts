@@ -421,6 +421,29 @@ describe("the sweep trusts only what this user made", () => {
 		}
 	});
 
+	it("never takes an owner.json the reviewed tree itself holds as the owner", () => {
+		const repo = createHostRepo();
+		// The reviewed repository tracks a root owner.json that names it.
+		writeFileSync(
+			path.join(repo, "owner.json"),
+			`${JSON.stringify({ pid: deadPid(), repo: commonGitDir(repo) })}\n`,
+		);
+		git(repo, ["add", "owner.json"]);
+		git(repo, ["commit", "-m", "owner.json"]);
+		const folder = legacySnapshot(repo);
+		try {
+			expect(existsSync(path.join(folder, "owner.json"))).toBe(true);
+
+			const swept = sweepStaleSnapshots(repo);
+
+			expect(swept.removed).toEqual([]);
+			expect(existsSync(path.join(folder, "committed.txt"))).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+		} finally {
+			removeFixture(repo, folder);
+		}
+	});
+
 	it("never reads an owner file through a symlink", () => {
 		const repo = createHostRepo();
 		const pin = pinSnapshot(repo);
@@ -496,9 +519,9 @@ describe("the sweep trusts only what this user made", () => {
 		}
 	});
 
-	it("keeps a registered snapshot-named worktree outside the temp folder", () => {
+	it("keeps a registered snapshot-named worktree that is not directly in the temp folder", () => {
 		const repo = createHostRepo();
-		const away = mkdtempSync(path.join(repo, "..", "run-snapshot-away-"));
+		const away = mkdtempSync(path.join(tmpdir(), "run-snapshot-away-"));
 		const folder = path.join(away, "review-panel-snapshot-away");
 		try {
 			git(repo, ["worktree", "add", "--quiet", "--detach", folder]);

@@ -198,7 +198,7 @@ export function sweepStaleSnapshots(
 		}
 		const listed = registered.get(name);
 		const owner =
-			folderStats !== undefined && (folderStats.mode & 0o022) === 0
+			folderStats !== undefined && isHolder(folder, folderStats, listed)
 				? readOwner(path.join(folder, OWNER_FILE))
 				: undefined;
 		let stale: boolean;
@@ -321,6 +321,29 @@ function realDirname(target: string): string {
 	} catch {
 		return parent;
 	}
+}
+
+/**
+ * A holder this version made: no other user can write it, and it is not a
+ * worktree itself. An older snapshot's folder is the checked-out tree, whose
+ * `owner.json` (if the reviewed repository tracks one) says nothing about
+ * who made the snapshot.
+ */
+function isHolder(
+	folder: string,
+	stats: Stats,
+	listed: ListedSnapshot | undefined,
+): boolean {
+	if (process.platform !== "win32" && (stats.mode & 0o022) !== 0) {
+		return false;
+	}
+	if (
+		listed !== undefined &&
+		path.basename(path.dirname(listed.path)) !== path.basename(folder)
+	) {
+		return false;
+	}
+	return safeLstat(path.join(folder, ".git")) === undefined;
 }
 
 /** This user's id, or undefined where there is none (Windows). */
