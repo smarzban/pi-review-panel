@@ -76,6 +76,7 @@ const parameters = Type.Object(
 		dismissed: Type.Optional(Type.Any()),
 		lowAdvisory: Type.Optional(Type.Any()),
 		verifyRunId: Type.Optional(nonEmpty),
+		prComment: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: true },
 );
@@ -124,8 +125,12 @@ export function prepareReviewArguments(args: unknown): unknown {
 	if (typeof next.dismissed === "string") {
 		next.dismissed = coerceJsonValue(next.dismissed);
 	}
-	if (next.ownerApproved === "true") {
-		next.ownerApproved = true;
+	for (const key of ["ownerApproved", "prComment"] as const) {
+		if (next[key] === "true") {
+			next[key] = true;
+		} else if (next[key] === "false") {
+			next[key] = false;
+		}
 	}
 	return next;
 }

@@ -227,7 +227,7 @@ function parseCallPayload(text: string): Record<string, unknown> {
 /**
  * The tool's `prepareArguments` coercions, so `call` accepts what the tool
  * accepts: a string for a list, JSON text for `dismissed`, and
- * `"ownerApproved": "true"`.
+ * `"true"`/`"false"` for `ownerApproved` and `prComment`.
  */
 function coerceLikeTheTool(
 	args: Record<string, unknown>,
@@ -247,8 +247,12 @@ function coerceLikeTheTool(
 	if (typeof next.dismissed === "string") {
 		next.dismissed = coerceJsonValue(next.dismissed);
 	}
-	if (next.ownerApproved === "true") {
-		next.ownerApproved = true;
+	for (const key of ["ownerApproved", "prComment"]) {
+		if (next[key] === "true") {
+			next[key] = true;
+		} else if (next[key] === "false") {
+			next[key] = false;
+		}
 	}
 	return next;
 }

@@ -48,6 +48,7 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import { loadPriorRun } from "../run/prior-run.js";
 import {
 	checkRecordKey,
 	loadRecordKey,
@@ -93,6 +94,7 @@ import {
 	loadCloseoutRun,
 } from "../tool/closeout-from-run.js";
 import {
+	type GhRunner,
 	type PostCloseoutInput,
 	type PostCloseoutResult,
 	postCloseoutComment,
@@ -112,6 +114,15 @@ import {
 	renderVerifyResult,
 	truncateCodePoints,
 } from "../tool/review-presentation.js";
+import {
+	assertVerifyJudgment,
+	defaultRunGh,
+	postReviewRound,
+	postVerifyRound,
+	ROUND_REPLY_RESERVE,
+	type RoundContext,
+	type RoundRequest,
+} from "../tool/round-post.js";
 import { canonicalizeRepository } from "./repository.js";
 
 export type ActionResult = {
@@ -144,6 +155,11 @@ export type ActionDependencies = {
 		options?: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
 	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
+	/**
+	 * Runs `gh` for posting each review and verify round to the open PR. By
+	 * default it runs the real `gh`.
+	 */
+	runGh?: GhRunner;
 	resumeRun?: (
 		run: ResumableRun,
 		options?: ResumeOptions,
@@ -298,12 +314,30 @@ export type AuditInput = {
 	scopingNote?: string;
 };
 
-export type VerifyInput = {
+/**
+ * What review and verify take about posting their round to the open PR:
+ * `prComment: false` turns it off for this run, `pr` names the PR instead of
+ * looking it up by the head commit, and `ownerApproved: true` is needed for
+ * any post when the owner config's `defaults.prComment` is `"ownerApproved"`.
+ */
+export type RoundInput = {
+	prComment?: boolean;
+	pr?: number;
+	ownerApproved?: boolean;
+};
+
+const ROUND_KEYS = ["prComment", "pr", "ownerApproved"] as const;
+
+export type VerifyInput = RoundInput & {
 	priorRunId: string;
 	head: string;
 	keptFindingIds: string[];
 	seats?: string[];
 	scopingNote?: string;
+	/** Kept-out findings with the reason, shown in the verify comment and the close-out. */
+	dismissed?: CloseoutJudgmentRow[];
+	/** Low findings left as advisory, shown the same way. */
+	lowAdvisory?: string[];
 };
 
 export type ResumeInput = { priorRunId: string };
@@ -324,7 +358,7 @@ export type CommentInput = {
  * is wrong in two ways reports the same problem first as it always has.
  * `reviewAction` validates them at that point.
  */
-export type ReviewInput = {
+export type ReviewInput = RoundInput & {
 	base: string;
 	head: string;
 	seats?: unknown;
@@ -385,6 +419,9 @@ export function parseVerifyArguments(
 		"keptFindingIds",
 		"seats",
 		"scopingNote",
+		"dismissed",
+		"lowAdvisory",
+		...ROUND_KEYS,
 	]);
 	return validateVerifyInput(args);
 }
@@ -402,12 +439,57 @@ function validateVerifyInput(
 	);
 	const seats = optionalStringArray(args.seats, "seats");
 	const scopingNote = optionalNonEmptyString(args.scopingNote, "scopingNote");
+	const dismissed = parseDismissed(args.dismissed);
+	const lowAdvisory = parseLowAdvisory(args.lowAdvisory);
 	return {
 		priorRunId,
 		head,
 		keptFindingIds,
 		...(seats === undefined ? {} : { seats }),
 		...(scopingNote === undefined ? {} : { scopingNote }),
+		...(args.dismissed === undefined ? {} : { dismissed }),
+		...(args.lowAdvisory === undefined ? {} : { lowAdvisory }),
+		...validateRoundInput(args),
+	};
+}
+
+function optionalBoolean(raw: unknown, label: string): boolean | undefined {
+	if (raw === undefined || typeof raw === "boolean") {
+		return raw;
+	}
+	throw new Error(`${label} must be true or false`);
+}
+
+function validateRoundInput(args: RoundInput | Record<string, unknown>) {
+	const prComment = optionalBoolean(args.prComment, "prComment");
+	const ownerApproved = optionalBoolean(args.ownerApproved, "ownerApproved");
+	let pr: number | undefined;
+	if (args.pr !== undefined) {
+		const raw = args.pr;
+		pr =
+			typeof raw === "number"
+				? raw
+				: typeof raw === "string" && /^\s*\d+\s*$/.test(raw)
+					? Number(raw.trim())
+					: Number.NaN;
+		if (!Number.isSafeInteger(pr) || pr <= 0) {
+			throw new Error("pr must be a positive integer");
+		}
+	}
+	return {
+		...(prComment === undefined ? {} : { prComment }),
+		...(pr === undefined ? {} : { pr }),
+		...(ownerApproved === undefined ? {} : { ownerApproved }),
+	};
+}
+
+function roundRequest(input: RoundInput): RoundRequest {
+	return {
+		...(input.prComment === undefined ? {} : { prComment: input.prComment }),
+		...(input.pr === undefined ? {} : { pr: input.pr }),
+		...(input.ownerApproved === undefined
+			? {}
+			: { ownerApproved: input.ownerApproved }),
 	};
 }
 
@@ -529,6 +611,7 @@ export function parseReviewArguments(
 		"seats",
 		"lenses",
 		"scopingNote",
+		...ROUND_KEYS,
 	]);
 	return validateReviewInput(args);
 }
@@ -546,6 +629,7 @@ function validateReviewInput(
 		...(args.scopingNote === undefined
 			? {}
 			: { scopingNote: args.scopingNote }),
+		...validateRoundInput(args),
 	};
 }
 
@@ -562,6 +646,7 @@ function resolveDependencies(deps: ActionDependencies | undefined) {
 		suggest: deps?.suggestLenses ?? suggestLenses,
 		verify: deps?.runVerify ?? runVerify,
 		postComment: deps?.postComment ?? postCloseoutComment,
+		runGh: deps?.runGh ?? defaultRunGh,
 		resume: deps?.resumeRun ?? resumeRun,
 		keyOf: deps?.recordKey ?? ownerRecordKey,
 		checkKey: deps?.checkRecordKey ?? ownerRecordKeyCheck,
@@ -631,6 +716,27 @@ function progress(context: ActionContext) {
 		elapsed: () => Date.now() - startedAt,
 		emit: (view: ReviewProgressView) => context.onProgress?.(view),
 	};
+}
+
+function roundContext(
+	resolved: Resolved,
+	repoDir: string,
+	headOid: string,
+	input: RoundInput,
+	config: { defaults: { prComment?: "auto" | "ownerApproved" } },
+): RoundContext {
+	return {
+		runGh: resolved.runGh,
+		repoDir,
+		headOid,
+		request: roundRequest(input),
+		mode: config.defaults.prComment ?? "auto",
+	};
+}
+
+/** The report, then one plain line per round post, such as `PR comment: posted to #12`. */
+function withRoundLines(report: string, lines: readonly string[]): string {
+	return lines.length === 0 ? report : `${report}\n\n${lines.join("\n")}`;
 }
 
 function textResult(text: string): ActionResult {
@@ -747,12 +853,28 @@ export async function verifyAction(
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
 	const repoDir = canonicalizeRepository(input.repoDir);
-	const { priorRunId, head, keptFindingIds, seats, scopingNote } =
-		validateVerifyInput(input);
+	const valid = validateVerifyInput(input);
+	const { priorRunId, head, keptFindingIds, seats, scopingNote } = valid;
+	const dismissed = valid.dismissed ?? [];
+	const lowAdvisory = valid.lowAdvisory ?? [];
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
 	const headRevision = resolved.oidOf(repoDir, head);
 	const panel = planVerifySeats(config, seats);
+	// The reasons for findings not kept are checked against the review
+	// record before any seat runs.
+	const reviewFindings =
+		dismissed.length === 0 && lowAdvisory.length === 0
+			? undefined
+			: loadPriorRun(repoDir, priorRunId).findings;
+	if (reviewFindings !== undefined) {
+		assertVerifyJudgment(
+			reviewFindings,
+			keptFindingIds,
+			dismissed,
+			lowAdvisory,
+		);
+	}
 	const roster = compactPanelRoster(panel);
 	emit({
 		phase: "verify",
@@ -782,7 +904,19 @@ export async function verifyAction(
 				emit({ ...progressFromVerifyEvent(event, elapsed()), roster }),
 		},
 	);
-	return textResult(renderVerifyResult(result, panel));
+	const report = renderVerifyResult(result, panel, ROUND_REPLY_RESERVE);
+	const roundLines = postVerifyRound(
+		roundContext(resolved, repoDir, result.headOid, valid, config),
+		{
+			result,
+			panel,
+			headRef: head,
+			dismissed,
+			lowAdvisory,
+			...(reviewFindings === undefined ? {} : { reviewFindings }),
+		},
+	);
+	return textResult(withRoundLines(report, roundLines));
 }
 
 export async function commentAction(
@@ -981,16 +1115,29 @@ export async function reviewAction(
 	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
 	const findings = readStampedFindings(result.recordPath);
 
-	return textResult(
-		renderReviewResult({
-			recordPath: result.recordPath,
+	const report = renderReviewResult({
+		recordPath: result.recordPath,
+		panel,
+		result,
+		suggestions,
+		...(scopingNote === undefined ? {} : { scopingNote }),
+		...(findings === undefined ? {} : { findings }),
+		reserveBytes: ROUND_REPLY_RESERVE,
+	});
+	const roundLines = postReviewRound(
+		roundContext(resolved, repoDir, headRevision, valid, config),
+		{
+			runId: path.basename(result.recordPath),
+			baseRef: base,
+			baseOid: baseRevision,
+			headOid: headRevision,
 			panel,
 			result,
 			suggestions,
-			...(scopingNote === undefined ? {} : { scopingNote }),
 			...(findings === undefined ? {} : { findings }),
-		}),
+		},
 	);
+	return textResult(withRoundLines(report, roundLines));
 }
 
 /** How many pieces of evidence suggest shows for one lens before counting. */

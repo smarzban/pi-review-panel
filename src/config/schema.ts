@@ -12,7 +12,20 @@ export type ConfigDefaults = {
 	/** Optional always-on specialist extras. Omitted means holistic only. */
 	lenses?: string[];
 	seatBudgetMs?: number;
+	/**
+	 * How review and verify rounds reach the open PR: `"auto"` (the default
+	 * when absent) posts each round; `"ownerApproved"` posts a round only when
+	 * the call also passes `ownerApproved: true`.
+	 */
+	prComment?: PrCommentMode;
 };
+
+export type PrCommentMode = "auto" | "ownerApproved";
+
+export const PR_COMMENT_MODES: readonly PrCommentMode[] = [
+	"auto",
+	"ownerApproved",
+];
 
 export type Config = {
 	roster: RosterRow[];
@@ -36,7 +49,12 @@ const rosterFields = new Set([
 	"model",
 	"extraExtensionPaths",
 ]);
-const defaultsFields = new Set(["seats", "lenses", "seatBudgetMs"]);
+const defaultsFields = new Set([
+	"seats",
+	"lenses",
+	"seatBudgetMs",
+	"prComment",
+]);
 
 const MAX_SEAT_BUDGET_MS = 2147483647;
 
@@ -240,6 +258,17 @@ export function validateConfig(document: unknown): ConfigResult {
 				});
 			}
 		}
+
+		if (
+			Object.hasOwn(defaults, "prComment") &&
+			!PR_COMMENT_MODES.includes(defaults.prComment as PrCommentMode)
+		) {
+			errors.push({
+				row: -1,
+				field: "defaults.prComment",
+				message: 'must be "auto" or "ownerApproved"',
+			});
+		}
 	}
 
 	if (errors.length > 0) {
@@ -255,6 +284,9 @@ export function validateConfig(document: unknown): ConfigResult {
 	}
 	if (Object.hasOwn(defaultsRecord, "seatBudgetMs")) {
 		configDefaults.seatBudgetMs = defaultsRecord.seatBudgetMs as number;
+	}
+	if (Object.hasOwn(defaultsRecord, "prComment")) {
+		configDefaults.prComment = defaultsRecord.prComment as PrCommentMode;
 	}
 
 	const config: Config = {

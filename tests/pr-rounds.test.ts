@@ -25,10 +25,7 @@ import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import type { GhRunner } from "../src/tool/closeout-post.js";
 import { createReviewPanelTool } from "../src/tool/review-panel.js";
-import {
-	GITHUB_COMMENT_LIMIT,
-	githubSafe,
-} from "../src/tool/round-post.js";
+import { GITHUB_COMMENT_LIMIT, githubSafe } from "../src/tool/round-post.js";
 import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 /**
@@ -356,8 +353,7 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			// No call edits or deletes a comment.
 			expect(
 				gh.calls.filter(
-					(call) =>
-						call.args.includes("PATCH") || call.args.includes("DELETE"),
+					(call) => call.args.includes("PATCH") || call.args.includes("DELETE"),
 				),
 			).toEqual([]);
 			const reply = textOf(result);
@@ -402,9 +398,9 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			expect(posts(gh.calls)[0]?.args).toContain(
 				`repos/${REPO_SLUG}/issues/31/comments`,
 			);
-			expect(gh.calls.some((call) => call.args.join(" ").includes("/pulls"))).toBe(
-				false,
-			);
+			expect(
+				gh.calls.some((call) => call.args.join(" ").includes("/pulls")),
+			).toBe(false);
 			expect(textOf(result)).toContain("PR comment: posted to #31");
 		});
 	});
@@ -492,7 +488,9 @@ describe("no post, and one plain line saying why", () => {
 
 	it("gh fails or is signed out, and the review still completes", async () => {
 		const gh = fakeGh({
-			fail: new Error("gh: To get started with GitHub CLI, please run:\n  gh auth login"),
+			fail: new Error(
+				"gh: To get started with GitHub CLI, please run:\n  gh auth login",
+			),
 		});
 		const text = await reviewWith(gh);
 		expect(text).toContain("# Review panel");
@@ -514,7 +512,9 @@ describe("no post, and one plain line saying why", () => {
 				),
 			);
 		});
-		expect(text.split("\n").at(-1)).toContain("fake gh: tests never reach GitHub");
+		expect(text.split("\n").at(-1)).toContain(
+			"fake gh: tests never reach GitHub",
+		);
 	});
 });
 
@@ -731,9 +731,13 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 				},
 				{
 					deps: deps(gh.runGh, {
-						runVerify: verifyRun(repo, "v-1", REVIEW_ID, [ROWS[0] as Row], [
-							resolvedF1,
-						]),
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[resolvedF1],
+						),
 					}),
 				},
 			);
@@ -782,9 +786,13 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 				},
 				{
 					deps: deps(gh.runGh, {
-						runVerify: verifyRun(repo, "v-1", REVIEW_ID, [ROWS[0] as Row], [
-							resolvedF1,
-						]),
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[resolvedF1],
+						),
 					}),
 				},
 			);
@@ -809,9 +817,13 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 				},
 				{
 					deps: deps(gh.runGh, {
-						runVerify: verifyRun(repo, "v-1", REVIEW_ID, [ROWS[0] as Row], [
-							resolvedF1,
-						]),
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[resolvedF1],
+						),
 					}),
 				},
 			);
@@ -855,17 +867,18 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 
 describe("posted text is safe", () => {
 	const HOSTILE_TITLE =
-		"ping @octocat and @org/team ‮evil‬ \u0007bell​ fixes #123";
-	const HOSTILE_FILE = "src/@admin⁦x⁩.ts";
+		"ping @octocat and @org/team \u202Eevil\u202C \u0007bell\u200B fixes #123";
+	const HOSTILE_FILE = "src/@admin\u2066x\u2069.ts";
 
 	it("neutralizes mentions and references and strips control, bidi and invisible characters", () => {
 		const safe = githubSafe(HOSTILE_TITLE);
 		expect(safe).not.toMatch(/@[A-Za-z]/);
-		expect(safe).toContain("@‍octo");
+		expect(safe).toContain("@\u200Docto");
 		expect(safe).not.toMatch(/#\d/);
-		expect(safe).not.toMatch(/[‮‬\u0007​]/);
+		expect(safe).not.toMatch(/[\u202E\u202C\u200B]/);
+		expect(safe).not.toContain("\u0007");
 		// The only invisible character left is the joiner placed after @ or #.
-		expect(safe.replace(/[@#]‍/g, "")).not.toMatch(/\p{Cf}/u);
+		expect(safe.replace(/[@#]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
 		expect(githubSafe("line one\nline two")).not.toContain("\n");
 		expect(githubSafe("## Review panel")).not.toMatch(/^##/);
 	});
@@ -891,13 +904,16 @@ describe("posted text is safe", () => {
 			);
 			const body = bodyOf(posts(gh.calls)[0]);
 			expect(body).not.toMatch(/@[A-Za-z]/);
-			expect(body).not.toMatch(/(^|[^‍])#\d/);
-			expect(body).not.toMatch(/[‮‬⁦⁩\u0007​]/);
-			expect(body.replace(/[@#]‍/g, "")).not.toMatch(/\p{Cf}/u);
+			expect(body).not.toMatch(/(^|[^\u200D])#\d/);
+			expect(body).not.toMatch(/[\u202E\u202C\u2066\u2069\u200B]/);
+			expect(body).not.toContain("\u0007");
+			expect(body.replace(/[@#]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
 			expect(body).not.toContain("<!--");
 			// Only our own heading line looks like a Review panel heading.
 			expect(
-				body.split("\n").filter((line) => line.trim().startsWith("## Review panel")),
+				body
+					.split("\n")
+					.filter((line) => line.trim().startsWith("## Review panel")),
 			).toEqual(["## Review panel · review"]);
 		});
 	});

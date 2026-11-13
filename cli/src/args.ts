@@ -61,7 +61,7 @@ export const ACTIONS = [
 
 export type ActionName = (typeof ACTIONS)[number];
 
-/** Where `comment --dismissed` comes from; read by the runner, not here. */
+/** Where `--dismissed` (comment, verify) comes from; read by the runner, not here. */
 export type DismissedSource =
 	| { from: "stdin" }
 	| { from: "file"; path: string }
@@ -98,6 +98,17 @@ const COMMON: Record<string, FlagSpec> = {
 	json: BOOLEAN("json"),
 };
 
+/**
+ * Review and verify post their round to the open PR by default:
+ * `--no-pr-comment` sets `prComment: false`, `--pr` names the PR, and
+ * `--owner-approved` is the approval an `ownerApproved` owner config asks for.
+ */
+const ROUND_FLAGS: Record<string, FlagSpec> = {
+	"no-pr-comment": BOOLEAN("prComment"),
+	pr: STRING("pr"),
+	"owner-approved": BOOLEAN("ownerApproved"),
+};
+
 /** Each action's flags, named after the tool argument they set. */
 const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 	diagnose: {},
@@ -111,6 +122,7 @@ const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 		seats: LIST("seats"),
 		lenses: LIST("lenses"),
 		"scoping-note": STRING("scopingNote"),
+		...ROUND_FLAGS,
 	},
 	audit: {
 		seats: LIST("seats"),
@@ -123,6 +135,9 @@ const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 		"kept-finding-ids": LIST("keptFindingIds"),
 		seats: LIST("seats"),
 		"scoping-note": STRING("scopingNote"),
+		dismissed: STRING("dismissed"),
+		"low-advisory": LIST("lowAdvisory"),
+		...ROUND_FLAGS,
 	},
 	resume: {
 		"prior-run-id": STRING("priorRunId"),
@@ -241,6 +256,10 @@ function parseAction(action: ActionName, argv: readonly string[]): Command {
 					: text.startsWith("@")
 						? { from: "file", path: text.slice(1) }
 						: { from: "text", text };
+			continue;
+		}
+		if (name === "no-pr-comment") {
+			args.prComment = false;
 			continue;
 		}
 		if (name === "pr") {
@@ -374,10 +393,13 @@ Actions (the same as the review_panel tool's):
   diagnose                     Check the owner config, every seat's model and login, and the record key
   suggest                      Suggest lenses for base...head, each with its reason; runs no seat: --base <ref> --head <ref>
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
+                               [--no-pr-comment] [--pr <n>] [--owner-approved]
   audit                        Advisory whole-repository sweep of HEAD: [--seats a,b] [--passes p,q] [--scoping-note <text>]
   verify                       Check fixes against a prior run: --prior-run-id <run> --head <ref> --kept-finding-ids F-1,F-2 [--seats a,b] [--scoping-note <text>]
+                               [--low-advisory F-3,F-4] [--dismissed <json> | --dismissed @<file> | --dismissed -]
+                               [--no-pr-comment] [--pr <n>] [--owner-approved]
   resume                       Run the unfinished seats of an interrupted run again: --prior-run-id <run>
-  comment                      Post the close-out PR comment, after the owner said yes: --prior-run-id <run> --owner-approved
+  comment                      Post or update the manual close-out PR card, after the owner said yes: --prior-run-id <run> --owner-approved
                                [--pr <n>] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4]
                                [--dismissed <json> | --dismissed @<file> | --dismissed -]
   call '<json>'                Run the tool's own argument object, e.g. '{"action":"diagnose"}' (- reads it from stdin)
@@ -398,5 +420,8 @@ Other:
   --version, -v                Show the CLI version
 
 Seats come only from the owner config (~/.pi-review-panel/config.json, or PI_REVIEW_PANEL_CONFIG).
+Review and verify post each round to the open PR whose head is the run's head, as a new comment, through gh;
+a clean verify also posts the close-out card. --no-pr-comment turns that off for one run. A post that cannot
+be made ends the report with one line saying why, and never changes the exit code.
 The report goes to stdout, progress to stderr. Exit codes: 0 the command completed (whatever the
 report says), 1 refused or failed, 2 usage error. No exit code reports findings.`;

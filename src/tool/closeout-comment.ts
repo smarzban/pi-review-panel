@@ -25,6 +25,10 @@ export type CloseoutCommentInput = {
 	baseOid: string;
 	headRef?: string;
 	headOid: string;
+	/** Defaults to `## Review panel`, the manual `comment` card's heading. */
+	heading?: string;
+	/** One line under the heading, such as the run ids an automatic card is for. */
+	runLine?: string;
 };
 
 export type CloseoutJudgmentRow = {
@@ -50,6 +54,8 @@ export type AssembleCloseoutInput = AccountCloseoutInput & {
 	lost: readonly string[];
 	meta: { baseRef: string; baseOid: string; headOid: string };
 	headRef?: string;
+	heading?: string;
+	runLine?: string;
 };
 
 function shortOid(oid: string): string {
@@ -88,7 +94,8 @@ export function renderCloseoutComment(input: CloseoutCommentInput): string {
 	const lost = input.lost.length === 0 ? "none" : input.lost.join(", ");
 	const headRef = input.headRef ?? "HEAD";
 	const lines = [
-		"## Review panel",
+		input.heading ?? "## Review panel",
+		...(input.runLine === undefined ? [] : [input.runLine]),
 		"",
 		`${input.submitted} ${findingWord} submitted · ${input.fixed} fixed · ${input.dismissed.length} dismissed · ${input.lowAdvisory.length} left as low/advisory`,
 		`Seats: ${input.seats.join(", ")} (holistic)${extras}`,
@@ -225,5 +232,7 @@ export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
 		baseOid: input.meta.baseOid,
 		headOid: input.meta.headOid,
 		...(input.headRef === undefined ? {} : { headRef: input.headRef }),
+		...(input.heading === undefined ? {} : { heading: input.heading }),
+		...(input.runLine === undefined ? {} : { runLine: input.runLine }),
 	});
 }
