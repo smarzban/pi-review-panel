@@ -9,8 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - A review or audit writes each seat's outcome to its run record as soon as that seat settles, so a killed or crashed run keeps the seats it already paid for.
-- A new `resume` action (`{"action":"resume","priorRunId":"<run-id>"}`) finishes an interrupted review or audit record: it pins the same head commit, runs only the seats with no settled outcome, takes seat and lens names from the record but rebuilds each seat from the owner config and the package's prompts (a seat that cannot be rebuilt is lost coverage), and writes the report as a normal run would. The report names the seats it ran again. Verify runs, complete runs, and runs from earlier versions are refused.
-- Every run starts by removing this repository's leftover `review-panel-snapshot-*` worktrees whose owning process has exited, then runs `git worktree prune`. A live run's snapshot is never removed.
+- A new `resume` action (`{"action":"resume","priorRunId":"<run-id>"}`) finishes an interrupted review or audit record: it pins the same head commit, runs only the seats with no settled outcome, takes seat and lens names from the record but rebuilds each seat from the owner config and the package's prompts (a seat that cannot be rebuilt is lost coverage), and writes the report as a normal run would. The report names the seats it ran again. Verify runs, complete runs, and runs from earlier versions are refused. Resume treats the record as untrusted: it never follows a symlink in it, refuses symlinked record folders and plans over the panel caps, re-runs any seat whose file does not match the outcome schema, does not pass the record's scoping note to seats, runs the readiness check first, and takes the run lock before re-reading the record.
+- Every run starts by removing this repository's leftover `review-panel-snapshot-*` worktrees whose owning process has exited, each by its exact path. A live run's snapshot, and any other worktree, is never touched; there is no repository-wide `git worktree prune`.
 
 ### Changed
 

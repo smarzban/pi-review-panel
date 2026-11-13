@@ -125,28 +125,52 @@ commits, the scoping note, and the planned seat rows (`rosterId`, `lens`, `provi
 temp file and a rename. A seat torn down because the run was cancelled is not written there. While
 a run is going, `run.lock` names its process; the run removes it when it ends.
 
-`{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It takes no
-seats, lenses, or commits: those come from `plan.json`. The record lives in the reviewed repository,
-so resume trusts it only for names. Each seat is rebuilt from the owner config: the roster row with
-that `rosterId` must still name the same `provider` and `model`, and `extraExtensionPaths` and the
-seat budget come from the config. The prompt comes from the package's own lens or audit-pass table.
-A seat that cannot be rebuilt does not run; it is reported as lost coverage. It pins the recorded head commit, runs only
+`{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It runs the
+same readiness check as review and audit first. It takes no seats, lenses, or commits: those come
+from `plan.json`. The record lives in the reviewed repository, which anyone with commit access can
+write to, so resume treats every file in it as untrusted and trusts it only for names:
+
+- Each seat is rebuilt from the owner config: the roster row with that `rosterId` must still name
+  the same `provider` and `model`, and `extraExtensionPaths` and the seat budget come from the
+  config. The prompt comes from the package's own lens or audit-pass table. A seat that cannot be
+  rebuilt does not run; it is reported as lost coverage.
+- The scoping note in `plan.json` is not passed to the re-run seats, since resume takes no prompt
+  text from the record. The report and the tool's reply say so when the record had one.
+- A plan with more seats than a review panel (16) or an audit (24) may have, a review lens other
+  than `holistic` on more than 2 seats, an audit pass on more than 3, or one seat twice, is refused.
+- A seat file must name the planned roster row, provider, model and lens and match the outcome
+  schema (findings exactly as `submit_findings` accepts them). Anything else, including a file that
+  is unreadable or a symlink, counts as unsettled and that seat runs again.
+- Resume never follows a symlink in the record. Each output is written to a new temp file that is
+  renamed over the old name, so a planted symlink is replaced, not written through. A symlinked
+  `.review-panel`, `runs` or `seats` folder, or a folder where an output file belongs, is refused
+  before any seat runs.
+
+Resume takes the run lock before it re-reads the record, pins the recorded head commit, runs only
 the planned seats with no settled outcome, then writes `execution.json`, `report.md`,
 `findings.json`, `meta.json`, and `COMPLETE` as a first run would. The report has a "Resumed run"
-section naming the seats kept and the seats run again, and `execution.json` lists the re-run seats
-under `resumedSeats`. A seat file that is unreadable or names a different seat counts as unsettled.
-Resume refuses a complete record, an unknown run, a record whose `run.lock` names a live process,
-a record with no `plan.json` (runs from earlier versions), a head or base commit that no longer
-resolves, and verify runs: verify runs one or two seats in sequence, so a fresh verify costs the
-same as a resume.
+section naming the seats kept, the seats run again and the seats lost, and `execution.json` lists
+the re-run seats under `resumedSeats`. Resume refuses a complete record, an unknown run, a record
+whose `run.lock` names a live process, a record with no `plan.json` (a run that stopped before its
+plan was written, when no seat had run, or one from an earlier version), a head or base commit
+that no longer resolves, and verify runs: verify runs one or two seats in sequence, so a fresh
+verify costs the same as a resume.
+
+A `run.lock` left by a process that has exited is replaced. The replacement happens only while
+holding `run.lock.takeover`, created exclusively, so two resumes can never both take over the same
+lock. If a process dies in that instant, the next resume refuses and names the file to delete. A
+`run.lock` whose pid now belongs to an unrelated live process also refuses; delete `run.lock` when
+no review_panel run is active.
 
 ## Snapshot cleanup
 
 Each run reviews a detached worktree in the system temp folder named `review-panel-snapshot-*`, with
 a `<name>.owner.json` file beside it naming the process and repository that made it. At the start of
-every run the package removes this repository's snapshots whose owner process has exited, then runs
-`git worktree prune`. A snapshot whose owner is alive, or that belongs to another repository, is
-never removed. A snapshot with no owner file (made by an earlier version) is removed only once it is
+every run the package removes this repository's snapshots whose owner process has exited, each by
+its exact path (`git worktree remove --force`, which also drops the registration when the folder is
+already gone). It never runs a repository-wide `git worktree prune`, so another worktree whose
+folder is away for a while keeps its registration. A snapshot whose owner is alive, or that belongs
+to another repository, is never removed. A snapshot with no owner file (made by an earlier version) is removed only once it is
 more than 24 hours old.
 
 
