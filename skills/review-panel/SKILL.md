@@ -7,7 +7,7 @@ description: Use when asked to review a PR or diff, or audit a repository. Call 
 
 You orchestrate one pi-review-panel review of an explicit base and head. `review_panel` is the only public tool. It writes a report. It does not repair, commit, or compute a merge decision. You judge. The owner merges.
 
-Never call the tool with `{}`. Review already diagnoses and refuses when setup is broken. Call diagnose only when you do not know whether the box is ready.
+Never call the tool with `{}`. Review already diagnoses and refuses when setup is broken. Call diagnose only when you do not know whether the box is ready. Diagnose also checks the owner's record key (beside the owner config) without creating it; review and audit refuse to start when that key is unusable, and the refusal names the key path and the fix.
 
 ## Actions
 

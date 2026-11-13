@@ -136,8 +136,15 @@ with a key only the owner holds:
   `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
   It never lives in the reviewed repository, and nothing secret is written to the record.
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
-- A key that is a symlink, not a regular file, readable by group or other users, not exactly 32
-  bytes, or inside the reviewed repository is refused, and so is the run that needs it.
+- A key that is a symlink, not a regular file, readable by group or other users, owned by another
+  user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
+  needs it. So is a key folder that group or other users can write, sticky bit or not: whoever can
+  write the folder can swap the key for one they hold. The owner check is skipped where Node has no
+  `process.getuid` (Windows), and the mode checks are skipped on Windows.
+- `diagnose` checks the key the same way, and never creates it. With no key yet, it checks that the
+  folder lets you write and search it (`access(2)`, which also sees a read-only mount and ACLs).
+  It cannot see, without writing, a filesystem that refuses hard links; the first review or audit
+  then refuses with "could not be created".
 - A review or audit writes `plan.mac`, an HMAC-SHA256 of the exact `plan.json` bytes bound to the
   run id. Each seat file gets `seats/<planned index>.mac`, an HMAC of its exact bytes bound to the run
   id, the plan's MAC and the seat's index. So a signed file cannot be edited, moved to another index,
@@ -145,14 +152,35 @@ with a key only the owner holds:
 - Deleting the key makes every interrupted record unresumable; a new one is created by the next
   review or audit. To keep resuming records across machines, copy the key with the config.
 
+### When the record key is refused
+
+Review and audit refuse to start without a usable key, and `diagnose` reports the same cause as a
+`record key <path>` row. Each cause and its fix:
+
+| `diagnose` or the refusal says | Fix |
+| --- | --- |
+| `cannot be created: its folder … is not writable by you`, or `could not be created: EACCES` / `EROFS` | `chmod u+w` the folder if you own it. If it is read-only by design (a read-only mount, a Nix or home-manager store link, a sandbox home), set `PI_REVIEW_PANEL_CONFIG` to a `config.json` in a writable folder, mode `0700`, that only you can write. The key is created beside it. |
+| `could not be created` on a writable folder (for example `EPERM` from `link`) | The folder's filesystem refuses hard links (some FUSE or SMB mounts). Move the config to a local folder with `PI_REVIEW_PANEL_CONFIG`. |
+| `is refused: its folder … is writable by group or other users` | `chmod go-w <folder>`, or move the config to a folder only you can write. |
+| `is a symlink and is refused` (stow, chezmoi or a store link) | Replace the link with a regular file: `cp -L` the key's bytes into place, then `chmod 600` it. Or delete the link; the next review or audit creates a new key. |
+| `is readable by group or other users and is refused` (a key copied with a `0644` umask, or a `0444` store file) | `chmod 600 <key>`. If others may have read it, delete it instead. |
+| `is not owned by you and is refused` | Delete it, and the next review or audit creates one you own. `chown` it only if you know where it came from. |
+| `is not 32 bytes and is refused`, or `is not a regular file and is refused` | Delete what is at the key path; the next review or audit creates a new key. |
+| `is inside the reviewed repository` | Point `PI_REVIEW_PANEL_CONFIG` at a config outside the repository. |
+
+A new key cannot check records signed with the old one, so those interrupted runs can no longer be
+resumed. Start them again as new runs.
+
 ### Resuming
 
 `{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It runs the
 same readiness check as review and audit first. It takes no seats, lenses, or commits: those come
 from `plan.json`. What resume trusts, and what it rebuilds:
 
-- **The plan must carry a valid signature.** A `plan.json` whose `plan.mac` is missing or does not
-  match the owner's key is refused before it is read: this owner's review_panel did not write it. A
+- **The plan must carry a valid signature.** A `plan.json` whose `plan.mac` does not match the
+  owner's key is refused before it is read: this owner's review_panel did not write it. A
+  `plan.json` with no `plan.mac` at all is refused as a run interrupted before its plan was signed
+  (`plan.json` is written first); no seat had run, so start a new run. A
   signed plan must also have the expected shape. Its `baseRef` and seat names must hold no control
   characters, so record text cannot add a heading or a fake finding to the report or the reply.
 - **A seat file is kept only when it is signed, names its seat, and has a valid outcome.** It needs a
