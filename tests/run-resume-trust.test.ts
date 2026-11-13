@@ -352,6 +352,47 @@ describe("resume never follows a symlink in the record", () => {
 		}
 	});
 
+	it("refuses before any seat runs when a seat file name is taken by a folder", async () => {
+		const repo = createHostRepo();
+		try {
+			const recordPath = await interruptedReview(repo);
+			mkdirSync(path.join(recordPath, SEATS_DIR, "1.json"));
+			const counter = recordingFactory();
+			expect(() => loadResumable(repo, path.basename(recordPath))).toThrow(
+				/Resume refused: .*1\.json is not a regular file/,
+			);
+			expect(counter.specs).toEqual([]);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("checks the record again under the lock: a seats symlink planted after loading is refused", async () => {
+		const repo = createHostRepo();
+		const outside = mkdtempSync(path.join(tmpdir(), "run-resume-victim-"));
+		try {
+			const recordPath = await interruptedReview(repo);
+			const loaded = loadResumable(repo, path.basename(recordPath));
+			const seatsPath = path.join(recordPath, SEATS_DIR);
+			renameSync(seatsPath, path.join(outside, "seats"));
+			symlinkSync(path.join(outside, "seats"), seatsPath);
+			const counter = recordingFactory();
+			await expect(
+				resumeRun(loaded, {
+					config: ownerConfig(),
+					sessionFactory: counter.factory,
+				}),
+			).rejects.toThrow(/Resume refused: .*seats.* is not a real directory/);
+			expect(counter.specs).toEqual([]);
+			expect(readdirSync(path.join(outside, "seats"))).toEqual(["0.json"]);
+			// The lock is released, so a later resume is not blocked by this one.
+			expect(existsSync(path.join(recordPath, RUN_LOCK_FILE))).toBe(false);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
 	it("refuses before any seat runs when an output name is taken by a folder", async () => {
 		const repo = createHostRepo();
 		try {
