@@ -2,13 +2,9 @@
 // that register providers. A fake SDK would only restate the ordering
 // assumption under test: that a provider is visible before its extension loads.
 
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { tmpdir } from "node:os";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The `@earendil-works/pi-coding-agent` peer range is now `*`, so the package installs beside any Pi host, including Pi 1.x. Tests and type checks run against Pi SDK 1.5.2.
+
 ### Fixed
 
 - A seat whose provider is registered by one of its own `extraExtensionPaths` extensions (for example `claude-code` from `pi-claude-code`) now runs, and `diagnose` reports it ready. `diagnose` now loads each row's configured extensions and runs the provider's own auth check; it still starts no session and runs no model. Each row's check is bounded at 30 seconds, and a row that does not finish gives a timed-out row naming its extensions. A provider check that throws counts as not authenticated.

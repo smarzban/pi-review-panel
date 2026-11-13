@@ -1,8 +1,7 @@
 // A Pi extension that registers native providers, the way pi-claude-code
 // does. Pi's extension loader aliases "@earendil-works/pi-ai" for every
-// extension, so this import resolves at load time even though the package is
-// only nested under the SDK. Nothing here touches the network or a process.
-// @ts-expect-error Resolved by Pi's extension loader alias, not by this repo.
+// extension, so this import resolves at load time from the host's SDK, not
+// from this checkout's node_modules. Nothing here touches the network or a process.
 import { createProvider } from "@earendil-works/pi-ai";
 
 type FixtureApi = { registerProvider: (provider: unknown) => void };
@@ -16,7 +15,7 @@ function fixtureModel(provider: string, id: string) {
 		provider,
 		baseUrl: "process://review-panel-fixture",
 		reasoning: false,
-		input: ["text"],
+		input: ["text" as const],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 8_000,
 		maxTokens: 1_000,

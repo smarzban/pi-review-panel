@@ -1,11 +1,5 @@
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { readFileSync } from "node:fs";
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
-// biome-ignore format: This import must remain one line for the ts-expect-error directive.
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { fileURLToPath } from "node:url";
 
 /** Package-owned menu for advisory whole-repository audits. */

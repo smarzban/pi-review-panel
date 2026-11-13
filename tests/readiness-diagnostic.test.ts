@@ -1,8 +1,5 @@
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import { tmpdir } from "node:os";
-// @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 

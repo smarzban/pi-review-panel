@@ -1,6 +1,5 @@
 // Registers a provider whose own auth `check` throws, the way an extension
 // might when the CLI it asks is missing. Nothing here touches the network.
-// @ts-expect-error Resolved by Pi's extension loader alias, not by this repo.
 import { createProvider } from "@earendil-works/pi-ai";
 
 type FixtureApi = { registerProvider: (provider: unknown) => void };
