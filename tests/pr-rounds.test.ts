@@ -7,10 +7,9 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
-	utimesSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -33,7 +32,6 @@ import { createReviewPanelTool } from "../src/tool/review-panel.js";
 import {
 	assertVerifyJudgment,
 	CLOSEOUT_CLAIM_MARKER,
-	claimRound,
 	defaultRunGh,
 	type RoundGhRunner as GhRunner,
 	GITHUB_COMMENT_LIMIT,
@@ -1872,10 +1870,11 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 			expect(
 				lasts.filter((line) => line?.startsWith("PR close-out: posted")),
 			).toHaveLength(1);
+			// The other found the claim still held, or the card already posted.
 			expect(
 				lasts.filter((line) =>
-					line?.startsWith(
-						"PR close-out: not posted (another verify already claimed",
+					/^PR close-out: not posted \((another verify is posting this review's close-out|this review's close-out is already posted)\)$/.test(
+						line ?? "",
 					),
 				),
 			).toHaveLength(1);
@@ -2365,6 +2364,11 @@ function verifyOnce(
 
 const ROWS_R2: Row[] = [{ id: "F-1", severity: "high" }];
 
+/** A title that is not text: the verify body cannot be rendered from it. */
+const RENDER_FAILS_ROWS: Row[] = [
+	{ id: "F-1", severity: "high", title: 42 as unknown as string },
+];
+
 describe("fix round 2: concurrent verifies get distinct, sequential round numbers (regression-1-1)", () => {
 	it("two concurrent verifies post verify 1 and verify 2 and leave no claim behind", async () => {
 		await withRepository(async (repo, head) => {
@@ -2436,166 +2440,62 @@ describe("fix round 2: concurrent verifies get distinct, sequential round number
 			]);
 		});
 	});
-
-	describe("claimRound", () => {
-		const roots: string[] = [];
-		afterEach(() => {
-			for (const root of roots.splice(0)) {
-				rmSync(root, { recursive: true, force: true });
-			}
-		});
-		function record(): string {
-			const root = mkdtempSync(path.join(tmpdir(), "round-claim-"));
-			roots.push(root);
-			return root;
-		}
-		function claimFile(dir: string, round: number, info: object): string {
-			const file = path.join(dir, `round-${round}.claim`);
-			writeFileSync(file, JSON.stringify(info));
-			return file;
-		}
-
-		it("skips a posted round and claims the next", async () => {
-			const dir = record();
-			writeFileSync(path.join(dir, "round-1.posted"), "{}");
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 1_000,
-			});
-			expect(claim).toMatchObject({ round: 2 });
-			expect(existsSync(path.join(dir, "round-2.claim"))).toBe(true);
-			const text = JSON.parse(
-				readFileSync(path.join(dir, "round-2.claim"), "utf8"),
-			);
-			expect(text).toMatchObject({ verifyRunId: "v-2", pid: process.pid });
-			expect(typeof text.claimedAt).toBe("number");
-		});
-
-		it("waits on a live claim and gives up at the deadline, saying why", async () => {
-			const dir = record();
-			claimFile(dir, 1, {
-				verifyRunId: "v-1",
-				pid: process.pid,
-				claimedAt: Date.now(),
-			});
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 150,
-				pollMs: 20,
-			});
-			expect(claim).toEqual({
-				reason: "another verify is still posting verify 1",
-			});
-		});
-
-		it("takes the live claim's number once that post settles", async () => {
-			const dir = record();
-			const held = claimFile(dir, 1, {
-				verifyRunId: "v-1",
-				pid: process.pid,
-				claimedAt: Date.now(),
-			});
-			setTimeout(() => rmSync(held, { force: true }), 60);
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 2_000,
-				pollMs: 20,
-			});
-			expect(claim).toMatchObject({ round: 1 });
-		});
-
-		it("takes over a claim older than the round deadline", async () => {
-			const dir = record();
-			claimFile(dir, 1, {
-				verifyRunId: "v-1",
-				pid: process.pid,
-				claimedAt: Date.now() - ROUND_DEADLINE_MS - 10_000,
-			});
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 1_000,
-				pollMs: 20,
-			});
-			expect(claim).toMatchObject({ round: 1 });
-			expect(
-				JSON.parse(readFileSync(path.join(dir, "round-1.claim"), "utf8")),
-			).toMatchObject({ verifyRunId: "v-2" });
-		});
-
-		it("takes over a claim whose process is gone", async () => {
-			const dir = record();
-			claimFile(dir, 1, {
-				verifyRunId: "v-1",
-				pid: deadPid(),
-				claimedAt: Date.now(),
-			});
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 1_000,
-				pollMs: 20,
-			});
-			expect(claim).toMatchObject({ round: 1 });
-		});
-
-		it("an unreadable claim is judged by its age on disk", async () => {
-			const dir = record();
-			const file = path.join(dir, "round-1.claim");
-			writeFileSync(file, "v-0");
-			const old = (Date.now() - ROUND_DEADLINE_MS - 10_000) / 1000;
-			utimesSync(file, old, old);
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 1_000,
-				pollMs: 20,
-			});
-			expect(claim).toMatchObject({ round: 1 });
-		});
-
-		it("an interrupted run stops waiting", async () => {
-			const dir = record();
-			claimFile(dir, 1, {
-				verifyRunId: "v-1",
-				pid: process.pid,
-				claimedAt: Date.now(),
-			});
-			const controller = new AbortController();
-			setTimeout(() => controller.abort(), 40);
-			const claim = await claimRound(dir, 1, "v-2", {
-				deadline: Date.now() + 5_000,
-				pollMs: 20,
-				signal: controller.signal,
-			});
-			expect(claim).toEqual({ reason: "the run was interrupted" });
-		});
-	});
 });
 
-describe("fix round 2: a stale close-out claim falls through to the PR check (L1)", () => {
+describe("fix round 3: close-out claims are generations, never taken over", () => {
 	const clean: SeatVote[] = [{ rosterId: "terra", items: [resolved("F-1")] }];
 
-	function writeClaim(repo: string, info: object | string): string {
-		const file = path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER);
+	function writeClaim(repo: string, name: string, info: object | string): string {
+		const file = path.join(reviewRecordDir(repo), name);
 		writeFileSync(file, typeof info === "string" ? info : JSON.stringify(info));
 		return file;
 	}
 
-	it("a claim older than the round deadline: the card posts", async () => {
+	function stale(): object {
+		return {
+			verifyRunId: "v-0",
+			pid: process.pid,
+			host: hostname(),
+			claimedAt: Date.now() - ROUND_DEADLINE_MS - 10_000,
+		};
+	}
+
+	function claimsLeft(repo: string): string[] {
+		return readdirSync(reviewRecordDir(repo))
+			.filter((name) => name.includes(".claim"))
+			.sort();
+	}
+
+	it("a stale closeout.claim-1 and no card on the PR: generation 2 posts the card", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			writeClaim(repo, {
-				verifyRunId: "v-0",
-				pid: process.pid,
-				claimedAt: Date.now() - ROUND_DEADLINE_MS - 10_000,
-			});
+			writeClaim(repo, "closeout.claim-1", stale());
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(1);
 			expect(textOf(result).split("\n").at(-1)).toMatch(
 				/^PR close-out: posted to #12/,
 			);
+			// The stale claim stays where it is; the posted marker records the card.
+			expect(claimsLeft(repo)).toEqual(["closeout.claim-1"]);
+			expect(
+				JSON.parse(
+					readFileSync(
+						path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER),
+						"utf8",
+					),
+				),
+			).toMatchObject({ verifyRunId: "v-1" });
 		});
 	});
 
-	it("a claim whose process is gone, with the card already on the PR: no second card", async () => {
+	it("a stale claim on this host whose process is gone, with the card already on the PR: no second card, closeout.posted written", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			writeClaim(repo, {
+			writeClaim(repo, "closeout.claim-1", {
 				verifyRunId: "v-0",
 				pid: deadPid(),
+				host: hostname(),
 				claimedAt: Date.now(),
 			});
 			const gh = fakeGh({
@@ -2613,53 +2513,180 @@ describe("fix round 2: a stale close-out claim falls through to the PR check (L1
 			expect(textOf(result).split("\n").at(-1)).toBe(
 				"PR close-out: not posted (a close-out for this review is already on PR #12)",
 			);
+			expect(
+				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER)),
+			).toBe(true);
 		});
 	});
 
-	it("an unreadable claim old on disk is stale too", async () => {
+	it("a won claim with the card already on the PR writes closeout.posted and removes the claim (L4)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			const file = writeClaim(repo, "v-0");
-			const old = (Date.now() - ROUND_DEADLINE_MS - 10_000) / 1000;
-			utimesSync(file, old, old);
-			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyOnce(repo, gh, "v-1", clean);
-			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+			expect(
+				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER)),
+			).toBe(true);
+			expect(claimsLeft(repo)).toEqual([]);
 		});
 	});
 
-	it("a posted close-out never goes stale", async () => {
+	it("a fresh claim: another verify is posting it", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			writeClaim(repo, {
+			writeClaim(repo, "closeout.claim-1", {
 				verifyRunId: "v-0",
-				pid: deadPid(),
-				claimedAt: Date.now() - 10 * ROUND_DEADLINE_MS,
-				postedAt: Date.now() - 10 * ROUND_DEADLINE_MS,
+				pid: process.pid,
+				host: hostname(),
+				claimedAt: Date.now(),
 			});
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
 			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (another verify already claimed this review's close-out)",
+				"PR close-out: not posted (another verify is posting this review's close-out)",
 			);
 		});
 	});
 
-	it("a posted card marks its claim posted, with the claimer's pid and time", async () => {
+	it("closeout.posted: already posted, and the PR is not asked", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			writeClaim(repo, CLOSEOUT_CLAIM_MARKER, "{}");
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(
+				gh.calls.filter((call) => call.args.some((arg) => arg.includes("/comments"))),
+			).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (this review's close-out is already posted)",
+			);
+		});
+	});
+
+	it("every generation left stale and no card: nothing posts, and the reply says how to clear them", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			for (let g = 1; g <= 5; g += 1) {
+				writeClaim(repo, `closeout.claim-${g}`, stale());
+			}
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (closeout.claim-1 to closeout.claim-5 were all left by verifies that stopped; delete them from the review's run record to post it)",
+			);
+		});
+	});
+
+	it("a failed close-out post removes its claim and writes no marker", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				failPost: { at: 2, error: new Error("boom") },
+			});
+			await verifyOnce(repo, gh, "v-1", clean);
+			expect(claimsLeft(repo)).toEqual([]);
+			expect(
+				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER)),
+			).toBe(false);
+		});
+	});
+});
+
+describe("fix round 3: round markers and claims through the verify action", () => {
+	it("a posted verify writes round.posted in its own record and round-1.posted in the review's (L4)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyOnce(repo, gh, "v-1", clean);
-			const claim = JSON.parse(
-				readFileSync(
-					path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER),
-					"utf8",
+			await verifyOnce(repo, gh, "v-1");
+			expect(
+				JSON.parse(
+					readFileSync(
+						path.join(repo, ".review-panel", "runs", "v-1", ROUND_POSTED_MARKER),
+						"utf8",
+					),
 				),
+			).toEqual({ pr: 12, round: 1 });
+			expect(
+				existsSync(path.join(reviewRecordDir(repo), "round-1.posted")),
+			).toBe(true);
+			expect(
+				readdirSync(reviewRecordDir(repo)).filter((name) =>
+					name.endsWith(".claim"),
+				),
+			).toEqual([]);
+		});
+	});
+
+	it("a stale round-1.claim is skipped: the verify posts verify 2 and leaves the stale claim", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			writeFileSync(
+				path.join(reviewRecordDir(repo), "round-1.claim"),
+				JSON.stringify({
+					verifyRunId: "v-0",
+					pid: deadPid(),
+					host: hostname(),
+					claimedAt: Date.now(),
+				}),
 			);
-			expect(claim).toMatchObject({ verifyRunId: "v-1", pid: process.pid });
-			expect(typeof claim.claimedAt).toBe("number");
-			expect(typeof claim.postedAt).toBe("number");
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, gh, "v-1");
+			expect(headingsOf(gh.calls)).toEqual(["## Review panel · verify 2"]);
+			expect(
+				existsSync(path.join(reviewRecordDir(repo), "round-1.claim")),
+			).toBe(true);
+		});
+	});
+
+	it("a verify body that cannot be rendered gives its claim back (L4)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, RENDER_FAILS_ROWS);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							RENDER_FAILS_ROWS,
+							STILL,
+						),
+					}),
+				},
+			);
+			expect(textOf(result)).toMatch(
+				/PR comment: not posted \(the comment could not be built: /,
+			);
+			expect(posts(gh.calls)).toHaveLength(0);
+			expect(
+				readdirSync(reviewRecordDir(repo)).filter((name) =>
+					name.includes("round-"),
+				),
+			).toEqual([]);
 		});
 	});
 });
@@ -2952,5 +2979,21 @@ describe("fix round 2: nits", () => {
 		expect(() =>
 			assertVerifyJudgment(findings, ["F-2"], [], ["F-2"]),
 		).not.toThrow();
+	});
+});
+
+describe("fix round 3: nits", () => {
+	it.each([
+		["empty", ""],
+		["spaces", "   "],
+		["NEL", "\u0085"],
+		["zero-width space", "​"],
+		["bidi and joiner", "‮‍⁠"],
+	])("a code value with nothing visible (%s) renders as (empty), never as a bare fence", (_name, value) => {
+		expect(postedCode(value)).toBe("(empty)");
+	});
+
+	it("a visible code value is still a code span", () => {
+		expect(postedCode(" a ")).toBe("`a`");
 	});
 });
