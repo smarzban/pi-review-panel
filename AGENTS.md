@@ -15,7 +15,7 @@ frozen one-line pointer and says so in-file.
 ## Project overview
 
 **pi-review-panel** runs multi-model code review as a pi package. The public tool is `review_panel`
-(`diagnose` / `review` / `audit` / `verify` / `resume` / `comment`). The shipped skill is `review-panel`. A run
+(`diagnose` / `suggest` / `review` / `audit` / `verify` / `resume` / `comment`). The shipped skill is `review-panel`. A run
 fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned lens — over
 one pinned snapshot, as isolated in-process Pi SDK sessions that have only their read-only role
 tools and can report findings only through their submit tool (`submit_findings` for reviewers).

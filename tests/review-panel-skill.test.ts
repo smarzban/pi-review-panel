@@ -72,6 +72,23 @@ describe("review skill required workflow", () => {
 	});
 });
 
+describe("lens choice workflow", () => {
+	it("calls suggest first, then the caller chooses lenses with reasons, then review", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		const suggest = body.indexOf('`{ "action": "suggest", "base", "head" }`');
+		const choose = body.indexOf("Choose the lenses yourself");
+		const review = body.indexOf(
+			'`{ "action": "review", "base", "head", "lenses" }`',
+		);
+		expect(suggest).toBeGreaterThan(-1);
+		expect(choose).toBeGreaterThan(suggest);
+		expect(review).toBeGreaterThan(choose);
+		expect(body).toContain("with a one-line reason for each");
+		expect(body).toContain("The tool never adds a lens by itself.");
+		expect(body).toContain("`Seats:` line");
+	});
+});
+
 describe("repository audit workflow", () => {
 	it("keeps audit advisory, whole-tree, and separate from review close-out", () => {
 		const body = splitFrontmatter(readSkill()).body;
