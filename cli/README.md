@@ -10,7 +10,9 @@ whether there are findings.
 
 ## Install from source
 
-The CLI is not on npm yet. It needs Node 26 or newer, `git`, and `gh` for `comment`.
+The CLI is not on npm yet, and its `package.json` is marked `"private": true`, so an
+accidental `npm publish` from `cli/` is refused. `npm pack` still works. It needs Node 26 or
+newer, `git`, and `gh` for `comment`.
 
 ```sh
 git clone https://github.com/smarzban/pi-review-panel.git
@@ -103,6 +105,11 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 - The report goes to stdout. Progress goes to stderr while seats run.
 - Ctrl-C aborts the run through the same abort signal the tool uses, including while the
   CLI waits on stdin (`--api-key`, `call -`, `--dismissed -`). Press it twice to quit at once.
+- An error about an unknown command, option or argument, a provider id, or an unknown
+  argument name in a `call` object repeats it only when it is shaped like a name (letters, no
+  digits), in case it is a key typed in the wrong place. Values you give on purpose can still
+  appear in an error: those of `--repo`, `--base`, `--head`, `--prior-run-id`, `--seats` and
+  `--dismissed`, and the values in a `call` object, such as `repository` or `priorRunId`.
 
 | Exit code | Meaning |
 |---|---|
