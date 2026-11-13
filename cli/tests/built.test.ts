@@ -24,7 +24,7 @@ const BIN = path.join(CLI_DIR, "dist", "cli", "src", "main.js");
 
 beforeAll(() => {
 	if (!existsSync(BIN)) {
-		throw new Error(`${BIN} is missing: run "npm run build" in cli/ first`);
+		throw new Error(`${BIN} is missing: the global setup (tests/build-dist.ts) should have built it`);
 	}
 });
 
