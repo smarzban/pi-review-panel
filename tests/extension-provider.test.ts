@@ -24,8 +24,16 @@ const fixtures = path.join(
 const PROVIDER_EXTENSION = path.join(fixtures, "provider-extension.ts");
 const OTHER_EXTENSION = path.join(fixtures, "other-extension.ts");
 const BROKEN_EXTENSION = path.join(fixtures, "broken-extension.ts");
+const REJECTED_EXTENSION = path.join(
+	fixtures,
+	"rejected-registration-extension.ts",
+);
+const THROWING_EXTENSION = path.join(fixtures, "throwing-check-extension.ts");
+const HANGING_EXTENSION = path.join(fixtures, "hanging-check-extension.ts");
 const PROVIDER = "review-panel-fixture";
 const UNAUTHED_PROVIDER = "review-panel-fixture-unauthed";
+const THROWING_PROVIDER = "review-panel-fixture-throwing";
+const HANGING_PROVIDER = "review-panel-fixture-hanging";
 const MODEL = "fixture-model";
 
 type LoadCounter = { __reviewPanelFixtureLoads?: number };
@@ -46,26 +54,39 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-type Row = { id: string; provider: string; extraExtensionPaths?: string[] };
+type Row = {
+	id: string;
+	provider: string;
+	model?: string;
+	extraExtensionPaths?: string[];
+};
 
-async function readiness(rows: Row[]) {
+async function readiness(
+	rows: Row[],
+	options: {
+		env?: Record<string, string>;
+		inspectionTimeoutMs?: number;
+	} = {},
+) {
 	const repoDir = path.join(root, "repo");
 	mkdirSync(repoDir, { recursive: true });
 	const configPath = path.join(root, "config.json");
 	writeFileSync(
 		configPath,
 		JSON.stringify({
-			roster: rows.map((row) => ({ model: MODEL, ...row })),
+			roster: rows.map((row) => ({ ...row, model: row.model ?? MODEL })),
 			defaults: { seats: [rows[0].id] },
 		}),
 	);
 	return diagnoseReadiness({
 		repoDir,
 		env: {
+			...options.env,
 			PI_REVIEW_PANEL_CONFIG: configPath,
 			PI_CODING_AGENT_DIR: agentDir,
 		},
 		home: path.join(root, "home"),
+		inspectionTimeoutMs: options.inspectionTimeoutMs,
 	});
 }
 
@@ -149,6 +170,80 @@ describe("readiness for a provider registered by a seat extension", () => {
 				"review-panel fixture extension refuses to load",
 			),
 		});
+	});
+
+	it("names an extension whose provider registration Pi rejects", async () => {
+		// The extension loads; Pi rejects its registration while applying it to
+		// the runtime, so the failure arrives as a services diagnostic.
+		const report = await readiness([
+			{
+				id: "rejected",
+				provider: PROVIDER,
+				extraExtensionPaths: [PROVIDER_EXTENSION, REJECTED_EXTENSION],
+			},
+		]);
+
+		expect(report).toEqual({
+			ready: false,
+			rows: [
+				{
+					prerequisite: `extension ${REJECTED_EXTENSION}`,
+					remediation: `Fix the configured extension at "${REJECTED_EXTENSION}", which failed to load: Provider id must not be empty.`,
+				},
+			],
+		});
+	});
+
+	it("treats a provider check that throws as an authentication failure and keeps extension rows", async () => {
+		const report = await readiness([
+			{
+				id: "throwing",
+				provider: THROWING_PROVIDER,
+				extraExtensionPaths: [THROWING_EXTENSION, BROKEN_EXTENSION],
+			},
+		]);
+
+		expect(report.ready).toBe(false);
+		expect(report.rows.map((row) => row.prerequisite)).toEqual([
+			`extension ${BROKEN_EXTENSION}`,
+			`authentication ${THROWING_PROVIDER}`,
+		]);
+	});
+
+	it("names the row's extensions when its check does not finish within the bound, and inspects later rows", async () => {
+		const report = await readiness(
+			[
+				{
+					id: "hanging",
+					provider: HANGING_PROVIDER,
+					extraExtensionPaths: [PROVIDER_EXTENSION, HANGING_EXTENSION],
+				},
+				{ id: "bare", provider: PROVIDER },
+			],
+			{ inspectionTimeoutMs: 200 },
+		);
+
+		expect(report).toEqual({
+			ready: false,
+			rows: [
+				{
+					prerequisite: `readiness check ${HANGING_PROVIDER}/${MODEL}`,
+					remediation: `The readiness check for "${HANGING_PROVIDER}/${MODEL}" timed out after 0.2 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
+				},
+				...modelRows(PROVIDER),
+			],
+		});
+	});
+
+	it("honours a built-in provider key supplied only through the readiness env", async () => {
+		vi.stubEnv("OPENAI_API_KEY", undefined);
+
+		const report = await readiness(
+			[{ id: "openai", provider: "openai", model: "gpt-4o" }],
+			{ env: { OPENAI_API_KEY: "sk-review-panel-fixture" } },
+		);
+
+		expect(report).toEqual({ ready: true, rows: [] });
 	});
 
 	it("keeps the missing-path row without trying to load the extension", async () => {
@@ -247,6 +342,44 @@ describe("seat session for a provider registered by a seat extension", () => {
 		).rejects.toThrow(
 			`seat model is not authenticated: ${UNAUTHED_PROVIDER}/${MODEL}`,
 		);
+	});
+
+	it("fails the seat as unauthenticated when the provider's own check throws", async () => {
+		const sdk = await realSdk();
+
+		await expect(
+			createSdkSeatSession({
+				spec: seatSpec(THROWING_PROVIDER, [THROWING_EXTENSION]),
+				tools: [{ name: "submit_findings" }],
+				confinementGuard: createConfinementGuard({ worktree: root }),
+				sdk: sdk as never,
+			}),
+		).rejects.toThrow(
+			`seat model is not authenticated: ${THROWING_PROVIDER}/${MODEL}`,
+		);
+	});
+
+	it("fails the seat before creating a session when Pi rejects an extension's provider registration", async () => {
+		const sdk = await realSdk();
+		let sessions = 0;
+
+		await expect(
+			createSdkSeatSession({
+				spec: seatSpec(PROVIDER, [PROVIDER_EXTENSION, REJECTED_EXTENSION]),
+				tools: [{ name: "submit_findings" }],
+				confinementGuard: createConfinementGuard({ worktree: root }),
+				sdk: {
+					...sdk,
+					createAgentSession: async () => {
+						sessions += 1;
+						throw new Error("the seat must not reach createAgentSession");
+					},
+				} as never,
+			}),
+		).rejects.toThrow(
+			`seat extension failed to load: ${REJECTED_EXTENSION}: Provider id must not be empty.`,
+		);
+		expect(sessions).toBe(0);
 	});
 
 	it("fails the seat with a message that names an extension that fails to load", async () => {
