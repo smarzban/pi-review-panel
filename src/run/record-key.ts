@@ -38,11 +38,6 @@ export type LoadRecordKeyOptions = {
 	create: boolean;
 	/** The reviewed repository; a key inside it is refused. */
 	repoDir: string;
-	/**
-	 * Test seam only: runs after the new key's temp file is written and before
-	 * it is linked into place, so a test can interleave a second creator.
-	 */
-	beforeLink?: () => void;
 };
 
 /**
@@ -59,15 +54,18 @@ export class RecordKeyError extends Error {
 	}
 }
 
-/** One unusable-key finding for `diagnose`: the cause and its fix. */
-export type RecordKeyProblem = { cause: string; fix: string };
+/**
+ * One record-key finding for `diagnose`: the cause and its fix. `warning` is
+ * set when the key is usable and the finding does not block a run.
+ */
+export type RecordKeyProblem = { cause: string; fix: string; warning?: true };
 
 /**
  * Reads the record key, creating it on first use when `create` is set. The
  * key is created exclusively with mode 0600 (written to a temp file opened
  * `wx`, then hard-linked into place, so no reader ever sees a partial key).
  * Refused, with a `RecordKeyError`: a key inside the reviewed repository; a
- * key folder writable by group or other users; a key that is a symlink, not
+ * key folder writable by other users; a key that is a symlink, not
  * a regular file, readable by group or other, not owned by this user, or not
  * exactly 32 bytes.
  */
@@ -83,7 +81,7 @@ export function loadRecordKey(
 				"Start a new review or audit instead; it creates the key.",
 			);
 		}
-		createKey(keyPath, options.beforeLink);
+		createKey(keyPath);
 	}
 	return readKey(keyPath);
 }
@@ -96,7 +94,8 @@ export function loadRecordKey(
  * and ACLs). What this cannot see without writing: a filesystem that refuses
  * hard links, and a check by the effective rather than the real user id.
  * A missing config folder is no problem here: with no folder there is no
- * config, which diagnose already reports.
+ * config, which diagnose already reports. A usable key in a group-writable
+ * folder is reported as a warning, not a problem.
  */
 export function checkRecordKey(
 	keyPath: string,
@@ -106,12 +105,12 @@ export function checkRecordKey(
 		if (!existsAsFolder(path.dirname(path.resolve(keyPath)))) {
 			return undefined;
 		}
-		if (!inspectFolderAndPresence(keyPath, options.repoDir)) {
+		if (inspectFolderAndPresence(keyPath, options.repoDir)) {
+			readKey(keyPath);
+		} else {
 			assertCreatable(keyPath);
-			return undefined;
 		}
-		readKey(keyPath);
-		return undefined;
+		return groupWritableWarning(keyPath);
 	} catch (error) {
 		return {
 			cause: messageOf(error),
@@ -158,30 +157,72 @@ function existsAsFolder(dir: string): boolean {
 
 /**
  * Another local user who can write the key folder could replace the key with
- * one they hold, then sign a planted record. So a folder writable by group or
- * other users is refused, sticky bit or not. A symlinked folder is fine: it
- * is the folder it resolves to that is checked.
+ * one they hold, then sign a planted record. So a folder other users can
+ * write is refused, sticky bit or not. A group-writable folder is accepted:
+ * `umask 002` with a private user group makes one by default on Fedora, RHEL,
+ * Debian and Ubuntu, and a key someone else swaps in is owned by them, which
+ * the owner check in `readKey` refuses. `diagnose` warns about it instead. A
+ * symlinked folder is fine: it is the folder it resolves to that is checked.
  */
 function assertSafeFolder(keyPath: string): void {
 	if (process.platform === "win32") {
 		return;
 	}
 	const dir = path.dirname(path.resolve(keyPath));
-	let mode: number;
+	let stats: { mode: number; uid: number };
 	try {
-		mode = statSync(dir).mode;
+		stats = statSync(dir);
 	} catch (error) {
 		throw new RecordKeyError(
 			`record key ${keyPath} cannot be checked: its folder ${dir} cannot be read: ${messageOf(error)}`,
 			`Create ${dir}, or point PI_REVIEW_PANEL_CONFIG at a config in a folder only you can write.`,
 		);
 	}
-	if ((mode & 0o022) !== 0) {
+	if ((stats.mode & 0o002) !== 0) {
 		throw new RecordKeyError(
-			`record key ${keyPath} is refused: its folder ${dir} is writable by group or other users`,
-			`Run chmod go-w ${dir}, or point PI_REVIEW_PANEL_CONFIG at a config in a folder only you can write.`,
+			`record key ${keyPath} is refused: its folder ${dir} is writable by other users`,
+			folderFix(dir, stats, "go-w", "Run"),
 		);
 	}
+}
+
+/** Diagnose's non-blocking note for a key folder its group can write. */
+function groupWritableWarning(keyPath: string): RecordKeyProblem | undefined {
+	if (process.platform === "win32") {
+		return undefined;
+	}
+	const dir = path.dirname(path.resolve(keyPath));
+	const stats = statSync(dir);
+	if ((stats.mode & 0o020) === 0) {
+		return undefined;
+	}
+	return {
+		cause: `record key ${keyPath}: its folder ${dir} is writable by its group; this is accepted (the umask 002 default), and a key another user swaps in is refused as not yours`,
+		fix: folderFix(dir, stats, "g-w", "If anyone else is in that group, run"),
+		warning: true,
+	};
+}
+
+/**
+ * How to stop others writing `dir`. `chmod` only for a folder this user owns
+ * that is not sticky: on a shared sticky folder such as `/tmp` it would break
+ * the folder for everyone, and on someone else's folder it fails.
+ */
+function folderFix(
+	dir: string,
+	stats: { mode: number; uid: number },
+	bits: string,
+	lead: string,
+): string {
+	const uid =
+		typeof process.getuid === "function" ? process.getuid() : undefined;
+	const sticky = (stats.mode & 0o1000) !== 0;
+	const move =
+		"point PI_REVIEW_PANEL_CONFIG at a config.json in a folder you own that only you can write (mode 0700)";
+	if (uid !== undefined && stats.uid === uid && !sticky) {
+		return `${lead} chmod ${bits} ${dir}, or ${move}.`;
+	}
+	return `${move.charAt(0).toUpperCase()}${move.slice(1)}; ${dir} is ${sticky ? "a shared sticky folder" : "not owned by you"}, so leave its mode alone.`;
 }
 
 function assertCreatable(keyPath: string): void {
@@ -200,11 +241,10 @@ function notWritableFix(dir: string): string {
 	return `Run chmod u+w ${dir} if you own it. If it is read-only by design (a read-only mount, a Nix or home-manager store link), set PI_REVIEW_PANEL_CONFIG to a config.json in a writable folder only you can write, mode 0700.`;
 }
 
-function createKey(keyPath: string, beforeLink?: () => void): void {
+function createKey(keyPath: string): void {
 	const temp = `${keyPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
 	try {
 		writeFileSync(temp, randomBytes(KEY_BYTES), { flag: "wx", mode: 0o600 });
-		beforeLink?.();
 		try {
 			linkSync(temp, keyPath);
 		} catch (error) {

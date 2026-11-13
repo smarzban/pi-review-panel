@@ -138,9 +138,12 @@ with a key only the owner holds:
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
-  needs it. So is a key folder that group or other users can write, sticky bit or not: whoever can
-  write the folder can swap the key for one they hold. The owner check is skipped where Node has no
-  `process.getuid` (Windows), and the mode checks are skipped on Windows.
+  needs it. So is a key folder that other users can write, sticky bit or not: whoever can write the
+  folder can swap the key for one they hold. A folder only its group can write (`0775`, made by the
+  `umask 002` default on Fedora, RHEL, Debian and Ubuntu) is accepted, because a key someone else
+  swaps in is owned by them and the owner check refuses it; `diagnose` shows it as a warning that
+  does not change readiness. The owner check is skipped where Node has no `process.getuid`
+  (Windows), and the mode checks are skipped on Windows.
 - `diagnose` checks the key the same way, and never creates it. With no key yet, it checks that the
   folder lets you write and search it (`access(2)`, which also sees a read-only mount and ACLs).
   It cannot see, without writing, a filesystem that refuses hard links; the first review or audit
@@ -154,14 +157,16 @@ with a key only the owner holds:
 
 ### When the record key is refused
 
-Review and audit refuse to start without a usable key, and `diagnose` reports the same cause as a
-`record key <path>` row. Each cause and its fix:
+Review, audit and resume refuse to start without a usable key, and `diagnose` reports the same
+cause as a `record key <path>` row. Resume also refuses when there is no key at all, since it never
+creates one. Each cause and its fix:
 
 | `diagnose` or the refusal says | Fix |
 | --- | --- |
 | `cannot be created: its folder … is not writable by you`, or `could not be created: EACCES` / `EROFS` | `chmod u+w` the folder if you own it. If it is read-only by design (a read-only mount, a Nix or home-manager store link, a sandbox home), set `PI_REVIEW_PANEL_CONFIG` to a `config.json` in a writable folder, mode `0700`, that only you can write. The key is created beside it. |
 | `could not be created` on a writable folder (for example `EPERM` from `link`) | The folder's filesystem refuses hard links (some FUSE or SMB mounts). Move the config to a local folder with `PI_REVIEW_PANEL_CONFIG`. |
-| `is refused: its folder … is writable by group or other users` | `chmod go-w <folder>`, or move the config to a folder only you can write. |
+| `is refused: its folder … is writable by other users` | If you own the folder and it is not sticky, `chmod go-w <folder>`; the fix text says so only then. For a shared sticky folder such as `/tmp`, or one you do not own, never `chmod` it: point `PI_REVIEW_PANEL_CONFIG` at a `config.json` in a folder you own, mode `0700`. |
+| Warning only: `its folder … is writable by its group` | Nothing blocks. If anyone else is in that group, `chmod g-w <folder>` (or move the config, as above, when you do not own the folder). |
 | `is a symlink and is refused` (stow, chezmoi or a store link) | Replace the link with a regular file: `cp -L` the key's bytes into place, then `chmod 600` it. Or delete the link; the next review or audit creates a new key. |
 | `is readable by group or other users and is refused` (a key copied with a `0644` umask, or a `0444` store file) | `chmod 600 <key>`. If others may have read it, delete it instead. |
 | `is not owned by you and is refused` | Delete it, and the next review or audit creates one you own. `chown` it only if you know where it came from. |
@@ -223,17 +228,32 @@ A `run.lock` left by a process that has exited is replaced. The replacement happ
 holding `run.lock.takeover`, created exclusively, so two resumes can never both take over the same
 lock. If a process dies in that instant, the next resume refuses and names the file to delete. A
 `run.lock` whose pid now belongs to an unrelated live process also refuses; delete `run.lock` when
-no review_panel run is active.
+no review_panel run is active. A run publishes `run.lock` whole (written to a temp file, then
+hard-linked into place), so it never exists empty. On a filesystem without hard links (FAT, exFAT,
+some network mounts) it is written in place instead: it can be empty or half-written for a
+moment, and stays that way if the process is killed in that moment (a failed write or close
+removes it). A `run.lock` that names no pid is therefore one another process is still writing, or
+one a crashed process left unfinished: it is refused, never taken over, and the message says to
+delete it when no review_panel run is active.
 
 ## Snapshot cleanup
 
-Each run reviews a detached worktree in the system temp folder named `review-panel-snapshot-*`, with
-a `<name>.owner.json` file beside it naming the process and repository that made it. At the start of
-every run the package removes this repository's snapshots whose owner process has exited, each by
-its exact path (`git worktree remove --force`, which also drops the registration when the folder is
-already gone). It never runs a repository-wide `git worktree prune`, so another worktree whose
-folder is away for a while keeps its registration. A snapshot whose owner is alive, or that belongs
-to another repository, is never removed. A snapshot with no owner file (made by an earlier version) is removed only once it is
-more than 24 hours old.
+Each run reviews a detached worktree in the system temp folder. It sits in a private holder folder
+named `review-panel-snapshot-*` (mode `0700`, so no other user can put anything in it), beside an
+`owner.json` file (mode `0600`) naming the process and repository that made it. The owner file is
+created exclusively, never through a symlink, before the worktree is added. At the start of every
+run the package removes this repository's snapshots whose owner process has exited, each by its
+exact path (`git worktree remove --force`; when the folder is already gone, only that worktree's
+own registration is dropped). It never runs a repository-wide `git worktree prune`, so another
+worktree whose folder is away for a while keeps its registration. A snapshot whose owner is alive,
+or that belongs to another repository, is never removed.
+
+The temp folder can be shared with other users (`/tmp` on Linux), so the sweep trusts nothing it
+finds there on sight. It touches only folders you own directly in the temp folder, and never
+follows a symlink. It reads an owner file only inside a holder you own that no one else can write
+and that is not itself a worktree, and only when the file is a regular file you own with a single link. A `<name>.owner.json` file
+beside a folder is never read. A snapshot with no trusted owner file (made by an earlier version)
+is removed only when it is registered as a worktree of this repository and is more than 24 hours
+old.
 
 

@@ -83,6 +83,39 @@ describe("SDK scheduler", () => {
 		expect(peak).toBe(SEAT_CONCURRENCY_CAP);
 	});
 
+	it("keeps every seat when the durable write of a settled seat throws", async () => {
+		const seats = [seat("correctness"), seat("security")];
+		const settled: number[] = [];
+		const finished: string[] = [];
+
+		const outcomes = await scheduleSeats(
+			{ seats, worktree: "/snapshot", baseRef: "base" },
+			{
+				runSeat: async (spec) => result(spec),
+				onSeatSettled: (index) => {
+					settled.push(index);
+					throw new Error("disk full");
+				},
+				onProgress: (event) => {
+					if (event.kind === "seat-finished") {
+						finished.push(event.seat.lens);
+					}
+				},
+			},
+		);
+
+		expect(settled.sort()).toEqual([0, 1]);
+		expect(outcomes.map((facts) => facts.seat.lens)).toEqual([
+			"correctness",
+			"security",
+		]);
+		expect(outcomes.map((facts) => facts.outcome.kind)).toEqual([
+			"voted",
+			"voted",
+		]);
+		expect(finished.sort()).toEqual(["correctness", "security"]);
+	});
+
 	it("rejects duplicate exact provider/model/lens identities before starting a session", async () => {
 		let calls = 0;
 		await expect(

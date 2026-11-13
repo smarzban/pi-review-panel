@@ -3,6 +3,7 @@ import {
 	closeSync,
 	constants,
 	fstatSync,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	openSync,
@@ -10,6 +11,7 @@ import {
 	renameSync,
 	rmSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -559,7 +561,7 @@ export function acquireRunLock(recordPath: string): () => void {
 	if (createExclusive(lockPath, body)) {
 		return release;
 	}
-	const holder = runLockHolder(recordPath);
+	const holder = heldRunLock(recordPath);
 	if (isProcessAlive(holder)) {
 		throw new Error(`run "${runId}" is still in progress (pid ${holder})`);
 	}
@@ -573,7 +575,7 @@ export function acquireRunLock(recordPath: string): () => void {
 	}
 	try {
 		// Judge again now that no one else can replace the lock.
-		const current = runLockHolder(recordPath);
+		const current = heldRunLock(recordPath);
 		if (isProcessAlive(current)) {
 			throw new Error(`run "${runId}" is still in progress (pid ${current})`);
 		}
@@ -587,17 +589,121 @@ export function acquireRunLock(recordPath: string): () => void {
 	}
 }
 
-/** Creates `target` only if nothing (not even a dangling symlink) is there. */
+/**
+ * Creates `target` with its whole body, only if nothing (not even a dangling
+ * symlink) is there. The body is written to a temp file first and then
+ * hard-linked into place, so `target` never exists empty or half-written.
+ *
+ * On a filesystem without hard links (FAT, some network mounts) the body is
+ * written straight to `target` with an exclusive create instead. A reader can
+ * then see it empty or half-written for a moment; `heldRunLock` refuses such a
+ * lock as unfinished and never takes it over, so the fallback stays safe.
+ */
 function createExclusive(target: string, text: string): boolean {
+	const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
 	try {
-		writeFileSync(target, text, { flag: "wx" });
+		writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
+		try {
+			linkSync(temp, target);
+		} catch (error) {
+			if (!isNoHardLinkError(error)) {
+				throw error;
+			}
+			writeInPlace(target, text);
+		}
 		return true;
 	} catch (error) {
 		if (isExistsError(error)) {
 			return false;
 		}
 		throw error;
+	} finally {
+		rmSync(temp, { force: true });
 	}
+}
+
+/**
+ * Creates `target` exclusively and writes `text` into it. If the write fails
+ * (a full disk) or the close does (a deferred network write error), the file
+ * this call just created is removed again, so it never leaves an empty lock
+ * that every later run would refuse.
+ */
+function writeInPlace(target: string, text: string): void {
+	const fd = openSync(target, "wx", 0o600);
+	let open = true;
+	try {
+		const bytes = Buffer.from(text);
+		let written = 0;
+		while (written < bytes.length) {
+			written += writeSync(fd, bytes, written);
+		}
+		// A network mount can report a deferred write error only at close.
+		open = false;
+		closeSync(fd);
+	} catch (error) {
+		if (open) {
+			try {
+				closeSync(fd);
+			} catch {
+				// The write error is the one to report.
+			}
+		}
+		rmSync(target, { force: true });
+		throw error;
+	}
+}
+
+/** `link` failed because this filesystem has no hard links. */
+function isNoHardLinkError(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException | undefined)?.code;
+	return (
+		code === "ENOTSUP" ||
+		code === "EOPNOTSUPP" ||
+		code === "EPERM" ||
+		code === "ENOSYS"
+	);
+}
+
+/**
+ * The pid holding a record's run lock, for judging whether it is stale. A
+ * lock that is a regular file but names no pid is refused, never judged
+ * stale: such a lock is one being written by another process (in place, on a
+ * filesystem without hard links) or left unfinished by a crash.
+ */
+function heldRunLock(recordPath: string): number | undefined {
+	const state = runLockState(recordPath);
+	if (state.kind === "unfinished") {
+		throw new Error(unfinishedLockMessage(recordPath));
+	}
+	return state.kind === "held" ? state.pid : undefined;
+}
+
+/** Why a run lock that names no pid is refused, and how to clear it. */
+export function unfinishedLockMessage(recordPath: string): string {
+	return `run "${path.basename(recordPath)}" lock ${path.join(recordPath, RUN_LOCK_FILE)} is being written by another process, or was left unfinished by one that crashed; if no review_panel run is active, delete it and try again`;
+}
+
+/**
+ * What a record's run lock says. `none`: no lock, or one that is not a
+ * regular file (a symlink is never read through), which a takeover replaces.
+ * `unfinished`: a regular file that names no pid.
+ */
+export function runLockState(
+	recordPath: string,
+): { kind: "none" } | { kind: "held"; pid: number } | { kind: "unfinished" } {
+	const text = readRegularFile(path.join(recordPath, RUN_LOCK_FILE));
+	if (text === undefined) {
+		return { kind: "none" };
+	}
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (isRecord(parsed) && typeof parsed.pid === "number") {
+			return { kind: "held", pid: parsed.pid };
+		}
+	} catch {
+		// Fall through: a lock with no readable pid.
+	}
+	return { kind: "unfinished" };
 }
 
 function lockToken(text: string): string | undefined {
@@ -609,26 +715,6 @@ function lockToken(text: string): string | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-/**
- * The pid named by a record's run lock, when there is a readable one. A lock
- * that is a symlink is never read through and names no one.
- */
-export function runLockHolder(recordPath: string): number | undefined {
-	const text = readRegularFile(path.join(recordPath, RUN_LOCK_FILE));
-	if (text === undefined) {
-		return undefined;
-	}
-	try {
-		const parsed: unknown = JSON.parse(text);
-		if (isRecord(parsed) && typeof parsed.pid === "number") {
-			return parsed.pid;
-		}
-	} catch {
-		// An unreadable lock names no one.
-	}
-	return undefined;
 }
 
 /**

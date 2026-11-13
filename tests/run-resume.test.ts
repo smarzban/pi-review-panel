@@ -107,7 +107,10 @@ function countingFactory(responses: FakeResponse[] = [{ kind: "default" }]): {
  * Starts a three-seat review whose first seat answers at once while the other
  * two hang, and aborts the run as soon as the first seat has settled.
  */
-async function interruptedReview(repo: string): Promise<string> {
+async function interruptedReview(
+	repo: string,
+	baseRef = "origin/main",
+): Promise<string> {
 	const controller = new AbortController();
 	const fake = createSdkSeatFake([
 		{ kind: "default" },
@@ -115,7 +118,7 @@ async function interruptedReview(repo: string): Promise<string> {
 		{ kind: "pending" },
 	]);
 	const pending = runReview(
-		{ repoDir: repo, baseRef: "origin/main", seats: threeSeats() },
+		{ repoDir: repo, baseRef, seats: threeSeats() },
 		{
 			abortSignal: controller.signal,
 			recordKey: TEST_RECORD_KEY,
@@ -163,6 +166,45 @@ describe("durable seat outcomes", () => {
 			// The run lock is released when the run ends, even by cancellation.
 			expect(existsSync(path.join(recordPath, RUN_LOCK_FILE))).toBe(false);
 			expect(worktreeCount(repo)).toBe(1);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("a failed seat-file write", () => {
+	it("never costs the run its seats: execution.json still carries every seat", async () => {
+		const repo = createHostRepo();
+		try {
+			let blocked = false;
+			const result = await runReview(
+				{ repoDir: repo, baseRef: "origin/main", seats: threeSeats() },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake().factory,
+					onProgress: (event) => {
+						if (event.kind === "seat-started" && !blocked) {
+							// A file where the seats folder belongs: every seat write fails.
+							blocked = true;
+							const seatsDir = path.join(onlyRecord(repo), SEATS_DIR);
+							rmSync(seatsDir, { recursive: true, force: true });
+							writeFileSync(seatsDir, "not a folder\n");
+						}
+					},
+				},
+			);
+			expect(blocked).toBe(true);
+			const execution = JSON.parse(
+				readFileSync(path.join(result.recordPath, "execution.json"), "utf8"),
+			);
+			expect(
+				execution.outcomes.map(
+					(facts: { seat: { lens: string } }) => facts.seat.lens,
+				),
+			).toEqual(["correctness", "security", "tests"]);
+			expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
+				true,
+			);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}
@@ -609,6 +651,43 @@ describe("resume refusals", () => {
 			expect(
 				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY).missing,
 			).toHaveLength(2);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("resumes a review whose base is named verify: the signed plan decides the kind", async () => {
+		const repo = createHostRepo();
+		try {
+			git(repo, ["branch", "verify", "origin/main"]);
+			const recordPath = await interruptedReview(repo, "verify");
+			const loaded = loadResumable(
+				repo,
+				path.basename(recordPath),
+				TEST_RECORD_KEY,
+			);
+			expect(loaded.plan.kind).toBe("review");
+			expect(loaded.missing.map((seat) => seat.lens)).toEqual([
+				"security",
+				"tests",
+			]);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses a record whose run lock is unfinished, and leaves the lock alone", async () => {
+		const repo = createHostRepo();
+		try {
+			const recordPath = await interruptedReview(repo);
+			const lockPath = path.join(recordPath, RUN_LOCK_FILE);
+			writeFileSync(lockPath, "");
+			expect(() =>
+				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
+			).toThrow(
+				/Resume refused: run ".*" lock .*run\.lock is being written by another process, or was left unfinished by one that crashed; if no review_panel run is active, delete it and try again/,
+			);
+			expect(readFileSync(lockPath, "utf8")).toBe("");
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}

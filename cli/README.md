@@ -108,8 +108,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 - An error about an unknown command, option or argument, a provider id, or an unknown
   argument name in a `call` object repeats it only when it is shaped like a name (letters, no
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
-  appear in an error: those of `--repo`, `--base`, `--head`, `--prior-run-id`, `--seats` and
-  `--dismissed`, and the values in a `call` object, such as `repository` or `priorRunId`.
+  appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--passes`),
+  and any value in a `call` object, such as `repository` or `priorRunId`.
 
 | Exit code | Meaning |
 |---|---|
