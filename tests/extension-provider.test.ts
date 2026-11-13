@@ -194,15 +194,9 @@ describe("seat session for a provider registered by a seat extension", () => {
 		const counter = globalThis as LoadCounter;
 		const loadsBefore = counter.__reviewPanelFixtureLoads ?? 0;
 		const sessionOptions: Array<Record<string, unknown>> = [];
-		const session = {
-			prompt: async () => undefined,
-			abort: async () => undefined,
-			dispose: () => undefined,
-			getSessionStats: () => ({
-				tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				cost: 0,
-			}),
-		};
+		const createAgentSession = sdk.createAgentSession as (
+			options: Record<string, unknown>,
+		) => Promise<{ session: { dispose: () => void } }>;
 
 		const result = await createSdkSeatSession({
 			spec: seatSpec(PROVIDER, [PROVIDER_EXTENSION]),
@@ -210,14 +204,16 @@ describe("seat session for a provider registered by a seat extension", () => {
 			confinementGuard: createConfinementGuard({ worktree: root }),
 			sdk: {
 				...sdk,
+				// Call through to the real session so a reload there would show
+				// in the load counter below.
 				createAgentSession: async (options: Record<string, unknown>) => {
 					sessionOptions.push(options);
-					return { session };
+					return createAgentSession(options);
 				},
 			} as never,
 		});
 
-		expect(result.session).toBe(session);
+		result.session.dispose();
 		expect(sessionOptions).toHaveLength(1);
 		const options = sessionOptions[0] as {
 			model: { provider: string; id: string };

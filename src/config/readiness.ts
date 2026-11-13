@@ -122,9 +122,9 @@ export async function diagnoseReadiness(
 	// A's extension registers must not make row B ready.
 	const seenKeys = new Set<string>();
 	for (const roster of config.roster) {
-		const extensions = [
-			...new Set((roster.extraExtensionPaths ?? []).filter(existsSync)),
-		].sort();
+		// The configured order, as the seat loads it: when two extensions
+		// register the same provider, the later one wins.
+		const extensions = (roster.extraExtensionPaths ?? []).filter(existsSync);
 		const key = [roster.provider, roster.model, ...extensions].join("\u0000");
 		if (seenKeys.has(key)) {
 			continue;
