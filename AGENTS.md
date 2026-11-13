@@ -75,17 +75,18 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   are peer dependencies; everything else is node builtins.
 - No build step, no committed `dist/`. Pi loads the extension TypeScript directly.
 
-### Pi behaviors this repo depends on (verified against the shipped 0.84.1 build)
+### Pi behaviors this repo depends on (verified against the shipped 1.5.2 build)
 
 - A prompt flag value that exists as a file is READ as that file. System-prompt paths must be
   absolute paths to files we own, never literal text.
-- Built-in path args are normalized before use (`@` strip, `~` expand). Guards must apply the same
-  normalization.
+- Built-in path args are normalized before use (Unicode-space fold, `@` strip, `~` expand,
+  `file://` decode). Guards must apply the same normalization.
 - `read` retries with path variants. A confinement check must confine the whole candidate set for
   `read`.
 - Tool args are coerced then validated BEFORE `execute`. Declare a permissive envelope and validate
   inside `execute`.
-- A tool signals an error only by THROWING.
+- A tool signals an error by THROWING, or by returning a result with `isError: true` (1.5.2
+  honors it; 0.84.1 ignored it). This repo's tools throw.
 - An extension `tool_call` handler can veto with `{ block: true, reason }`.
 - Model patterns resolve across providers. Always pin `--provider` plus an exact model id.
 - The tarball ships through a narrow `files` allowlist. Internal artifacts never enter it.
