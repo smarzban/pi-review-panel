@@ -1,10 +1,25 @@
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";
-import { complete, reserve, writeExecution, writePanel } from "./record.js";
+import {
+	acquireRunLock,
+	complete,
+	projectSeat,
+	reserve,
+	writeExecution,
+	writePanel,
+	writePlan,
+	writeRecordFile,
+	writeSeatOutcome,
+} from "./record.js";
 import { renderAuditFindingsJson, renderAuditReport } from "./render-audit.js";
-import { resolveCommitOid } from "./run-review.js";
+import {
+	mergeOutcomes,
+	type ResumeState,
+	resolveCommitOid,
+	resumeSummary,
+	settledOnly,
+} from "./run-review.js";
 import {
 	type ReviewProgressEvent,
 	RunCancelledError,
@@ -16,7 +31,12 @@ import {
 	pinSnapshot,
 	type SnapshotReleaseOutcome,
 } from "./snapshot.js";
-import type { PlannedSeat, RunResult } from "./types.js";
+import type {
+	PlannedSeat,
+	ReservedRecord,
+	RunResult,
+	SeatOutcomeFacts,
+} from "./types.js";
 
 export const AUDIT_RECORD_REF = "audit";
 export const AUDIT_CLEANUP_ERROR_FILE = "cleanup-error.txt";
@@ -29,7 +49,20 @@ export type RunAuditInput = {
 	seatBudgetMs?: number;
 };
 
-export type RunAuditResult = RunResult & { cleanupError?: string };
+export type RunAuditResult = RunResult & {
+	cleanupError?: string;
+	/** Seats a resume ran again; absent on a first run. */
+	resumedSeats?: PlannedSeat[];
+};
+
+/** A frozen audit the record already describes. */
+export type AuditExecution = {
+	repoDir: string;
+	revision: string;
+	seats: PlannedSeat[];
+	scopingNote?: string;
+	seatBudgetMs?: number;
+};
 
 export type RunAuditOptions = {
 	abortSignal?: AbortSignal;
@@ -39,6 +72,11 @@ export type RunAuditOptions = {
 	sessionFactory?: SdkSessionFactory;
 	concurrencyGate?: SeatConcurrencyGate;
 	onProgress?: (event: ReviewProgressEvent) => void;
+	/**
+	 * The owner's record key. A first run signs its plan and seat files with
+	 * it; without one the record is unsigned and cannot be resumed.
+	 */
+	recordKey?: Buffer;
 };
 
 export class RunAuditError extends Error {
@@ -68,8 +106,48 @@ export async function runAudit(
 	const record = reserve(input.repoDir, AUDIT_RECORD_REF, {
 		role: "repo-audit",
 	});
+	return executeAudit(
+		record,
+		{
+			repoDir: input.repoDir,
+			revision,
+			seats: input.seats,
+			...(input.scopingNote === undefined
+				? {}
+				: { scopingNote: input.scopingNote }),
+			...(input.seatBudgetMs === undefined
+				? {}
+				: { seatBudgetMs: input.seatBudgetMs }),
+		},
+		options,
+	);
+}
+
+/**
+ * Runs a reserved audit record to completion; with `resume` set it reuses
+ * the record's panel and plan and schedules only the unsettled seats.
+ */
+export async function executeAudit(
+	record: ReservedRecord,
+	input: AuditExecution,
+	options: RunAuditOptions = {},
+	resume?: ResumeState,
+): Promise<RunAuditResult> {
+	const { revision } = input;
 	const pin = options.pinSnapshot ?? pinSnapshot;
 	const schedule = options.scheduleSeats ?? scheduleSeats;
+	const releaseLock = resume?.heldLock ?? acquireRunLock(record.recordPath);
+	const settled =
+		resume?.settled ??
+		input.seats.map((): SeatOutcomeFacts | undefined => undefined);
+	const missing = input.seats.flatMap((_, index) =>
+		settled[index] === undefined ? [index] : [],
+	);
+	const resumedSeats =
+		resume === undefined
+			? undefined
+			: missing.map((index) => input.seats[index]);
+	let seal = resume?.seal;
 	let stage = "panel";
 	let snapshot: PinnedSnapshot | undefined;
 	let released = false;
@@ -84,46 +162,74 @@ export async function runAudit(
 	};
 
 	try {
-		(options.writePanel ?? writePanel)(record, {
-			runId: record.runId,
-			baseRef: AUDIT_RECORD_REF,
-			...(input.scopingNote === undefined
-				? {}
-				: { scopingNote: input.scopingNote }),
-			seats: input.seats,
-		});
-		stage = "pin";
-		snapshot = pin(input.repoDir, revision);
-		stage = "schedule";
-		const outcomes = await schedule(
-			{
-				seats: input.seats,
-				worktree: snapshot.worktreePath,
-				baseRef: revision,
-				audit: true,
+		if (resume === undefined) {
+			(options.writePanel ?? writePanel)(record, {
+				runId: record.runId,
+				baseRef: AUDIT_RECORD_REF,
 				...(input.scopingNote === undefined
 					? {}
 					: { scopingNote: input.scopingNote }),
-			},
-			{
-				...(input.seatBudgetMs === undefined
-					? {}
-					: { seatBudgetMs: input.seatBudgetMs }),
-				...(options.abortSignal === undefined
-					? {}
-					: { runAbortSignal: options.abortSignal }),
-				...(options.sessionFactory === undefined
-					? {}
-					: { sessionFactory: options.sessionFactory }),
-				...(options.concurrencyGate === undefined
-					? {}
-					: { concurrencyGate: options.concurrencyGate }),
-				...(options.onProgress === undefined
-					? {}
-					: { onProgress: options.onProgress }),
-			},
-		);
-		writeExecution(record, { cancelled: false, outcomes });
+				seats: input.seats,
+			});
+			seal = writePlan(
+				record,
+				{
+					version: 1,
+					kind: "audit",
+					runId: record.runId,
+					baseRef: AUDIT_RECORD_REF,
+					baseOid: revision,
+					headOid: revision,
+					...(input.scopingNote === undefined
+						? {}
+						: { scopingNote: input.scopingNote }),
+					seats: input.seats.map(projectSeat),
+				},
+				options.recordKey,
+			);
+		}
+		stage = "pin";
+		snapshot = pin(input.repoDir, revision);
+		stage = "schedule";
+		const fresh =
+			missing.length === 0
+				? []
+				: await schedule(
+						{
+							seats: missing.map((index) => input.seats[index]),
+							worktree: snapshot.worktreePath,
+							baseRef: revision,
+							audit: true,
+							...(input.scopingNote === undefined
+								? {}
+								: { scopingNote: input.scopingNote }),
+						},
+						{
+							...(input.seatBudgetMs === undefined
+								? {}
+								: { seatBudgetMs: input.seatBudgetMs }),
+							...(options.abortSignal === undefined
+								? {}
+								: { runAbortSignal: options.abortSignal }),
+							...(options.sessionFactory === undefined
+								? {}
+								: { sessionFactory: options.sessionFactory }),
+							...(options.concurrencyGate === undefined
+								? {}
+								: { concurrencyGate: options.concurrencyGate }),
+							...(options.onProgress === undefined
+								? {}
+								: { onProgress: options.onProgress }),
+							onSeatSettled: (index, facts) =>
+								writeSeatOutcome(record, missing[index], facts, seal),
+						},
+					);
+		const outcomes = mergeOutcomes(settled, missing, fresh);
+		writeExecution(record, {
+			cancelled: false,
+			outcomes,
+			...(resumedSeats === undefined ? {} : { resumedSeats }),
+		});
 		stage = "collect";
 		const stamped = collectFindings(outcomes);
 		stage = "release";
@@ -131,7 +237,7 @@ export async function runAudit(
 		const cleanupError =
 			release?.ok === false ? cleanupMessage(release.error) : undefined;
 		stage = "render";
-		writeFileSync(
+		writeRecordFile(
 			record.reportPath,
 			renderAuditReport({
 				runId: record.runId,
@@ -139,15 +245,25 @@ export async function runAudit(
 				stamped,
 				outcomes,
 				...(cleanupError === undefined ? {} : { cleanupError }),
+				...(resumedSeats === undefined
+					? {}
+					: {
+							resume: resumeSummary(
+								input.seats,
+								missing,
+								resume?.lost ?? [],
+								resume?.scopingNoteDropped === true,
+							),
+						}),
 			}),
 		);
-		writeFileSync(record.findingsPath, renderAuditFindingsJson(stamped));
-		writeFileSync(
+		writeRecordFile(record.findingsPath, renderAuditFindingsJson(stamped));
+		writeRecordFile(
 			path.join(record.recordPath, "meta.json"),
 			`${JSON.stringify({ runId: record.runId, snapshotOid: revision, kind: "audit" }, null, 2)}\n`,
 		);
 		if (cleanupError !== undefined) {
-			writeFileSync(
+			writeRecordFile(
 				path.join(record.recordPath, AUDIT_CLEANUP_ERROR_FILE),
 				`${cleanupError}\n`,
 			);
@@ -158,17 +274,23 @@ export async function runAudit(
 			recordPath: record.recordPath,
 			outcomes,
 			...(cleanupError === undefined ? {} : { cleanupError }),
+			...(resumedSeats === undefined ? {} : { resumedSeats }),
 		};
 	} catch (cause) {
 		const release = releaseOnce();
 		const cleanupError =
 			release?.ok === false ? cleanupMessage(release.error) : undefined;
 		if (cause instanceof RunCancelledError) {
-			writeExecution(record, { cancelled: true, outcomes: cause.outcomes });
+			writeExecution(record, {
+				cancelled: true,
+				outcomes: [...settledOnly(settled), ...cause.outcomes],
+			});
 		}
 		const error = new RunAuditError(stage, cause, cleanupError);
 		error.cause = cause;
 		throw error;
+	} finally {
+		releaseLock();
 	}
 }
 

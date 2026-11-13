@@ -8,7 +8,11 @@ import { Type } from "typebox";
 import { resolveAuditPanel } from "../config/audit-panel.js";
 import { loadAuditPassTable } from "../config/audit-passes.js";
 import { loadLensTable } from "../config/lenses.js";
-import { type ConfigEnv, loadConfig } from "../config/load.js";
+import {
+	type ConfigEnv,
+	loadConfig,
+	resolveConfigPath,
+} from "../config/load.js";
 import { resolvePanel } from "../config/panel.js";
 import {
 	diagnoseReadiness,
@@ -16,6 +20,21 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import {
+	checkRecordKey,
+	loadRecordKey,
+	RecordKeyError,
+	type RecordKeyProblem,
+	recordKeyPath,
+} from "../run/record-key.js";
+import { SCOPING_NOTE_DROPPED } from "../run/render.js";
+import {
+	loadResumable,
+	type ResumableRun,
+	type ResumeOptions,
+	type ResumeResult,
+	resumeRun,
+} from "../run/resume.js";
 import {
 	type RunAuditInput,
 	type RunAuditOptions,
@@ -58,6 +77,7 @@ import {
 	renderReviewProgress,
 	renderReviewResult,
 	renderVerifyResult,
+	truncateCodePoints,
 } from "./review-presentation.js";
 
 /** Copy-paste example. Models truncated "/absolute/path" to "/". */
@@ -89,7 +109,7 @@ const parameters = Type.Object(
 		action: Type.Optional(
 			Type.String({
 				description:
-					'Required action: "diagnose", "review", "audit", "verify", or "comment".',
+					'Required action: "diagnose", "review", "audit", "verify", "resume", or "comment".',
 			}),
 		),
 		repository: Type.Optional(absoluteRepository),
@@ -111,7 +131,7 @@ const parameters = Type.Object(
 );
 
 const USAGE =
-	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
+	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "resume", "priorRunId": "<interrupted-run-directory>" } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -145,7 +165,56 @@ export type ReviewPanelDependencies = {
 		options?: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
 	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
+	resumeRun?: (
+		run: ResumableRun,
+		options?: ResumeOptions,
+	) => Promise<ResumeResult>;
+	/**
+	 * The owner's record key. By default it is read from `record-key` beside
+	 * the owner config, and created there by a first review or audit.
+	 */
+	recordKey?: (input: RecordKeyInput) => Buffer;
+	/**
+	 * The `diagnose` check of the record key, which never writes. By default it
+	 * checks `record-key` beside the owner config the way review and audit use
+	 * it.
+	 */
+	checkRecordKey?: (
+		input: Omit<RecordKeyInput, "create">,
+	) => RecordKeyProblem | undefined;
 };
+
+export type RecordKeyInput = {
+	repoDir: string;
+	env: ConfigEnv;
+	home: string;
+	/** Create the key when it is missing: review and audit do, resume never. */
+	create: boolean;
+};
+
+/** Reads (or creates) the record key in the folder of the owner config. */
+export function ownerRecordKey(input: RecordKeyInput): Buffer {
+	return loadRecordKey(
+		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
+		{ create: input.create, repoDir: input.repoDir },
+	);
+}
+
+/** Checks the owner's record key for `diagnose`, without writing anything. */
+export function ownerRecordKeyCheck(
+	input: Omit<RecordKeyInput, "create">,
+): RecordKeyProblem | undefined {
+	let configPath: string;
+	try {
+		configPath = resolveConfigPath({ env: input.env, home: input.home });
+	} catch {
+		// A bad config override is the configuration row's to report.
+		return undefined;
+	}
+	return checkRecordKey(recordKeyPath(configPath), {
+		repoDir: input.repoDir,
+	});
+}
 
 export type ReviewPanelTool = {
 	name: "review_panel";
@@ -497,12 +566,15 @@ export function createReviewPanelTool(
 	const suggest = deps?.suggestLenses ?? suggestLenses;
 	const verify = deps?.runVerify ?? runVerify;
 	const postComment = deps?.postComment ?? postCloseoutComment;
+	const resume = deps?.resumeRun ?? resumeRun;
+	const keyOf = deps?.recordKey ?? ownerRecordKey;
+	const checkKey = deps?.checkRecordKey ?? ownerRecordKeyCheck;
 
 	return {
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {
@@ -514,6 +586,21 @@ export function createReviewPanelTool(
 			if (!isNonEmptyString(args.action)) {
 				throw new Error(USAGE);
 			}
+			const recordKey = (create: boolean, refusal: string): Buffer => {
+				try {
+					return keyOf({
+						repoDir,
+						env: runtime.env,
+						home: runtime.home,
+						create,
+					});
+				} catch (error) {
+					const fix = error instanceof RecordKeyError ? ` ${error.fix}` : "";
+					throw new Error(
+						`${refusal}: ${error instanceof Error ? error.message : String(error)}.${fix}`,
+					);
+				}
+			};
 			const action = validateNonEmptyString(args.action, "action");
 			const repoDir = resolveReviewRepository(
 				args.repository,
@@ -533,7 +620,46 @@ export function createReviewPanelTool(
 					env: runtime.env,
 					home: runtime.home,
 				});
-				return { content: [{ type: "text", text: renderReadiness(report) }] };
+				// Review and audit refuse to start without a usable record key,
+				// so diagnose checks it too, without creating it.
+				const keyProblem = checkKey({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				const keyRow =
+					keyProblem === undefined
+						? undefined
+						: `record key ${recordKeyPath(resolveConfigPath({ env: runtime.env, home: runtime.home }))}`;
+				const shown =
+					keyProblem === undefined || keyProblem.warning
+						? report
+						: {
+								ready: false,
+								rows: [
+									...report.rows,
+									{
+										prerequisite: keyRow as string,
+										remediation: `${keyProblem.cause}. ${keyProblem.fix}`,
+									},
+								],
+							};
+				// A warning never changes readiness: it is shown after the report,
+				// outside its remediation rows, at most 1,500 characters, and the
+				// report keeps room for it so the reply stays within the cap. The
+				// cause already names the record key, so it is not prefixed again.
+				const warning = keyProblem?.warning
+					? `\n## Warnings\n- ${truncateCodePoints(`${keyProblem.cause}. ${keyProblem.fix}`, 1_500)}`
+					: "";
+				const reserve = new TextEncoder().encode(warning).length;
+				return {
+					content: [
+						{
+							type: "text",
+							text: `${renderReadiness(shown, reserve)}${warning}`,
+						},
+					],
+				};
 			}
 
 			if (action === "audit") {
@@ -580,6 +706,7 @@ export function createReviewPanelTool(
 					...(passes === undefined ? {} : { passes }),
 				});
 				const revision = oidOf(repoDir, "HEAD");
+				const auditKey = recordKey(true, "Audit refused");
 				const roster = compactPanelRoster(panel);
 				emitProgress(onUpdate, {
 					phase: "audit",
@@ -602,6 +729,7 @@ export function createReviewPanelTool(
 					},
 					{
 						...(signal === undefined ? {} : { abortSignal: signal }),
+						recordKey: auditKey,
 						onProgress: (event) =>
 							emitProgress(onUpdate, {
 								...progressFromAuditEvent(event, Date.now() - startedAt),
@@ -715,9 +843,117 @@ export function createReviewPanelTool(
 				return executeComment(args, repoDir, postComment);
 			}
 
+			if (action === "resume") {
+				for (const key of Reflect.ownKeys(args)) {
+					if (
+						key !== "action" &&
+						key !== "repository" &&
+						key !== "priorRunId"
+					) {
+						throw new Error(`resume does not accept argument "${String(key)}"`);
+					}
+				}
+				const priorRunId = validateNonEmptyString(
+					args.priorRunId,
+					"priorRunId",
+				);
+				const report = await diagnose({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				if (!report.ready) {
+					throw new Error(renderReadiness(report));
+				}
+				// Resume never creates the key: a record it did not sign is not
+				// this owner's.
+				const resumeKey = recordKey(false, "Resume refused");
+				// Seats, lenses and commits all come from the record itself, once
+				// its plan's signature checks out.
+				const run = loadResumable(repoDir, priorRunId, resumeKey);
+				// Models, extension paths and prompts come from the owner config and
+				// the package, never from the record inside the reviewed repository.
+				const config = load({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				const panel: PlannedSeat[] = run.plan.seats.map((seat) => ({
+					...seat,
+					lensPrompt: "",
+				}));
+				const roster = compactPanelRoster(panel);
+				const progressOf =
+					run.plan.kind === "audit"
+						? progressFromAuditEvent
+						: progressFromReviewEvent;
+				const result = await resume(run, {
+					config,
+					recordKey: resumeKey,
+					...(signal === undefined ? {} : { abortSignal: signal }),
+					// Started once the lock is held and the record re-read, so the
+					// count is what will actually run.
+					onStart: ({ toRun }) =>
+						emitProgress(onUpdate, {
+							phase: run.plan.kind,
+							event: "started",
+							elapsedMs: Date.now() - startedAt,
+							total: toRun,
+							completed: 0,
+							active: 0,
+							roster,
+						}),
+					onProgress: (event) =>
+						emitProgress(onUpdate, {
+							...progressOf(event, Date.now() - startedAt),
+							roster,
+						}),
+				});
+				const resumed = result.resumedSeats;
+				const lost = result.lostSeats;
+				const label = (seats: PlannedSeat[]) =>
+					seats.map((seat) => `${seat.rosterId}/${seat.lens}`).join(", ");
+				const headline = [
+					`Resumed ${run.runId}: ran ${resumed.length} of ${panel.length} planned seats again${
+						resumed.length === 0 ? "" : ` (${label(resumed)})`
+					}; kept ${panel.length - resumed.length - lost.length} as recorded${
+						lost.length === 0
+							? ""
+							: `; lost ${lost.length} that could not be rebuilt from the owner config (${label(lost)})`
+					}.`,
+					...(result.scopingNoteDropped ? [SCOPING_NOTE_DROPPED] : []),
+				].join("\n");
+				let body: string;
+				if (run.plan.kind === "audit") {
+					body = renderAuditResult({
+						recordPath: result.recordPath,
+						panel,
+						result,
+					});
+				} else {
+					const plannedLenses = new Set(panel.map((seat) => seat.lens));
+					const suggestions = suggest(
+						repoDir,
+						run.plan.baseOid,
+						run.plan.headOid,
+					).filter((row) => !plannedLenses.has(row.lens));
+					const findings = readStampedFindings(result.recordPath);
+					body = renderReviewResult({
+						recordPath: result.recordPath,
+						panel,
+						result,
+						suggestions,
+						...(findings === undefined ? {} : { findings }),
+					});
+				}
+				return {
+					content: [{ type: "text", text: `${headline}\n\n${body}` }],
+				};
+			}
+
 			if (action !== "review") {
 				throw new Error(
-					`review_panel action must be "diagnose", "review", "audit", "verify", or "comment", got "${action}"`,
+					`review_panel action must be "diagnose", "review", "audit", "verify", "resume", or "comment", got "${action}"`,
 				);
 			}
 
@@ -779,6 +1015,7 @@ export function createReviewPanelTool(
 				...(lenses === undefined ? {} : { lenses }),
 			});
 
+			const reviewKey = recordKey(true, "Review refused");
 			const roster = compactPanelRoster(panel);
 			emitProgress(onUpdate, {
 				phase: "review",
@@ -807,6 +1044,7 @@ export function createReviewPanelTool(
 				},
 				{
 					...(signal === undefined ? {} : { abortSignal: signal }),
+					recordKey: reviewKey,
 					onProgress: (event) =>
 						emitProgress(onUpdate, {
 							...progressFromReviewEvent(event, Date.now() - startedAt),

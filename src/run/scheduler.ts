@@ -153,6 +153,12 @@ export type ScheduleOptions = {
 	/** Shared only when independent panels must obey one aggregate cap. */
 	concurrencyGate?: SeatConcurrencyGate;
 	onProgress?: (event: ReviewProgressEvent) => void;
+	/**
+	 * Called once per seat as soon as it settles, before its `seat-finished`
+	 * progress event, with its index in `input.seats`. Never called for a seat
+	 * torn down by run cancellation: that seat did not settle on its own.
+	 */
+	onSeatSettled?: (index: number, facts: SeatOutcomeFacts) => void;
 	clock?: SchedulerClock;
 	/** Monotonic time source shared with runSeat's hard deadline. */
 	now?: () => number;
@@ -247,7 +253,7 @@ export async function scheduleSeats(
 					});
 				}, HEARTBEAT_INTERVAL_MS);
 				try {
-					results[index] = await runSeatWithBudget(
+					const result = await runSeatWithBudget(
 						seatSpecFor(seat, input),
 						budgetMs,
 						runSeat,
@@ -257,6 +263,15 @@ export async function scheduleSeats(
 						now,
 						live,
 					);
+					results[index] = result;
+					if (!cancelled && !options.runAbortSignal?.aborted) {
+						try {
+							options.onSeatSettled?.(index, outcomeFactsFor(seat, result));
+						} catch {
+							// A failed durable write never changes seat accounting; the
+							// final execution record still carries this seat.
+						}
+					}
 				} finally {
 					clock.clearInterval(heartbeat);
 					activeSeats -= 1;

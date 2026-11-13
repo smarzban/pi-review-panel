@@ -1,0 +1,585 @@
+import { execFileSync } from "node:child_process";
+import { lstatSync } from "node:fs";
+import path from "node:path";
+
+import {
+	MAX_AUDIT_SEATS,
+	MAX_AUDIT_SEATS_PER_PASS,
+} from "../config/audit-panel.js";
+import { loadAuditPassTable } from "../config/audit-passes.js";
+import {
+	HOLISTIC_LENS,
+	loadLensTable,
+	SPECIALIST_SEAT_CAP,
+} from "../config/lenses.js";
+import { MAX_REVIEW_SEATS } from "../config/panel.js";
+import type { Config } from "../config/schema.js";
+import { isProcessAlive } from "./liveness.js";
+import { discoverPriorRecords } from "./prior-records.js";
+import { resolvePriorRunId } from "./prior-run.js";
+import {
+	acquireRunLock,
+	assertRealDirectory,
+	assertRecordWritable,
+	COMPLETE_MARKER,
+	digestBaseRef,
+	PLAN_FILE,
+	PLAN_MAC_FILE,
+	type RecordSeal,
+	readRegularFile,
+	readSettledOutcomes,
+	recordAt,
+	runLockState,
+	type SettledSeat,
+	sanitizeBaseRef,
+	unfinishedLockMessage,
+} from "./record.js";
+import { macMatches, planMac } from "./record-key.js";
+import {
+	executeAudit,
+	type RunAuditOptions,
+	type RunAuditResult,
+} from "./run-audit.js";
+import {
+	executeReview,
+	type RunReviewOptions,
+	type RunReviewResult,
+} from "./run-review.js";
+import type { PlannedSeat, RunPlan, SeatOutcomeFacts } from "./types.js";
+
+/** An interrupted review or audit record that `resume` can finish. */
+export type ResumableRun = {
+	repoDir: string;
+	runId: string;
+	recordPath: string;
+	plan: RunPlan;
+	/** The owner's MAC of the record's plan, which the seat files are bound to. */
+	planMac: string;
+	/**
+	 * Settled seats by planned index, with a valid MAC and a checked outcome;
+	 * undefined where a seat must run again.
+	 */
+	settled: Array<SettledSeat | undefined>;
+	/** The planned seat identities that have no settled outcome, in order. */
+	missing: RunPlan["seats"];
+};
+
+export type ResumeResult = (RunReviewResult | RunAuditResult) & {
+	kind: RunPlan["kind"];
+	runId: string;
+	plan: RunPlan;
+	resumedSeats: PlannedSeat[];
+	/** Planned seats resume could not rebuild from the owner config: lost coverage. */
+	lostSeats: PlannedSeat[];
+	/** True when the record named a scoping note, which resume does not pass on. */
+	scopingNoteDropped: boolean;
+};
+
+export type ResumeOptions = RunReviewOptions &
+	RunAuditOptions & {
+		/**
+		 * The owner's record key. Seat files are checked against it, and the
+		 * seats this resume runs are signed with it.
+		 */
+		recordKey: Buffer;
+		/**
+		 * The owner config. Seat models, extension paths and the seat budget come
+		 * from it, never from the record in the reviewed repository.
+		 */
+		config: Config;
+		/** Package prompt tables; injectable for tests only. */
+		lensTable?: Map<string, string>;
+		passTable?: Map<string, string>;
+		/**
+		 * Called once the run lock is held and the record re-read, with the
+		 * number of seats about to run, before any seat starts.
+		 */
+		onStart?: (start: { toRun: number }) => void;
+	};
+
+const VERIFY_RUN_SUFFIX = `-${sanitizeBaseRef("verify")}-${digestBaseRef("verify")}`;
+
+/**
+ * A verify run's id: its base is the prior run's head OID (its readable part
+ * cut to 40 characters), then the verify role. A review whose base is literally `verify` also ends in the role
+ * suffix, but has no OID part before it.
+ */
+function isVerifyRunId(runId: string): boolean {
+	if (!runId.endsWith(VERIFY_RUN_SUFFIX)) {
+		return false;
+	}
+	const base = runId.slice(0, -VERIFY_RUN_SUFFIX.length);
+	return /-[0-9a-f]{40}-[0-9a-f]{16}$/.test(base);
+}
+
+function refuse(message: string): never {
+	throw new Error(`Resume refused: ${message}`);
+}
+
+/**
+ * Checks that a record can be resumed, before anything runs: it exists, is
+ * not complete, is a review or audit with a resume plan signed by the owner's
+ * record key, is not held by a live run, and its frozen commits still resolve
+ * here.
+ */
+export function loadResumable(
+	repoDir: string,
+	priorRunId: string,
+	recordKey: Buffer,
+): ResumableRun {
+	// A symlink at either folder would take reads and writes out of the
+	// repository; reserve() refuses the same.
+	for (const dir of [
+		path.join(repoDir, ".review-panel"),
+		path.join(repoDir, ".review-panel", "runs"),
+	]) {
+		try {
+			assertRealDirectory(dir);
+		} catch (error) {
+			if (isNotFound(error)) {
+				break;
+			}
+			refuse(error instanceof Error ? error.message : String(error));
+		}
+	}
+	let runId: string;
+	try {
+		runId = resolvePriorRunId(repoDir, priorRunId);
+	} catch (error) {
+		refuse(
+			(error instanceof Error ? error.message : String(error)).replace(
+				/^Verify refused: /,
+				"",
+			),
+		);
+	}
+	const recordPath = path.join(repoDir, ".review-panel", "runs", runId);
+	if (!isRealDirectory(recordPath)) {
+		refuse(`run "${runId}" was not found`);
+	}
+	if (exists(path.join(recordPath, COMPLETE_MARKER))) {
+		refuse(`run "${runId}" is already complete; there is nothing to resume`);
+	}
+	// The signed plan decides the kind. Only a record with no plan at all is
+	// told apart by its id: verify never writes a plan.
+	if (
+		isVerifyRunId(runId) &&
+		readRegularFile(path.join(recordPath, PLAN_FILE)) === undefined
+	) {
+		refuse(
+			`run "${runId}" is a verify run; start a new verify instead (verify runs one or two seats in sequence, so a fresh run costs the same as a resume)`,
+		);
+	}
+	const { plan, mac } = readPlan(recordPath, runId, recordKey);
+	checkPanelCaps(plan, runId);
+	checkWritable(recordPath, plan);
+	const lock = runLockState(recordPath);
+	if (lock.kind === "unfinished") {
+		refuse(unfinishedLockMessage(recordPath));
+	}
+	if (lock.kind === "held" && isProcessAlive(lock.pid)) {
+		refuse(`run "${runId}" is still in progress (pid ${lock.pid})`);
+	}
+	for (const [label, oid] of [
+		["head", plan.headOid],
+		["base", plan.baseOid],
+	] as const) {
+		if (!commitResolves(repoDir, oid)) {
+			refuse(
+				`${label} commit ${oid} of run "${runId}" cannot be resolved in this repository`,
+			);
+		}
+	}
+	const settled = readSettledOutcomes(recordPath, plan.seats, {
+		key: recordKey,
+		runId,
+		planMac: mac,
+	});
+	const missing = plan.seats.filter((_, index) => settled[index] === undefined);
+	return { repoDir, runId, recordPath, plan, planMac: mac, settled, missing };
+}
+
+/**
+ * Finishes an interrupted record in place: takes the run lock, re-reads the
+ * record under it, pins the recorded head commit, runs only the unsettled
+ * seats from the record's own panel, and writes the final artifacts as a
+ * first run would. The record's scoping note is not passed to the seats: the
+ * record lives in the reviewed repository, and resume takes no prompt text
+ * from it.
+ */
+export async function resumeRun(
+	run: ResumableRun,
+	options: ResumeOptions,
+): Promise<ResumeResult> {
+	const record = recordAt(run.recordPath);
+	const { plan } = run;
+	const { config, lensTable, passTable, onStart, ...runOptions } = options;
+	const seal: RecordSeal = {
+		key: options.recordKey,
+		runId: run.runId,
+		planMac: run.planMac,
+	};
+	let releaseLock: (() => void) | undefined;
+	try {
+		releaseLock = acquireRunLock(run.recordPath);
+	} catch (error) {
+		refuse(error instanceof Error ? error.message : String(error));
+	}
+	let handedOver = false;
+	try {
+		// Another process may have settled seats, or finished the record,
+		// between loading it and taking the lock.
+		if (exists(path.join(run.recordPath, COMPLETE_MARKER))) {
+			refuse(
+				`run "${run.runId}" is already complete; there is nothing to resume`,
+			);
+		}
+		checkWritable(run.recordPath, plan);
+		const prompts =
+			plan.kind === "review"
+				? (lensTable ?? loadLensTable())
+				: (passTable ?? loadAuditPassTable());
+		const rows = new Map(config.roster.map((row) => [row.id, row]));
+		const recorded = readSettledOutcomes(run.recordPath, plan.seats, seal);
+		const settled: Array<SeatOutcomeFacts | undefined> = [];
+		const lost: number[] = [];
+		const seats = plan.seats.map((identity, index): PlannedSeat => {
+			const row = rows.get(identity.rosterId);
+			const prompt = prompts.get(identity.lens);
+			// Only the four identity keys cross from the record; anything else a
+			// planted plan carries is dropped here.
+			const seat: PlannedSeat = {
+				rosterId: identity.rosterId,
+				provider: identity.provider,
+				model: identity.model,
+				lens: identity.lens,
+				lensPrompt: prompt ?? "",
+				...(row?.extraExtensionPaths === undefined
+					? {}
+					: { extraExtensionPaths: [...row.extraExtensionPaths] }),
+			};
+			const reason =
+				row === undefined
+					? `roster row "${identity.rosterId}" is not in the owner config`
+					: row.provider !== identity.provider || row.model !== identity.model
+						? `roster row "${identity.rosterId}" is now ${row.provider}/${row.model}, not ${identity.provider}/${identity.model}`
+						: prompt === undefined
+							? `"${identity.lens}" is not a ${plan.kind === "review" ? "lens" : "audit pass"} this package ships`
+							: undefined;
+			// Every planned seat must still be the owner's: a settled seat whose
+			// row is gone or changed is lost coverage too, never kept.
+			const kept = recorded[index];
+			if (reason !== undefined) {
+				lost.push(index);
+				settled[index] = unrecoverable(seat, plan, reason);
+			} else if (kept !== undefined) {
+				// Only the checked timing and outcome come from the seat file;
+				// the seat and its replay input are rebuilt here.
+				settled[index] = {
+					seat,
+					replay: replayOf(seat, plan),
+					lifecycle: kept.lifecycle,
+					outcome: kept.outcome,
+				};
+			} else {
+				settled[index] = undefined;
+			}
+			return seat;
+		});
+		const scopingNoteDropped = plan.scopingNote !== undefined;
+		const resume = {
+			settled,
+			lost,
+			heldLock: releaseLock,
+			scopingNoteDropped,
+			seal,
+		};
+		const seatBudgetMs = config.defaults.seatBudgetMs;
+		const priorRecordPaths =
+			plan.kind === "review"
+				? discoverPriorRecords(run.repoDir).map((entry) => entry.path)
+				: [];
+		onStart?.({
+			toRun: settled.filter((facts) => facts === undefined).length,
+		});
+		// From here the run owns the lock and releases it when it ends.
+		handedOver = true;
+		const result =
+			plan.kind === "review"
+				? await executeReview(
+						record,
+						{
+							repoDir: run.repoDir,
+							baseRef: plan.baseRef,
+							baseOid: plan.baseOid,
+							headOid: plan.headOid,
+							seats,
+							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
+							priorRecordPaths,
+						},
+						runOptions,
+						resume,
+					)
+				: await executeAudit(
+						record,
+						{
+							repoDir: run.repoDir,
+							revision: plan.headOid,
+							seats,
+							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
+						},
+						runOptions,
+						resume,
+					);
+		return {
+			...result,
+			kind: plan.kind,
+			runId: run.runId,
+			plan,
+			resumedSeats: result.resumedSeats ?? [],
+			lostSeats: lost.map((index) => seats[index] as PlannedSeat),
+			scopingNoteDropped,
+		};
+	} finally {
+		// Once handed over, the run releases the lock itself.
+		if (!handedOver) {
+			releaseLock?.();
+		}
+	}
+}
+
+/** Refuses a record that holds something a run could not safely write over. */
+function checkWritable(recordPath: string, plan: RunPlan): void {
+	try {
+		assertRecordWritable(recordPath, plan.seats.length);
+	} catch (error) {
+		refuse(error instanceof Error ? error.message : String(error));
+	}
+}
+
+/**
+ * Refuses a plan the panel planner could never have made: more seats than a
+ * panel may have, one lens or pass on more seats than its cap, or one seat
+ * identity twice. Settled and unrebuildable seats count too, so a planted
+ * plan cannot spend past the owner's limits.
+ */
+function checkPanelCaps(plan: RunPlan, runId: string): void {
+	const review = plan.kind === "review";
+	const maxSeats = review ? MAX_REVIEW_SEATS : MAX_AUDIT_SEATS;
+	if (plan.seats.length > maxSeats) {
+		refuse(
+			`run "${runId}" plans ${plan.seats.length} seats; a${review ? " review panel" : "n audit"} has at most ${maxSeats}`,
+		);
+	}
+	const identities = new Set<string>();
+	const perLens = new Map<string, number>();
+	for (const seat of plan.seats) {
+		const identity = JSON.stringify([seat.provider, seat.model, seat.lens]);
+		if (identities.has(identity)) {
+			refuse(`run "${runId}" plans the same seat twice`);
+		}
+		identities.add(identity);
+		perLens.set(seat.lens, (perLens.get(seat.lens) ?? 0) + 1);
+	}
+	for (const [lens, count] of perLens) {
+		if (review && lens !== HOLISTIC_LENS && count > SPECIALIST_SEAT_CAP) {
+			refuse(
+				`run "${runId}" plans lens "${lens}" on ${count} seats; at most ${SPECIALIST_SEAT_CAP}`,
+			);
+		}
+		if (!review && count > MAX_AUDIT_SEATS_PER_PASS) {
+			refuse(
+				`run "${runId}" plans pass "${lens}" on ${count} seats; at most ${MAX_AUDIT_SEATS_PER_PASS}`,
+			);
+		}
+	}
+}
+
+/**
+ * The replay input of a seat resume did not run, rebuilt from the seat (owner
+ * config plus package prompt) and the plan's frozen commit. Its snapshot
+ * worktree is gone, so the path is empty.
+ */
+function replayOf(
+	seat: PlannedSeat,
+	plan: RunPlan,
+): SeatOutcomeFacts["replay"] {
+	return {
+		provider: seat.provider,
+		model: seat.model,
+		lens: seat.lens,
+		lensPrompt: seat.lensPrompt,
+		baseRef: plan.baseOid,
+		worktree: "",
+		...(seat.extraExtensionPaths === undefined
+			? {}
+			: { extraExtensionPaths: [...seat.extraExtensionPaths] }),
+	};
+}
+
+/** A failed outcome for a seat resume could not rebuild; it never runs. */
+function unrecoverable(
+	seat: PlannedSeat,
+	plan: RunPlan,
+	reason: string,
+): SeatOutcomeFacts {
+	const now = Date.now();
+	return {
+		seat,
+		replay: replayOf(seat, plan),
+		lifecycle: {
+			startedAtMs: now,
+			settledAtMs: now,
+			durationMs: 0,
+			attempts: 1,
+			aborted: false,
+			tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			cost: 0,
+		},
+		outcome: {
+			kind: "failed",
+			class: "spawn-failure",
+			reason: `resume could not rebuild this seat: ${reason}`,
+		},
+	};
+}
+
+/**
+ * Reads the plan and checks its MAC over the exact bytes, before anything is
+ * parsed: a plan this owner's review_panel did not sign is refused whatever
+ * it says.
+ */
+function readPlan(
+	recordPath: string,
+	runId: string,
+	key: Buffer,
+): { plan: RunPlan; mac: string } {
+	const text = readRegularFile(path.join(recordPath, PLAN_FILE));
+	if (text === undefined) {
+		refuse(
+			`run "${runId}" has no resume plan, so it cannot be resumed: it stopped before its plan was written, when no seat had run yet, or a version without resume started it. Start a new run instead.`,
+		);
+	}
+	const mac = planMac(key, runId, text);
+	const macPath = path.join(recordPath, PLAN_MAC_FILE);
+	if (!pathExists(macPath)) {
+		// plan.json is written, then plan.mac: a run killed between the two
+		// leaves a plan with no MAC at all, and no seat has run yet.
+		refuse(
+			`run "${runId}" was interrupted before its plan was signed, so it cannot be resumed. Start a new run instead.`,
+		);
+	}
+	if (!macMatches(mac, readRegularFile(macPath))) {
+		refuse(
+			`run "${runId}" has no valid signature from this owner's record key, so this owner's review_panel did not write it, or wrote it for another run. Start a new run instead.`,
+		);
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		refuse(`run "${runId}" has an unreadable resume plan`);
+	}
+	if (!isRunPlan(parsed)) {
+		refuse(`run "${runId}" has an invalid resume plan`);
+	}
+	return { plan: parsed, mac };
+}
+
+function isRunPlan(value: unknown): value is RunPlan {
+	if (typeof value !== "object" || value === null) {
+		return false;
+	}
+	const plan = value as Partial<RunPlan>;
+	return (
+		plan.version === 1 &&
+		(plan.kind === "review" || plan.kind === "audit") &&
+		isLineText(plan.baseRef) &&
+		isOid(plan.baseOid) &&
+		isOid(plan.headOid) &&
+		(plan.scopingNote === undefined || typeof plan.scopingNote === "string") &&
+		Array.isArray(plan.seats) &&
+		plan.seats.length > 0 &&
+		plan.seats.every(
+			(seat) =>
+				typeof seat === "object" &&
+				seat !== null &&
+				isLineText(seat.rosterId) &&
+				isLineText(seat.provider) &&
+				isLineText(seat.model) &&
+				isLineText(seat.lens),
+		)
+	);
+}
+
+/**
+ * Plan text that reaches the report and the tool reply: a string with no
+ * control character, so it cannot start a Markdown heading or a fake finding.
+ */
+function isLineText(value: unknown): value is string {
+	if (typeof value !== "string") {
+		return false;
+	}
+	for (const char of value) {
+		const code = char.codePointAt(0) ?? 0;
+		if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/** Only a full hex object id; never something git could read as an option. */
+function isOid(value: unknown): value is string {
+	return (
+		typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)
+	);
+}
+
+function commitResolves(repoDir: string, oid: string): boolean {
+	try {
+		execFileSync("git", ["cat-file", "-e", `${oid}^{commit}`], {
+			cwd: repoDir,
+			stdio: "ignore",
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function isRealDirectory(target: string): boolean {
+	try {
+		return lstatSync(target).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function exists(target: string): boolean {
+	try {
+		lstatSync(target);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function isNotFound(error: unknown): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "ENOENT"
+	);
+}
+
+/** True when anything at all, even a dangling symlink, is at `target`. */
+function pathExists(target: string): boolean {
+	try {
+		lstatSync(target);
+		return true;
+	} catch {
+		return false;
+	}
+}

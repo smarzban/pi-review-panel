@@ -1,6 +1,6 @@
 import type { SeatIdentity } from "../seat/classify.js";
 import type { Finding } from "../seat/schema.js";
-import type { SeatOutcomeFacts, StampedFinding } from "./types.js";
+import type { PlannedSeat, SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 /** Identifies this run in the report header. */
 export type RunMeta = {
@@ -55,7 +55,52 @@ export type RenderInput = {
 	annotations?: RunAnnotations;
 	/** Durable snapshot-cleanup failure notice (AC-19), when any. */
 	cleanupError?: string;
+	/** Present only when a resume finished this record. */
+	resume?: ResumeFacts;
 };
+
+/**
+ * Which planned seats a resume ran again, which it kept as recorded, and
+ * which it could not rebuild from the owner config (lost coverage).
+ */
+export type ResumeFacts = {
+	rerun: PlannedSeat[];
+	kept: PlannedSeat[];
+	lost: PlannedSeat[];
+	/** The record named a scoping note that the re-run seats did not get. */
+	scopingNoteDropped?: boolean;
+};
+
+/** Said wherever a resume ran seats without the record's scoping note. */
+export const SCOPING_NOTE_DROPPED =
+	"The interrupted run had a scoping note. It is stored in the record, so the re-run seats did not get it.";
+
+/**
+ * States plainly that the record was finished by a resume and which seats
+ * ran when. Presentation only: it says nothing about the findings.
+ */
+export function renderResumeSection(resume: ResumeFacts | undefined): string[] {
+	if (resume === undefined) {
+		return [];
+	}
+	return [
+		"## Resumed run",
+		"",
+		"An earlier attempt at this run was interrupted. Seats that had settled",
+		"were kept as recorded; the rest ran again against the same head commit.",
+		"",
+		...resume.kept.map(
+			(seat) => `- Kept from the interrupted run: ${seatLabel(seat)}`,
+		),
+		...resume.rerun.map((seat) => `- Re-run: ${seatLabel(seat)}`),
+		...resume.lost.map(
+			(seat) =>
+				`- Not run, could not be rebuilt from the owner config: ${seatLabel(seat)}`,
+		),
+		"",
+		...(resume.scopingNoteDropped === true ? [SCOPING_NOTE_DROPPED, ""] : []),
+	];
+}
 
 /** Presentation order for a seat's stated severity (AC-14). */
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
@@ -87,10 +132,11 @@ export function renderReport(input: RenderInput): string {
 	const lines = [
 		`# Review run ${input.meta.runId}`,
 		"",
-		`Base ref: \`${input.meta.baseRef}\``,
+		`Base ref: ${inlineCode(input.meta.baseRef)}`,
 		`Base OID: \`${input.meta.baseOid}\``,
 		`HEAD OID: \`${input.meta.headOid}\``,
 		"",
+		...renderResumeSection(input.resume),
 		...renderCleanupSection(input.cleanupError),
 		...renderLedgerNoticesSection(annotations.notices),
 		...renderFindingsSection(input.stamped, annotations.flags),
@@ -253,6 +299,23 @@ function location(finding: Finding): string {
 		return `${finding.file}:${finding.line}`;
 	}
 	return `${finding.file}:${finding.line}-${finding.endLine}`;
+}
+
+/**
+ * One line of record text as a Markdown code span that it cannot close
+ * early: the fence is longer than any backtick run inside, and a control
+ * character (a newline could start a heading) shows as U+FFFD.
+ */
+export function inlineCode(text: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: the replacement is of control characters
+	const line = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "\uFFFD");
+	const longest = Math.max(
+		0,
+		...(line.match(/`+/g) ?? []).map((run) => run.length),
+	);
+	const fence = "`".repeat(longest + 1);
+	const pad = line.startsWith("`") || line.endsWith("`") ? " " : "";
+	return `${fence}${pad}${line}${pad}${fence}`;
 }
 
 function seatLabel(seat: SeatIdentity): string {

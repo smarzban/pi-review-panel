@@ -32,6 +32,14 @@ function fitPresentation(lines: string[]): string {
 	return [...head, "- additional row(s) omitted."].join("\n");
 }
 
+/** Cuts by whole code points, so a multibyte character is never split. */
+export function truncateCodePoints(text: string, maxChars: number): string {
+	const points = Array.from(text);
+	return points.length <= maxChars
+		? text
+		: `${points.slice(0, maxChars).join("")}…`;
+}
+
 function truncateUtf8(text: string, maxChars: number): string {
 	if (text.length <= maxChars) {
 		return text;
@@ -159,7 +167,14 @@ export function progressFromVerifyEvent(
 	};
 }
 
-export function renderReadiness(report: ReadinessReport): string {
+/**
+ * `reserveBytes` keeps room for text the caller appends after the report (the
+ * diagnose warning section), so the whole reply stays within the public cap.
+ */
+export function renderReadiness(
+	report: ReadinessReport,
+	reserveBytes = 0,
+): string {
 	const header = [
 		"# Review panel readiness",
 		`- Status: ${report.ready ? "ready" : "needs setup"}`,
@@ -177,7 +192,10 @@ export function renderReadiness(report: ReadinessReport): string {
 				? []
 				: [`- ${omitted} additional remediation row(s) omitted.`]),
 		].join("\n");
-		if (new TextEncoder().encode(text).length > MAX_PRESENTATION_BYTES) {
+		if (
+			new TextEncoder().encode(text).length >
+			MAX_PRESENTATION_BYTES - reserveBytes
+		) {
 			break;
 		}
 		rows.push(candidate);
