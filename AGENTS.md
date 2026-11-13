@@ -78,18 +78,23 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 
 ### Pi behaviors this repo depends on (verified against the shipped 1.5.2 build)
 
-- A prompt flag value that exists as a file is READ as that file. System-prompt paths must be
-  absolute paths to files we own, never literal text.
+- A system-prompt value that exists as a file is READ as that file, both from the CLI flag and
+  from the SDK loader's `systemPrompt` option. Seats pass literal role text through that option
+  (`src/seat/channel-profile.ts`), so it must never name an existing file; pass a prompt file only
+  as an absolute path to a file we own.
 - Built-in path args are normalized before use (Unicode-space fold, `@` strip, `~` expand,
-  `file://` decode). Guards must apply the same normalization.
+  `file://` decode, and on Windows the MSYS-style `/c/...` to `C:\...` drive rewrite). Guards must
+  apply the same normalization. The seat guard does not yet mirror the Windows drive rewrite (T491).
 - `read` retries with path variants. A confinement check must confine the whole candidate set for
   `read`.
 - Tool args are coerced then validated BEFORE `execute`. Declare a permissive envelope and validate
   inside `execute`.
-- A tool signals an error by THROWING, or by returning a result with `isError: true` (1.5.2
-  honors it; 0.84.1 ignored it). This repo's tools throw.
+- A tool signals an error by THROWING, or by returning a result with `isError: true` from
+  `execute` (1.5.2 honors that; 0.84.1 ignored it there, though an after-tool hook could set it).
+  This repo's tools throw.
 - An extension `tool_call` handler can veto with `{ block: true, reason }`.
-- Model patterns resolve across providers. Always pin `--provider` plus an exact model id.
+- Model patterns resolve across providers. Always pin the exact provider id plus an exact model
+  id (`--provider` and `--model` on the CLI; seats resolve both by exact id through the runtime).
 - The tarball ships through a narrow `files` allowlist. Internal artifacts never enter it.
 - Pi bundles some packages for extensions; those go in `peerDependencies` with `"*"`.
 - A distributed package installs production-only, so `devDependencies` are absent at runtime.
