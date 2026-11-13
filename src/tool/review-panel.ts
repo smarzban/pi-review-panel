@@ -77,6 +77,7 @@ import {
 	renderReviewProgress,
 	renderReviewResult,
 	renderVerifyResult,
+	truncateUtf8,
 } from "./review-presentation.js";
 
 /** Copy-paste example. Models truncated "/absolute/path" to "/". */
@@ -644,13 +645,19 @@ export function createReviewPanelTool(
 								],
 							};
 				// A warning never changes readiness: it is shown after the report,
-				// outside its remediation rows, at most 1,500 characters.
+				// outside its remediation rows, at most 1,500 characters, and the
+				// report keeps room for it so the reply stays within the cap. The
+				// cause already names the record key, so it is not prefixed again.
 				const warning = keyProblem?.warning
-					? `\n## Warnings\n- ${Array.from(`${keyRow}: ${keyProblem.cause}. ${keyProblem.fix}`).slice(0, 1_500).join("")}`
+					? `\n## Warnings\n- ${truncateUtf8(`${keyProblem.cause}. ${keyProblem.fix}`, 1_500)}`
 					: "";
+				const reserve = new TextEncoder().encode(warning).length;
 				return {
 					content: [
-						{ type: "text", text: `${renderReadiness(shown)}${warning}` },
+						{
+							type: "text",
+							text: `${renderReadiness(shown, reserve)}${warning}`,
+						},
 					],
 				};
 			}

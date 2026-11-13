@@ -1849,8 +1849,9 @@ describe("review_panel record key", () => {
 					expect(text).toContain("- Status: ready");
 					expect(text).not.toContain("Required remediation");
 					expect(text).toMatch(
-						/## Warnings\n- record key .*record-key: record key .*record-key: its folder .* is writable by its group/,
+						/## Warnings\n- record key .*record-key: its folder .* is writable by its group/,
 					);
+					expect(text.match(/record key /g)).toHaveLength(1);
 					expect(text).toContain(`chmod g-w ${configDir}`);
 					expect(readdirSync(configDir)).toEqual(before);
 				}),

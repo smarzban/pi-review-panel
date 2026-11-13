@@ -32,7 +32,7 @@ function fitPresentation(lines: string[]): string {
 	return [...head, "- additional row(s) omitted."].join("\n");
 }
 
-function truncateUtf8(text: string, maxChars: number): string {
+export function truncateUtf8(text: string, maxChars: number): string {
 	if (text.length <= maxChars) {
 		return text;
 	}
@@ -159,7 +159,14 @@ export function progressFromVerifyEvent(
 	};
 }
 
-export function renderReadiness(report: ReadinessReport): string {
+/**
+ * `reserveBytes` keeps room for text the caller appends after the report (the
+ * diagnose warning section), so the whole reply stays within the public cap.
+ */
+export function renderReadiness(
+	report: ReadinessReport,
+	reserveBytes = 0,
+): string {
 	const header = [
 		"# Review panel readiness",
 		`- Status: ${report.ready ? "ready" : "needs setup"}`,
@@ -177,7 +184,10 @@ export function renderReadiness(report: ReadinessReport): string {
 				? []
 				: [`- ${omitted} additional remediation row(s) omitted.`]),
 		].join("\n");
-		if (new TextEncoder().encode(text).length > MAX_PRESENTATION_BYTES) {
+		if (
+			new TextEncoder().encode(text).length >
+			MAX_PRESENTATION_BYTES - reserveBytes
+		) {
 			break;
 		}
 		rows.push(candidate);

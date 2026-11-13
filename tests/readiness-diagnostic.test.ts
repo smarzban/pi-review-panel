@@ -40,6 +40,25 @@ const baseConfig = {
 };
 
 describe("readiness diagnostic", () => {
+	it("keeps room for text appended after the report, so the whole reply stays under the cap", () => {
+		const report = {
+			ready: false,
+			rows: Array.from({ length: 100 }, (_, index) => ({
+				prerequisite: `prerequisite-${index}-${"x".repeat(500)}`,
+				remediation: `remediation-${index}-${"y".repeat(1_000)}`,
+			})),
+		};
+		const appended = `\n## Warnings\n- ${"w".repeat(1_500)}`;
+		const reserve = new TextEncoder().encode(appended).length;
+		const text = `${renderReadiness(report, reserve)}${appended}`;
+		expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(
+			MAX_PRESENTATION_BYTES,
+		);
+		expect(
+			new TextEncoder().encode(renderReadiness(report)).length,
+		).toBeGreaterThan(MAX_PRESENTATION_BYTES - reserve);
+	});
+
 	it("keeps ready status and bounded actionable rows under the 16 KiB public cap", () => {
 		const text = renderReadiness({
 			ready: false,
