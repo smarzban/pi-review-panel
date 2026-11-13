@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const SKILL_PATH = new URL("../skills/review-panel/SKILL.md", import.meta.url);
+const SKILL_PATH = new URL(
+	"../skills/review-panel-pi/SKILL.md",
+	import.meta.url,
+);
 
 function readSkill(): string {
 	return readFileSync(SKILL_PATH, "utf8");
@@ -23,7 +26,7 @@ describe("review skill frontmatter", () => {
 		const lines = frontmatter.split("\n").filter((line) => line.trim() !== "");
 
 		expect(lines.filter((line) => line.startsWith("name:"))).toEqual([
-			"name: review-panel",
+			"name: review-panel-pi",
 		]);
 		const descriptionLines = lines.filter((line) =>
 			line.startsWith("description:"),

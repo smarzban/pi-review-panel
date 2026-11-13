@@ -1,5 +1,5 @@
 ---
-name: review-panel
+name: review-panel-pi
 description: Use when asked to review a PR or diff, or audit a repository. Call review_panel with suggest, review, audit, diagnose, verify, resume, or comment. Never call it with {}. Judge findings and keep repair in the harness.
 ---
 
