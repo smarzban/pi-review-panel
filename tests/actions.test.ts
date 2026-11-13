@@ -21,8 +21,10 @@ import {
 	diagnoseAction,
 	ownerRecordKey,
 	ownerRecordKeyCheck,
+	parseSuggestArguments,
 	resumeAction,
 	reviewAction,
+	suggestAction,
 	verifyAction,
 } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
@@ -336,11 +338,52 @@ describe("review_panel actions without Pi", () => {
 				[
 					"# Review panel",
 					"2/2 voted · 0 findings",
+					"Seats: holistic (terra, claude)",
 					`Record: \`${path.join(repo, ".review-panel", "runs", "r-1")}\``,
 					"",
 					"None submitted.",
+				].join("\n"),
+			);
+		});
+	});
+
+	it("review lists a failed seat under Seats and under Lost", async () => {
+		await withRepository(async (repo) => {
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main", lenses: ["tests"] },
+				{
+					deps: deps({
+						runReview: async (runConfig) =>
+							({
+								recordPath: path.join(repo, ".review-panel", "runs", "r-2"),
+								outcomes: runConfig.seats.map((seat) =>
+									seat.rosterId === "claude" && seat.lens === "holistic"
+										? {
+												seat,
+												outcome: {
+													kind: "failed" as const,
+													class: "provider-error" as const,
+													reason: "quota",
+												},
+											}
+										: {
+												seat,
+												outcome: { kind: "voted" as const, findings: [] },
+											},
+								),
+							}) as unknown as RunReviewResult,
+					}),
+				},
+			);
+			expect(textOf(result)).toBe(
+				[
+					"# Review panel",
+					"3/4 voted · 0 findings",
+					"Seats: holistic (terra, claude), tests (terra, claude)",
+					"Lost: claude/holistic (provider-error)",
+					`Record: \`${path.join(repo, ".review-panel", "runs", "r-2")}\``,
 					"",
-					"Not a merge decision.",
+					"None submitted.",
 				].join("\n"),
 			);
 		});
@@ -361,11 +404,10 @@ describe("review_panel actions without Pi", () => {
 				[
 					"# Repository audit",
 					"2/2 voted · 0 findings",
+					"Seats: security (terra, claude)",
 					`Record: \`${path.join(repo, ".review-panel", "runs", "a-1")}\``,
 					"",
 					"None submitted.",
-					"",
-					"Not a merge decision.",
 				].join("\n"),
 			);
 		});
@@ -397,9 +439,8 @@ describe("review_panel actions without Pi", () => {
 				[
 					"# Review panel verify",
 					"0/0 voted · no kept ids · no regressions",
+					"Seats: fix-verification (terra)",
 					`Record: \`${path.join(repo, ".review-panel", "runs", "v-1")}\``,
-					"",
-					"Not a merge decision.",
 				].join("\n"),
 			);
 		});
@@ -430,9 +471,16 @@ describe("review_panel actions without Pi", () => {
 					}),
 				},
 			);
-			expect(textOf(result).split("\n")[0]).toBe(
+			const lines = textOf(result).split("\n");
+			expect(lines[0]).toBe(
 				`Resumed ${runId}: ran 1 of 2 planned seats again (seat-1/security); kept 1 as recorded.`,
 			);
+			expect(lines.slice(2, 5)).toEqual([
+				"# Review panel",
+				"2/2 voted · 0 findings",
+				"Seats: correctness (seat-0), security (seat-1)",
+			]);
+			expect(textOf(result)).not.toContain("merge decision");
 		});
 	});
 
@@ -823,5 +871,147 @@ describe("each action resolves its own repository", () => {
 			).toThrow("repository must be a non-empty absolute path");
 			expect(existsSync(keyPath)).toBe(false);
 		});
+	});
+});
+
+describe("suggest shows lenses and reasons before any seat runs", () => {
+	/** Every dependency that could run a seat, sign a record or post. */
+	function nothingRuns(overrides: ActionDependencies = {}): ActionDependencies {
+		const never = (name: string) => () => {
+			throw new Error(`${name} must not be called by suggest`);
+		};
+		return deps({
+			diagnose: never("diagnose") as ActionDependencies["diagnose"],
+			runReview: never("runReview") as ActionDependencies["runReview"],
+			runAudit: never("runAudit") as ActionDependencies["runAudit"],
+			runVerify: never("runVerify") as ActionDependencies["runVerify"],
+			resumeRun: never("resumeRun") as ActionDependencies["resumeRun"],
+			postComment: never("postComment") as ActionDependencies["postComment"],
+			recordKey: never("recordKey") as ActionDependencies["recordKey"],
+			checkRecordKey: never(
+				"checkRecordKey",
+			) as ActionDependencies["checkRecordKey"],
+			...overrides,
+		});
+	}
+
+	function commitSource(repo: string): void {
+		mkdirSync(path.join(repo, "src"), { recursive: true });
+		writeFileSync(
+			path.join(repo, "src", "run.ts"),
+			[
+				'import { execFileSync } from "node:child_process";',
+				"export const a = 1;",
+				'const hash = crypto.createHash("sha256");',
+				'const token = jwt.sign("x");',
+				"",
+			].join("\n"),
+		);
+		git(repo, ["add", "."]);
+		git(repo, ["commit", "-m", "source", "--quiet"]);
+	}
+
+	it("lists each rule's lens with its reason and evidence, owner defaults marked already on, and runs nothing", async () => {
+		await withRepository(async (repo) => {
+			commitSource(repo);
+			const result = await suggestAction(
+				{ repoDir: repo, base: "main~2", head: "main" },
+				{
+					deps: nothingRuns({
+						loadConfig: () => ({
+							...config,
+							defaults: { ...config.defaults, lenses: ["tests"] },
+						}),
+					}),
+				},
+			);
+			expect(textOf(result)).toBe(
+				[
+					"# Lens suggestions",
+					"main~2...main · holistic always runs · owner default lenses: tests",
+					"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run.ts:1, src/run.ts:3, src/run.ts:4)",
+					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (src/run.ts)",
+					"",
+					"No seat ran. Choose the lenses yourself, with a reason for each, and pass the extra ones to review as `lenses`.",
+				].join("\n"),
+			);
+		});
+	});
+
+	it("caps the evidence it shows and counts the rest", async () => {
+		await withRepository(async (repo) => {
+			const result = await suggestAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: nothingRuns({
+						suggestLenses: () => [
+							{
+								lens: "migrations",
+								reason: "changed file(s) match a migration/DDL path or extension",
+								evidence: ["a", "b", "c", "d", "e"].map((name) => ({
+									file: `db/${name}.sql`,
+								})),
+							},
+						],
+					}),
+				},
+			);
+			expect(textOf(result).split("\n").slice(1, 3)).toEqual([
+				"main~1...main · holistic always runs · owner default lenses: none",
+				"- migrations: changed file(s) match a migration/DDL path or extension (db/a.sql, db/b.sql, db/c.sql, +2 more)",
+			]);
+		});
+	});
+
+	it("says plainly when no rule matched, without implying a pass", async () => {
+		await withRepository(async (repo) => {
+			const text = textOf(
+				await suggestAction(
+					{ repoDir: repo, base: "main~1", head: "main" },
+					{ deps: nothingRuns() },
+				),
+			);
+			expect(text.split("\n").slice(2, 3)).toEqual([
+				"- No suggestion rule matched this change.",
+			]);
+			expect(text).not.toMatch(/\b(clean|ready|approved|pass(ed)?)\b/i);
+		});
+	});
+
+	it("refuses bad refs with review's messages", async () => {
+		await withRepository(async (repo) => {
+			for (const [base, head] of [
+				["nope", "main"],
+				["main", "--output=x"],
+				["main", "main"],
+			] as const) {
+				const review = reviewAction(
+					{ repoDir: repo, base, head },
+					{ deps: nothingRuns() },
+				).catch((error: Error) => error.message);
+				const suggest = suggestAction(
+					{ repoDir: repo, base, head },
+					{ deps: nothingRuns() },
+				).catch((error: Error) => error.message);
+				const [reviewMessage, suggestMessage] = await Promise.all([
+					review,
+					suggest,
+				]);
+				expect(typeof reviewMessage).toBe("string");
+				expect(suggestMessage).toBe(reviewMessage);
+			}
+		});
+	});
+
+	it("refuses a missing ref and any argument it does not take", () => {
+		expect(() => parseSuggestArguments({ head: "HEAD" })).toThrow(
+			"base must be a non-empty string",
+		);
+		expect(() =>
+			parseSuggestArguments({ base: "main", head: "HEAD", lenses: ["tests"] }),
+		).toThrow('suggest does not accept argument "lenses"');
+		expect(
+			parseSuggestArguments({ action: "suggest", base: "main", head: "HEAD" }),
+		).toEqual({ base: "main", head: "HEAD" });
 	});
 });

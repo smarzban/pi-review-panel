@@ -545,7 +545,9 @@ describe("review_panel public tool adapter", () => {
 				undefined,
 				{},
 			);
-			expect(response.content[0]?.text).toContain("Suggest: security");
+			expect(response.content[0]?.text).toContain(
+				"\n\nSuggest:\n- security: added subprocess line (src/a.ts:1)",
+			);
 		});
 	});
 
@@ -587,8 +589,58 @@ describe("review_panel public tool adapter", () => {
 				{},
 			);
 			const text = response.content[0]?.text ?? "";
-			expect(text).toContain("Suggest: security");
-			expect(text).not.toContain("Suggest: tests");
+			expect(text).toContain(
+				"\n\nSuggest:\n- security: added subprocess line (src/a.ts:1)",
+			);
+			expect(text).not.toContain("- tests:");
+		});
+	});
+
+	it("suggest runs no seat and returns each lens with its reason", async () => {
+		await withRepository(async (repository) => {
+			const tool = toolWith({
+				suggestLenses: () => [
+					{
+						lens: "security",
+						reason: "added subprocess line",
+						evidence: [{ file: "src/a.ts", line: 1 }],
+					},
+				],
+				runReview: async () => {
+					throw new Error("runReview must not be called");
+				},
+				recordKey: () => {
+					throw new Error("suggest must not touch the record key");
+				},
+			});
+			const response = await tool.execute(
+				"tool-call",
+				{ action: "suggest", repository, base: "HEAD~1", head: "HEAD" },
+				undefined,
+				undefined,
+				{},
+			);
+			const text = response.content[0]?.text ?? "";
+			expect(text.split("\n").slice(0, 3)).toEqual([
+				"# Lens suggestions",
+				"HEAD~1...HEAD · holistic always runs · owner default lenses: none",
+				"- security: added subprocess line (src/a.ts:1)",
+			]);
+			await expect(
+				tool.execute(
+					"tool-call",
+					{
+						action: "suggest",
+						repository,
+						base: "HEAD~1",
+						head: "HEAD",
+						seats: ["a"],
+					},
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow('suggest does not accept argument "seats"');
 		});
 	});
 
@@ -1275,8 +1327,10 @@ describe("review_panel resume action", () => {
 				`Resumed ${runId}: ran 2 of 3 planned seats again (seat-1/security, seat-2/tests); kept 1 as recorded.`,
 			);
 			expect(text).toContain("# Review panel");
-			expect(text).toContain("3/3 voted");
-			expect(text).toContain("Not a merge decision.");
+			expect(text).toContain(
+				"3/3 voted · 0 findings\nSeats: correctness (seat-0), security (seat-1), tests (seat-2)\n",
+			);
+			expect(text).not.toContain("merge decision");
 			expect(updates[0]).toMatch(/review started/);
 		});
 	});

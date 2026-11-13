@@ -253,7 +253,9 @@ describe("resume", () => {
 			]);
 			expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(true);
 			const report = readFileSync(path.join(recordPath, "report.md"), "utf8");
-			expect(report).toContain("3 planned seats: 3 voted, 0 failed.");
+			expect(report).toContain(
+				"3 planned seats: 3 voted, 0 failed.\nSeats: correctness (roster-0), security (roster-1), tests (roster-2)\n",
+			);
 			expect(report).toContain("## Resumed run");
 			expect(report).toContain(
 				"- Re-run: openai-codex/gpt-5.3-codex-1 (security)",
