@@ -66,8 +66,9 @@ row's own extensions load. They must be Pi identifiers you have already configur
 in Pi itself; the roster does not create or configure providers. pi-review-panel stores **no**
 credentials, endpoints, or provider definitions anywhere: the config file, the run record, and the
 audit `panel.json` carry none of that. A seat suppresses Pi's ambient extensions, skills, prompt
-templates, themes, and context files, so the only extensions it loads are the exact absolute paths
-named in that roster row's `extraExtensionPaths`. If a seat needs a provider or authentication
+templates, and themes, and loads no context files, so the only extension files it loads are the
+exact absolute paths named in that roster row's `extraExtensionPaths`; beside them runs only the
+package's own in-process guard that confines tool paths to the seat's snapshot. If a seat needs a provider or authentication
 extension, name it there. Only the seat's role tools are active: read-only `read`, `grep`, `find`,
 and `ls`, `git_diff` in every role except a repository audit, and one submit tool. Findings are
 reported only through that submit tool.
