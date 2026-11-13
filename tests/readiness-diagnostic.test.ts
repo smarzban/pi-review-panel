@@ -255,4 +255,39 @@ describe("readiness diagnostic", () => {
 			],
 		});
 	});
+
+	it("names the problem for a config that is not JSON, or sits inside the repository", async () => {
+		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-bad-"));
+		const repoDir = path.join(root, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const broken = path.join(root, "config.json");
+		writeFileSync(broken, '{"roster": [ "secret-ish text');
+		const notJson = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: broken },
+			home: path.join(root, "home"),
+			inspectModel: async () => ({ model: true, auth: true }),
+		});
+		expect(notJson.rows).toEqual([
+			{
+				prerequisite: "configuration",
+				remediation: "Fix the owner config: it is not valid JSON.",
+			},
+		]);
+		const inside = path.join(repoDir, "config.json");
+		writeFileSync(inside, "{}");
+		const inRepo = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: inside },
+			home: path.join(root, "home"),
+			inspectModel: async () => ({ model: true, auth: true }),
+		});
+		expect(inRepo.rows).toEqual([
+			{
+				prerequisite: "configuration",
+				remediation:
+					"Move the owner config outside the reviewed repository; a config inside it is refused.",
+			},
+		]);
+	});
 });

@@ -82,6 +82,10 @@ function splitJsonValues(text: string): string[] | undefined {
 			continue;
 		}
 		if (char === '"') {
+			if (depth === 0) {
+				// A listing is arrays; a bare top-level string is malformed.
+				return undefined;
+			}
 			inString = true;
 		} else if (char === "[" || char === "{") {
 			if (depth === 0) {

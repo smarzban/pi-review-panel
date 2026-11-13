@@ -1,5 +1,5 @@
 import type { PanelRecord, StampedFinding } from "../run/types.js";
-import { postedCode, postedText } from "./posted-text.js";
+import { fitCommentBody, postedCode, postedText } from "./posted-text.js";
 
 const OID_DISPLAY_LENGTH = 7;
 
@@ -151,7 +151,7 @@ export function closeoutCardParts(
 /** Presentation-only close-out card. Counts and lists, no merge claim. */
 export function renderCloseoutComment(input: CloseoutCommentInput): string {
 	const { head, rows } = closeoutCardParts(input);
-	return [...head, ...rows.flat()].join("\n");
+	return fitCommentBody(head, rows, [], "row");
 }
 
 function uniqueInOrder(
@@ -278,8 +278,11 @@ export function assembleCloseoutParts(
 	});
 }
 
-/** Derive the close-out card from a review record plus orchestrator judgment. */
+/**
+ * Derive the close-out card from a review record plus orchestrator judgment,
+ * cut by whole rows to stay under GitHub's comment limit.
+ */
 export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
 	const { head, rows } = assembleCloseoutParts(input);
-	return [...head, ...rows.flat()].join("\n");
+	return fitCommentBody(head, rows, [], "row");
 }

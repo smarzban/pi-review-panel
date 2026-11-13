@@ -978,7 +978,11 @@ describe("posted text is safe", () => {
 				},
 			);
 			const body = bodyOf(posts(gh.calls)[0]);
-			expect(body).not.toMatch(/@[A-Za-z]/);
+			// A code span is inert on GitHub, so the file name keeps its `@`.
+			expect(body).toContain("`src/@admin\uFFFDx\uFFFD.ts:3`");
+			expect(body.split("\n").map(outsideCodeSpans).join("\n")).not.toMatch(
+				/@[A-Za-z]/,
+			);
 			expect(body).not.toMatch(/(^|[^\u200D])#\d/);
 			expect(body).not.toMatch(/[\u202E\u202C\u2066\u2069\u200B]/);
 			expect(body).not.toContain("\u0007");
@@ -2416,7 +2420,10 @@ describe("fix round 2: concurrent verifies get distinct, sequential round number
 				verifyOnce(repo, gh, "v-2"),
 			]);
 			expect(
-				replies.map((reply) => textOf(reply).split("\n").at(-1)).sort(),
+				replies
+					.flatMap((reply) => textOf(reply).split("\n"))
+					.filter((line) => line.startsWith("PR comment:"))
+					.sort(),
 			).toEqual([
 				"PR comment: not posted (gh failed: boom; verify 1 is left for the next verify)",
 				"PR comment: posted to #12 (https://github.com/smarzban/demo/pull/12#issuecomment-101)",

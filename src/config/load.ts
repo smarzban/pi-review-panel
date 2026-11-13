@@ -31,6 +31,20 @@ export class ConfigInvalidError extends Error {
 	}
 }
 
+/**
+ * The owner config cannot be used for a reason readiness can name without
+ * echoing the file: it is not JSON, or it sits inside the repository.
+ */
+export class ConfigRefusedError extends Error {
+	readonly problem: "not-json" | "inside-repository";
+
+	constructor(message: string, problem: ConfigRefusedError["problem"]) {
+		super(message);
+		this.name = "ConfigRefusedError";
+		this.problem = problem;
+	}
+}
+
 export function resolveConfigPath({
 	env,
 	home,
@@ -96,8 +110,9 @@ export function loadConfig({
 
 	const repoRoot = path.resolve(repoDir);
 	if (isInside(repoRoot, path.resolve(selected))) {
-		throw new Error(
+		throw new ConfigRefusedError(
 			`Config path "${selected}" is inside the reviewed repository "${repoDir}" and is refused`,
+			"inside-repository",
 		);
 	}
 
@@ -130,8 +145,9 @@ export function loadConfig({
 	}
 
 	if (isInside(canonicalRoot, canonicalTarget)) {
-		throw new Error(
+		throw new ConfigRefusedError(
 			`Config path "${selected}" resolves inside the reviewed repository "${repoDir}" and is refused`,
+			"inside-repository",
 		);
 	}
 
@@ -148,8 +164,9 @@ export function loadConfig({
 	try {
 		document = JSON.parse(bytes);
 	} catch (error) {
-		throw new Error(
+		throw new ConfigRefusedError(
 			`Failed to parse config "${selected}": ${causeDetail(error)}`,
+			"not-json",
 		);
 	}
 

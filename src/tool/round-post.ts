@@ -17,15 +17,7 @@
  * slow call never blocks Pi, and one round's calls share one deadline.
  */
 import { execFile } from "node:child_process";
-import {
-	closeSync,
-	lstatSync,
-	openSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-	writeSync,
-} from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { PrCommentMode } from "../config/schema.js";
@@ -42,7 +34,22 @@ import {
 } from "./closeout-comment.js";
 import { loadCloseoutRun } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
-import { postedCode, postedText } from "./posted-text.js";
+import { fitCommentBody, postedCode, postedText } from "./posted-text.js";
+import {
+	claimRound,
+	type HeldClaim,
+	isRealFile,
+	markPosted,
+	ROUND_DEADLINE_MS,
+	type RoundClaim,
+	releaseClaim,
+	settleRound,
+	takeClaim,
+} from "./round-claim.js";
+
+export { fitCommentBody, GITHUB_COMMENT_LIMIT } from "./posted-text.js";
+export { claimRound, ROUND_DEADLINE_MS } from "./round-claim.js";
+
 import {
 	dispositionLabel,
 	findingAttribution,
@@ -56,10 +63,6 @@ import {
 	verifyFacts,
 } from "./review-presentation.js";
 
-/** GitHub refuses a comment body longer than this many characters. */
-export const GITHUB_COMMENT_LIMIT = 65_536;
-/** What a body is cut to, well under the limit. */
-const BODY_BUDGET = 60_000;
 /** Bytes the reply keeps free for the `PR comment:` lines. */
 export const ROUND_REPLY_RESERVE = 2_048;
 const REPLY_LINE_CHARS = 600;
@@ -71,28 +74,39 @@ const FILE_CHARS = 200;
 const OID_DISPLAY_LENGTH = 7;
 /** A stalled `gh` must not hold the run: each call gets at most this long. */
 const GH_TIMEOUT_MS = 30_000;
-/** Every `gh` call of one round together gets at most this long. */
-export const ROUND_DEADLINE_MS = 60_000;
 /** Room for a paginated comment listing that holds several full round comments. */
 const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
 export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
 /**
  * Created exclusively in the review's run record by the one verify that
- * posts its close-out; removed again if that post fails.
+ * posts its close-out, holding `{verifyRunId, pid, claimedAt}` and, once
+ * the card is on the PR, `postedAt`; removed again if that post fails. A
+ * claim left by a crash goes stale (see `round-claim.ts`).
  */
 export const CLOSEOUT_CLAIM_MARKER = "closeout.posted";
-/** Written in a verify's run record once its comment is on the PR. */
+/**
+ * Written in a verify's run record once its comment is on the PR. The
+ * review's record also gets `round-<N>.posted` (see `round-claim.ts`).
+ */
 export const ROUND_POSTED_MARKER = "round.posted";
 
 /**
  * Runs `gh`. It may answer synchronously or with a promise; the round awaits
- * either. `timeoutMs` is what is left of the round's deadline.
+ * either. `timeoutMs` is what is left of the round's deadline; `signal` is
+ * the run's, and aborting it kills a running `gh`.
  */
 export type RoundGhRunner = (
 	args: readonly string[],
-	options?: { cwd?: string; input?: string; timeoutMs?: number },
+	options?: GhCallOptions,
 ) => string | Promise<string>;
+
+export type GhCallOptions = {
+	cwd?: string;
+	input?: string;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+};
 
 /** What one review or verify call asks of posting. */
 export type RoundRequest = {
@@ -123,7 +137,7 @@ class RoundSkip extends Error {}
  */
 export function defaultRunGh(
 	args: readonly string[],
-	options?: { cwd?: string; input?: string; timeoutMs?: number },
+	options?: GhCallOptions,
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const child = execFile(
@@ -134,6 +148,7 @@ export function defaultRunGh(
 				cwd: options?.cwd,
 				timeout: options?.timeoutMs ?? GH_TIMEOUT_MS,
 				maxBuffer: GH_MAX_BUFFER,
+				...(options?.signal === undefined ? {} : { signal: options.signal }),
 			},
 			(error, stdout, stderr) => {
 				if (error !== null) {
@@ -175,44 +190,6 @@ function shortOid(oid: string): string {
 	return oid.slice(0, OID_DISPLAY_LENGTH);
 }
 
-/**
- * Joins the head, as many whole rows as fit, a line counting the rows cut,
- * and the tail, within {@link BODY_BUDGET} characters.
- */
-export function fitCommentBody(
-	head: readonly string[],
-	rows: readonly (readonly string[])[],
-	tail: readonly string[],
-	noun: string,
-): string {
-	const size = (lines: readonly string[]) =>
-		lines.reduce((sum, line) => sum + line.length + 1, 0);
-	const fixed = size(head) + size(tail) + 200;
-	let used = fixed;
-	let kept = 0;
-	for (const row of rows) {
-		const next = used + size(row);
-		if (next > BODY_BUDGET) {
-			break;
-		}
-		used = next;
-		kept += 1;
-	}
-	const cut = rows.length - kept;
-	const text = [
-		...head,
-		...rows.slice(0, kept).flat(),
-		...(cut === 0
-			? []
-			: [
-					"",
-					`- ${cut} ${noun}(s) cut to fit GitHub's comment limit; the full list is in the run record.`,
-				]),
-		...tail,
-	].join("\n");
-	return text.length <= BODY_BUDGET ? text : text.slice(0, BODY_BUDGET);
-}
-
 function errorText(error: unknown): string {
 	if (error === null || typeof error !== "object") {
 		return String(error);
@@ -234,6 +211,10 @@ function errorText(error: unknown): string {
 function ghReason(error: unknown): string {
 	if (error instanceof RoundSkip) {
 		return error.message;
+	}
+	const named = error as { name?: unknown; code?: unknown } | null;
+	if (named?.name === "AbortError" || named?.code === "ABORT_ERR") {
+		return "the run was interrupted";
 	}
 	if ((error as { code?: unknown } | null)?.code === "ENOENT") {
 		return "gh is not installed";
@@ -258,7 +239,10 @@ function parseJson(raw: string, what: string): unknown {
 
 type PrTarget = { repo: string; pr: number; author: string };
 
-type Gh = (args: readonly string[], stdin?: string) => Promise<string>;
+type Gh = ((args: readonly string[], stdin?: string) => Promise<string>) & {
+	/** When the round's `gh` time runs out, as `Date.now()` reads it. */
+	deadline: number;
+};
 
 /**
  * One round's `gh`: every call runs in the reviewed repository, stops once
@@ -266,7 +250,7 @@ type Gh = (args: readonly string[], stdin?: string) => Promise<string>;
  */
 function ghOf(ctx: RoundContext): Gh {
 	const deadline = Date.now() + ROUND_DEADLINE_MS;
-	return async (args, stdin) => {
+	const call = async (args: readonly string[], stdin?: string) => {
 		if (ctx.signal?.aborted) {
 			throw new RoundSkip("the run was interrupted");
 		}
@@ -280,8 +264,10 @@ function ghOf(ctx: RoundContext): Gh {
 			cwd: ctx.repoDir,
 			timeoutMs: Math.min(GH_TIMEOUT_MS, left),
 			...(stdin === undefined ? {} : { input: stdin }),
+			...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
 		});
 	};
+	return Object.assign(call, { deadline });
 }
 
 /** An explicit `pr` must be an open PR whose head is the run's head. */
@@ -444,13 +430,23 @@ function gateReason(ctx: RoundContext) {
 	return undefined;
 }
 
+/** A built body, and what to do once its post has settled. */
+type Built = {
+	body: string;
+	/**
+	 * Called once: with the target when the comment reached the PR, without
+	 * when it did not; what it returns is added to the reason.
+	 */
+	settle?: (postedTo?: PrTarget) => string | undefined;
+};
+
 /**
  * Looks the PR up, builds the body and posts it. Returns the target and the
  * reply line; never throws.
  */
 async function postOne(
 	ctx: RoundContext,
-	build: () => string,
+	build: (gh: Gh) => Built | Promise<Built>,
 ): Promise<{ line: string; target?: PrTarget; gh: Gh }> {
 	const gh = ghOf(ctx);
 	const gate = gateReason(ctx);
@@ -463,10 +459,13 @@ async function postOne(
 	} catch (error) {
 		return { line: notPosted("PR comment", ghReason(error)), gh };
 	}
-	let body: string;
+	let built: Built;
 	try {
-		body = build();
+		built = await build(gh);
 	} catch (error) {
+		if (error instanceof RoundSkip) {
+			return { line: notPosted("PR comment", error.message), gh };
+		}
 		return {
 			line: notPosted(
 				"PR comment",
@@ -475,12 +474,21 @@ async function postOne(
 			gh,
 		};
 	}
+	let url: string;
 	try {
-		const url = await createComment(gh, target, body);
-		return { line: posted("PR comment", target, url), target, gh };
+		url = await createComment(gh, target, built.body);
 	} catch (error) {
-		return { line: notPosted("PR comment", ghReason(error)), gh };
+		const note = built.settle?.();
+		return {
+			line: notPosted(
+				"PR comment",
+				`${ghReason(error)}${note === undefined ? "" : `; ${note}`}`,
+			),
+			gh,
+		};
 	}
+	built.settle?.(target);
+	return { line: posted("PR comment", target, url), target, gh };
 }
 
 function findingRow(entry: StampedFinding, panel: PlannedSeat[]): string[] {
@@ -549,7 +557,9 @@ export async function postReviewRound(
 	ctx: RoundContext,
 	facts: ReviewRoundFacts,
 ): Promise<string[]> {
-	return [(await postOne(ctx, () => renderReviewRound(facts))).line];
+	return [
+		(await postOne(ctx, () => ({ body: renderReviewRound(facts) }))).line,
+	];
 }
 
 /**
@@ -599,15 +609,6 @@ export type VerifyRoundFacts = {
 	/** The review record's findings, for titles; absent when unreadable. */
 	reviewFindings?: readonly StampedFinding[];
 };
-
-/** Records are untrusted: never follow a symlink or open a FIFO in one. */
-function isRealFile(target: string): boolean {
-	try {
-		return lstatSync(target).isFile();
-	} catch {
-		return false;
-	}
-}
 
 function runIdOf(recordPath: string): string {
 	return path.basename(recordPath);
@@ -879,45 +880,29 @@ async function closeoutAlreadyPosted(
 /**
  * Claims this review's one close-out by creating
  * {@link CLOSEOUT_CLAIM_MARKER} exclusively in its run record. Only the
- * claimer posts; another verify, even a concurrent one, finds it there.
- * Returns why the claim failed, or undefined.
+ * claimer posts; another verify, even a concurrent one, finds it there. A
+ * stale claim, left by a verify that crashed, is taken over, and the PR
+ * check that follows is what stops a second card.
  */
 function claimCloseout(
 	card: CloseoutCard,
 	verifyRunId: string,
-): string | undefined {
-	let fd: number;
-	try {
-		fd = openSync(
-			path.join(card.reviewRecord, CLOSEOUT_CLAIM_MARKER),
-			"wx",
-			0o600,
-		);
-	} catch (error) {
-		if ((error as { code?: unknown }).code === "EEXIST") {
-			return "another verify already claimed this review's close-out";
-		}
-		return `the close-out could not be claimed: ${inert(truncateCodePoints(oneLine(errorText(error)), 200))}`;
+): HeldClaim | { reason: string } {
+	const taken = takeClaim(
+		path.join(card.reviewRecord, CLOSEOUT_CLAIM_MARKER),
+		verifyRunId,
+	);
+	if (taken.kind === "taken") {
+		return taken.claim;
 	}
-	try {
-		writeSync(fd, `${verifyRunId}\n`);
-	} catch {
-		// The claim is the file itself; its text only names the claimer.
-	} finally {
-		closeSync(fd);
+	if (taken.kind === "held") {
+		return {
+			reason: "another verify already claimed this review's close-out",
+		};
 	}
-	return undefined;
-}
-
-/** Gives the claim back, so a later verify can post the close-out. */
-function releaseCloseout(card: CloseoutCard): void {
-	try {
-		rmSync(path.join(card.reviewRecord, CLOSEOUT_CLAIM_MARKER), {
-			force: true,
-		});
-	} catch {
-		// A claim that cannot be removed only stops a later automatic card.
-	}
+	return {
+		reason: `the close-out could not be claimed: ${inert(truncateCodePoints(oneLine(errorText(taken.error)), 200))}`,
+	};
 }
 
 /** Records in the verify's run record that its comment is on the PR. */
@@ -948,16 +933,52 @@ export async function postVerifyRound(
 	const { result } = facts;
 	const verifyRunId = runIdOf(result.recordPath);
 	let round = 1;
-	const verify = await postOne(ctx, () => {
-		round = verifyRoundNumber(ctx.repoDir, result.priorRunId, verifyRunId);
-		return renderVerifyRound(facts, round);
+	const verify = await postOne(ctx, async (gh) => {
+		const floor = verifyRoundNumber(
+			ctx.repoDir,
+			result.priorRunId,
+			verifyRunId,
+		);
+		const claim: RoundClaim | { reason: string } = await claimRound(
+			path.join(ctx.repoDir, ".review-panel", "runs", result.priorRunId),
+			floor,
+			verifyRunId,
+			{
+				deadline: gh.deadline,
+				...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+			},
+		);
+		if ("reason" in claim) {
+			throw new RoundSkip(claim.reason);
+		}
+		round = claim.round;
+		let body: string;
+		try {
+			body = renderVerifyRound(facts, round);
+		} catch (error) {
+			settleRound(claim, false);
+			throw error;
+		}
+		return {
+			body,
+			settle: (postedTo) => {
+				if (postedTo !== undefined) {
+					// The verify's own marker first, then the review's: a
+					// verify counting rounds meanwhile sees one or the other.
+					recordPosted(result.recordPath, postedTo, round);
+					settleRound(claim, true);
+					return undefined;
+				}
+				settleRound(claim, false);
+				return `verify ${round} is left for the next verify`;
+			},
+		};
 	});
 	const lines = [verify.line];
 	if (verify.target === undefined) {
 		// The `PR comment:` line already says why nothing was posted.
 		return lines;
 	}
-	recordPosted(result.recordPath, verify.target, round);
 	const blocker = closeoutBlocker(result);
 	if (blocker !== undefined) {
 		lines.push(notPosted("PR close-out", blocker));
@@ -968,15 +989,17 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", card.reason));
 		return lines;
 	}
-	const unclaimed = claimCloseout(card, verifyRunId);
-	if (unclaimed !== undefined) {
-		lines.push(notPosted("PR close-out", unclaimed));
+	const claim = claimCloseout(card, verifyRunId);
+	if ("reason" in claim) {
+		lines.push(notPosted("PR close-out", claim.reason));
 		return lines;
 	}
 	try {
 		if (
 			await closeoutAlreadyPosted(verify.gh, verify.target, card.reviewRunId)
 		) {
+			// The card is there: keep the claim, marked posted.
+			markPosted(claim);
 			lines.push(
 				notPosted(
 					"PR close-out",
@@ -986,9 +1009,10 @@ export async function postVerifyRound(
 			return lines;
 		}
 		const url = await createComment(verify.gh, verify.target, card.body);
+		markPosted(claim);
 		lines.push(posted("PR close-out", verify.target, url));
 	} catch (error) {
-		releaseCloseout(card);
+		releaseClaim(claim);
 		lines.push(notPosted("PR close-out", ghReason(error)));
 	}
 	return lines;
@@ -1032,6 +1056,11 @@ export function assertVerifyJudgment(
 			);
 		}
 		if (kept.has(id)) {
+			if (entry.finding.severity !== "low") {
+				throw new Error(
+					`Verify refused: ${id} is ${entry.finding.severity} and kept; only a low finding can also be listed as low/advisory`,
+				);
+			}
 			// A kept low counts as kept; listing it here as well is harmless.
 			continue;
 		}

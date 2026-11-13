@@ -25,8 +25,9 @@ rows and package-owned lens prompts by name; the calling agent chooses only amon
 Runs record under `<repo>/.review-panel/runs/`, each seat as it settles. `resume` finishes an
 interrupted review or audit record, running only its unsettled seats at the recorded head. Review
 and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
-the repository); resume refuses an unsigned plan and re-runs an unsigned seat. Verify
-only reads those trees. The output is a
+the repository); resume refuses an unsigned plan and re-runs an unsigned seat. Verify reads
+those trees and writes only its posting claims into the review's record (`round-<N>.claim`, which
+becomes `round-<N>.posted`, and `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
 review-derived semantic stop signal: agents judge, and the human is the merge gate.
@@ -65,14 +66,18 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Review and verify post each round to the open PR by default, always as a new comment that is
   never edited or deleted; audit and resume never post. The automatic close-out posts once per
   review (an exclusive `closeout.posted` claim in the review's run record, then a check of the PR's
-  comments), only after a verify with no lost seat, every voting seat marking every kept id
+  comments; a claim left by a crash goes stale and is taken over), only after a verify with no lost seat, every voting seat marking every kept id
   resolved, and no regressions. An explicit `pr` must be open with the run's head as its head.
   Every posted body (review, verify, the automatic close-out and the manual `comment` card) goes
   through `src/tool/posted-text.ts`: seat text, record fields and refs are one line of
   backslash-escaped plain text with a zero-width joiner after every `@`, `＠` and `#`, in `GH-123`
-  and in `://` / `www.`, and control, bidi and invisible characters replaced; file names and ids
-  are code spans with a fence longer than any backtick run inside. Bodies are capped under 65,536
-  characters and sent to `gh` on stdin; `gh` runs asynchronously within one deadline per round.
+  and in `://`, the dot of `www.` backslash-escaped, and control, bidi and invisible characters
+  replaced (an emoji keeps its U+FE0F and in-sequence joiners); file names and ids are code spans
+  with a fence longer than any backtick run inside, with nothing escaped or joined in them. Bodies
+  are capped under 65,536 characters and sent to `gh` on stdin; `gh` runs asynchronously within
+  one deadline per round, and an interrupt kills it. Each verify claims its round number
+  atomically (`round-<N>.claim` in the review's record), so concurrent verifies post distinct,
+  sequential numbers.
   Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
