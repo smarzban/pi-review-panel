@@ -38,11 +38,6 @@ export type LoadRecordKeyOptions = {
 	create: boolean;
 	/** The reviewed repository; a key inside it is refused. */
 	repoDir: string;
-	/**
-	 * Test seam only: runs after the new key's temp file is written and before
-	 * it is linked into place, so a test can interleave a second creator.
-	 */
-	beforeLink?: () => void;
 };
 
 /**
@@ -86,7 +81,7 @@ export function loadRecordKey(
 				"Start a new review or audit instead; it creates the key.",
 			);
 		}
-		createKey(keyPath, options.beforeLink);
+		createKey(keyPath);
 	}
 	return readKey(keyPath);
 }
@@ -246,11 +241,10 @@ function notWritableFix(dir: string): string {
 	return `Run chmod u+w ${dir} if you own it. If it is read-only by design (a read-only mount, a Nix or home-manager store link), set PI_REVIEW_PANEL_CONFIG to a config.json in a writable folder only you can write, mode 0700.`;
 }
 
-function createKey(keyPath: string, beforeLink?: () => void): void {
+function createKey(keyPath: string): void {
 	const temp = `${keyPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
 	try {
 		writeFileSync(temp, randomBytes(KEY_BYTES), { flag: "wx", mode: 0o600 });
-		beforeLink?.();
 		try {
 			linkSync(temp, keyPath);
 		} catch (error) {

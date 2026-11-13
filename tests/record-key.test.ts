@@ -23,6 +23,27 @@ import {
 } from "../src/run/record-key.js";
 import { testPlanMac, testSeatMac } from "./fixtures/record-key.js";
 
+/**
+ * `linkSync` passes through, except that a test can run something at the
+ * moment a key's temp file is written and not yet linked into place.
+ */
+const linkHook = vi.hoisted(() => ({
+	beforeLink: undefined as (() => void) | undefined,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const real = await importOriginal<typeof import("node:fs")>();
+	return {
+		...real,
+		linkSync: (existing: string, target: string) => {
+			const act = linkHook.beforeLink;
+			linkHook.beforeLink = undefined;
+			act?.();
+			return real.linkSync(existing, target);
+		},
+	};
+});
+
 // Every test works in a temporary config folder; none touches the owner's
 // real ~/.pi-review-panel/.
 let root: string;
@@ -254,15 +275,12 @@ describe("the record key's owner and folder", () => {
 describe("the record key creation race", () => {
 	it("gives two creators one key: the loser reads the winner's bytes", () => {
 		let other: Buffer | undefined;
-		const mine = loadRecordKey(keyPath, {
-			create: true,
-			repoDir,
-			// The second creator runs in full between the first one's temp
-			// write and its link, so the first one's link meets EEXIST.
-			beforeLink: () => {
-				other = loadRecordKey(keyPath, { create: true, repoDir });
-			},
-		});
+		// The second creator runs in full between the first one's temp write
+		// and its link, so the first one's link meets EEXIST.
+		linkHook.beforeLink = () => {
+			other = loadRecordKey(keyPath, { create: true, repoDir });
+		};
+		const mine = loadRecordKey(keyPath, { create: true, repoDir });
 		expect(other).toBeDefined();
 		expect(mine.equals(other as Buffer)).toBe(true);
 		expect(readFileSync(keyPath).equals(mine)).toBe(true);
