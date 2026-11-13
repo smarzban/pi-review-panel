@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A seat whose provider is registered by one of its own `extraExtensionPaths` extensions (for example `claude-code` from `pi-claude-code`) now runs, and `diagnose` reports it ready. `diagnose` now loads each row's configured extensions and runs the provider's own auth check; it still starts no session and runs no model.
+
 ## [0.3.0] - 2026-10-26
 
 ### Added

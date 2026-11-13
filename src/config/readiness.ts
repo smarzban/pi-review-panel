@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 // @ts-expect-error The initial scaffold has no Node type declarations.
 import path from "node:path";
 
+import {
+	type ExtensionFailure,
+	resolveSeatRuntime,
+	type SeatServicesSdk,
+} from "../seat/seat-runtime.js";
 import { type ConfigEnv, loadConfig } from "./load.js";
 import type { Config } from "./schema.js";
 
@@ -18,71 +23,67 @@ export type ReadinessReport = {
 	rows: ReadinessRow[];
 };
 
-export type ModelInspection = { model: boolean; auth: boolean };
+/**
+ * One inspected roster key. `extensionFailures` names each configured
+ * extension that failed to load or to register its providers.
+ */
+export type ModelInspection = {
+	model: boolean;
+	auth: boolean;
+	extensionFailures?: ExtensionFailure[];
+};
 
 export type ReadinessInput = {
 	repoDir: string;
 	env: ConfigEnv;
 	home: string;
 	/** Test seam, production resolves the configured Pi model and provider auth. */
-	inspectModel?: (provider: string, model: string) => Promise<ModelInspection>;
-};
-
-type ModelRuntimeLike = {
-	getModel: (provider: string, model: string) => unknown;
-	getAuth: (
+	inspectModel?: (
 		provider: string,
-		overrides: { env: Record<string, string> },
-	) => Promise<unknown>;
+		model: string,
+		extensionPaths: readonly string[],
+	) => Promise<ModelInspection>;
 };
 
-type ModelRuntimeModule = {
-	ModelRuntime: {
-		create: (options: {
-			allowModelNetwork: false;
-			authPath: string;
-			modelsPath: string;
-		}) => Promise<ModelRuntimeLike>;
-	};
-};
-
-async function inspectConfiguredModels(
-	rows: Array<{ provider: string; model: string }>,
-	input: Pick<ReadinessInput, "env" | "home">,
-): Promise<Map<string, ModelInspection>> {
+async function inspectConfiguredModel(
+	provider: string,
+	model: string,
+	extensionPaths: readonly string[],
+	input: Pick<ReadinessInput, "env" | "home" | "repoDir">,
+): Promise<ModelInspection> {
 	const moduleName = "@earendil-works/pi-coding-agent";
-	const { ModelRuntime } = (await import(moduleName)) as ModelRuntimeModule;
+	const sdk = (await import(moduleName)) as SeatServicesSdk;
 	const agentDir =
 		input.env.PI_CODING_AGENT_DIR ?? path.join(input.home, ".pi", "agent");
-	const runtime = await ModelRuntime.create({
-		allowModelNetwork: false,
-		authPath: path.join(agentDir, "auth.json"),
-		modelsPath: path.join(agentDir, "models.json"),
-	});
 	const authEnv = Object.fromEntries(
 		Object.entries(input.env).filter(
 			(entry): entry is [string, string] => entry[1] !== undefined,
 		),
 	);
-	const result = new Map<string, ModelInspection>();
-	for (const row of rows) {
-		const key = `${row.provider}\u0000${row.model}`;
-		if (result.has(key)) {
-			continue;
-		}
-		result.set(key, {
-			model: runtime.getModel(row.provider, row.model) !== undefined,
-			auth:
-				(await runtime.getAuth(row.provider, { env: authEnv })) !== undefined,
-		});
-	}
-	return result;
+	const runtime = await resolveSeatRuntime({
+		sdk,
+		cwd: input.repoDir,
+		agentDir,
+		provider,
+		model,
+		extensionPaths,
+		authEnv,
+	});
+	return {
+		model: runtime.model !== undefined,
+		auth: runtime.authenticated,
+		extensionFailures: runtime.extensionFailures,
+	};
 }
 
 /**
- * Checks setup only. It neither starts a reviewer session nor executes a
- * scanner/project-check command. The caller receives exactly one row for each
- * unavailable prerequisite and can repair setup before the first launch.
+ * Checks setup only. It neither starts a reviewer session, runs a model, nor
+ * executes a scanner/project-check command. It does load each roster row's
+ * configured `extraExtensionPaths`, exactly as that row's seat would, because
+ * an extension can register the row's provider; that runs the extension's
+ * code and its provider auth check (for example asking a provider CLI whether
+ * it is logged in). The caller receives exactly one row for each unavailable
+ * prerequisite and can repair setup before the first launch.
  */
 export async function diagnoseReadiness(
 	input: ReadinessInput,
@@ -107,41 +108,56 @@ export async function diagnoseReadiness(
 		};
 	}
 
-	let inspections: Map<string, ModelInspection> | undefined;
-	if (input.inspectModel === undefined) {
-		try {
-			inspections = await inspectConfiguredModels(config.roster, input);
-		} catch {
-			// A missing runtime, credential store, or auth inspection is a setup
-			// failure, not a tool failure. Each configured pair receives its
-			// concrete model/auth remediation below.
-			inspections = new Map();
-		}
-	}
 	const rows: ReadinessRow[] = [];
-	const seenModels = new Set<string>();
+	const seenRows = new Set<string>();
+	const push = (row: ReadinessRow): void => {
+		if (!seenRows.has(row.prerequisite)) {
+			seenRows.add(row.prerequisite);
+			rows.push(row);
+		}
+	};
+	const inspect = input.inspectModel ?? inspectConfiguredModel;
+
+	// Each row is inspected with only its own extensions: a provider that row
+	// A's extension registers must not make row B ready.
+	const seenKeys = new Set<string>();
 	for (const roster of config.roster) {
-		const key = `${roster.provider}\u0000${roster.model}`;
-		if (seenModels.has(key)) {
+		const extensions = [
+			...new Set((roster.extraExtensionPaths ?? []).filter(existsSync)),
+		].sort();
+		const key = [roster.provider, roster.model, ...extensions].join("\u0000");
+		if (seenKeys.has(key)) {
 			continue;
 		}
-		seenModels.add(key);
+		seenKeys.add(key);
 		let inspection: ModelInspection | undefined;
 		try {
-			inspection = input.inspectModel
-				? await input.inspectModel(roster.provider, roster.model)
-				: inspections?.get(key);
+			inspection = await inspect(
+				roster.provider,
+				roster.model,
+				extensions,
+				input,
+			);
 		} catch {
+			// A missing runtime, credential store, or auth inspection is a setup
+			// failure, not a tool failure. The pair receives its concrete
+			// model/auth remediation below.
 			inspection = undefined;
 		}
+		for (const failure of inspection?.extensionFailures ?? []) {
+			push({
+				prerequisite: `extension ${failure.extension}`,
+				remediation: `Fix the configured extension at "${failure.extension}", which failed to load: ${failure.message}`,
+			});
+		}
 		if (inspection?.model !== true) {
-			rows.push({
+			push({
 				prerequisite: `model ${roster.provider}/${roster.model}`,
 				remediation: `Configure the exact Pi model "${roster.provider}/${roster.model}".`,
 			});
 		}
 		if (inspection?.auth !== true) {
-			rows.push({
+			push({
 				prerequisite: `authentication ${roster.provider}`,
 				remediation: `Authenticate the Pi provider "${roster.provider}" for the configured model.`,
 			});
@@ -156,7 +172,7 @@ export async function diagnoseReadiness(
 			}
 			seenExtensions.add(extension);
 			if (!existsSync(extension)) {
-				rows.push({
+				push({
 					prerequisite: `extension ${extension}`,
 					remediation: `Install or correct the configured extension at "${extension}".`,
 				});

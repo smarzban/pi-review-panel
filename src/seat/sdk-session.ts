@@ -1,4 +1,5 @@
 import { DEFAULT_SEAT_PROFILE, type SeatProfile } from "./channel-profile.js";
+import { resolveSeatRuntime, type SeatServicesSdk } from "./seat-runtime.js";
 
 const PI_SDK_PACKAGE = "@earendil-works/pi-coding-agent";
 
@@ -40,21 +41,8 @@ export type SdkSession = {
 
 export type SdkSeatSession = { session: SdkSession };
 
-type PiSdk = {
-	ModelRuntime: {
-		create: () => Promise<{
-			getModel: (provider: string, model: string) => unknown;
-			getAuth: (model: unknown) => Promise<unknown>;
-		}>;
-	};
-	SettingsManager: { inMemory: (settings?: unknown) => unknown };
+type PiSdk = SeatServicesSdk & {
 	SessionManager: { inMemory: (cwd?: string) => unknown };
-	DefaultResourceLoader: new (
-		options: Record<string, unknown>,
-	) => {
-		reload: () => Promise<void>;
-		getExtensions: () => { errors: Array<{ error: string }> };
-	};
 	getAgentDir: () => string;
 	createAgentSession: (
 		options: Record<string, unknown>,
@@ -83,60 +71,57 @@ function profileFor(spec: SeatSpec<SeatProfile>): SeatProfile {
 /**
  * Opens one isolated in-memory SDK session. All ambient resources are
  * suppressed, while explicit external extensions remain available through the
- * loader's temporary extension path mechanism. No host UI binding is made,
- * so model output cannot be written to host interactive streams.
+ * loader's temporary extension path mechanism. The model and auth resolve only
+ * after those extensions load and register their providers, and the session
+ * reuses that same loader and runtime, so each extension loads once per seat.
+ * No host UI binding is made, so model output cannot be written to host
+ * interactive streams.
  */
 export async function createSdkSeatSession(
 	input: SdkSeatSessionInput,
 ): Promise<SdkSeatSession> {
 	const sdk = input.sdk ?? (await loadPiSdk());
-	const runtime = await sdk.ModelRuntime.create();
-	const model = runtime.getModel(input.spec.provider, input.spec.model);
+	const profile = profileFor(input.spec);
+	const { services, model, authenticated, extensionFailures } =
+		await resolveSeatRuntime({
+			sdk,
+			cwd: input.spec.worktree,
+			agentDir: sdk.getAgentDir(),
+			provider: input.spec.provider,
+			model: input.spec.model,
+			extensionPaths: input.spec.extraExtensionPaths ?? [],
+			loaderOptions: {
+				systemPrompt: profile.systemPrompt,
+				extensionFactories: [
+					(pi: { on: (event: string, handler: unknown) => void }) =>
+						pi.on("tool_call", input.confinementGuard),
+				],
+			},
+		});
+	if (extensionFailures.length > 0) {
+		const failure = extensionFailures[0];
+		throw new Error(
+			`seat extension failed to load: ${failure.extension}: ${failure.message}`,
+		);
+	}
 	if (model === undefined) {
 		throw new Error(
 			`seat model is not configured: ${input.spec.provider}/${input.spec.model}`,
 		);
 	}
-	const auth = await runtime.getAuth(model);
-	if (auth === undefined) {
+	if (!authenticated) {
 		throw new Error(
 			`seat model is not authenticated: ${input.spec.provider}/${input.spec.model}`,
 		);
 	}
 
-	const profile = profileFor(input.spec);
-	const settingsManager = sdk.SettingsManager.inMemory({});
-	const loader = new sdk.DefaultResourceLoader({
-		cwd: input.spec.worktree,
-		agentDir: sdk.getAgentDir(),
-		settingsManager,
-		additionalExtensionPaths: input.spec.extraExtensionPaths ?? [],
-		noExtensions: true,
-		noSkills: true,
-		noPromptTemplates: true,
-		noThemes: true,
-		noContextFiles: true,
-		systemPrompt: profile.systemPrompt,
-		extensionFactories: [
-			(pi: { on: (event: string, handler: unknown) => void }) =>
-				pi.on("tool_call", input.confinementGuard),
-		],
-	});
-	await loader.reload();
-	const extensionErrors = loader.getExtensions().errors;
-	if (extensionErrors.length > 0) {
-		throw new Error(
-			`seat extension failed to load: ${extensionErrors[0].error}`,
-		);
-	}
-
 	return sdk.createAgentSession({
 		cwd: input.spec.worktree,
-		modelRuntime: runtime,
+		modelRuntime: services.modelRuntime,
 		model,
-		settingsManager,
+		settingsManager: services.settingsManager,
 		sessionManager: sdk.SessionManager.inMemory(input.spec.worktree),
-		resourceLoader: loader,
+		resourceLoader: services.resourceLoader,
 		noTools: "all",
 		tools: [...profile.tools],
 		customTools: input.tools,

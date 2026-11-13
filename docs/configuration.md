@@ -68,6 +68,16 @@ uses `--no-extensions`, so the only extensions it loads are the shipped Review p
 the exact absolute paths named in that roster row's `extraExtensionPaths`. If a seat needs a
 provider or authentication extension, name it there.
 
+A row's `provider` may come from one of its own `extraExtensionPaths`, for example `claude-code`
+from `pi-claude-code`. The seat loads that row's extensions first, then registers the providers they
+declare, and only then resolves the model and its authentication. Another row's extension never
+makes a provider visible to this row.
+
+The `diagnose` action checks each roster row the same way, so it loads and runs the code of every
+configured extension, including the provider's own authentication check (for `claude-code`, asking
+the Claude Code CLI whether it is logged in). It still starts no reviewer session and runs no model.
+An extension that fails to load gives a row that names it.
+
 ## Package-owned prompts
 
 Holistic review is implicit: a bare review runs `holistic` on every `defaults.seats` alias.
