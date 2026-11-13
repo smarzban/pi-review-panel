@@ -82,13 +82,14 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   `round-<N>.claim`, checks `round-<N>.posted` again after the create, and on a post writes
   `round-<N>.posted` (`wx`) and then deletes its claim. A stale claim (older than the round
   deadline plus 5 s, or made on this host by a process that is gone) stays where it is and is
-  skipped, so a crash can leave a gap in the verify numbering, never a duplicate. The close-out
-  uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify to the PR's
-  comments, then to the next generation; only a generation's creator posts, and a posted card
-  writes `closeout.posted` (`wx`), which stops every later verify. The close-out posts at most once
-  per review, except after a crash between GitHub accepting the card and `closeout.posted` being
-  written; the PR-comment check catches that case.
-  Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
+  skipped, so a crash can leave a gap in the verify numbering, never a duplicate (a POST `gh`
+  reports as failed after GitHub accepted it gives its number back; that repeat is set aside). The
+  close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
+  to the PR's comments, then to the next generation; only a generation's creator posts, and a
+  posted card writes `closeout.posted` (`wx`), which stops every later verify. The close-out posts
+  at most once per review, except after a crash between GitHub accepting the card and
+  `closeout.posted` being written; the PR-comment check catches that case.
+- Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
   `publish.yml` checks the tag matches the version, publishes to npm, and creates the GitHub release

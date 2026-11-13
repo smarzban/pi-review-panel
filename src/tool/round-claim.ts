@@ -243,8 +243,10 @@ const sleep = (ms: number) =>
  * - A stale claim stays where it is and N+1 is tried.
  * - A live claim is waited on, so a failed post gives its number back and
  *   no round is skipped. Waiting stops on an interrupt, or once less than
- *   `reserveMs` (default {@link POST_RESERVE_MS}) of `deadline` is left;
- *   the verify then posts no round, and the reason says so.
+ *   `reserveMs` (default {@link POST_RESERVE_MS}) of `deadline` is left,
+ *   and a verify that has waited takes no claim after that point; it then
+ *   posts no round, and the reason says so. A verify that never waited
+ *   takes a free number whatever time is left.
  *
  * `beforeCreate` runs just before each create (tests park there).
  */
@@ -265,9 +267,14 @@ export async function claimRound(
 	}
 	const reserve = options.reserveMs ?? POST_RESERVE_MS;
 	let round = Math.max(1, floor);
+	let waited = false;
 	for (;;) {
 		if (options.signal?.aborted) {
 			return { reason: "the run was interrupted" };
+		}
+		if (waited && Date.now() >= options.deadline - reserve) {
+			// Not even a claim freed just now is taken this late.
+			return { reason: `another verify is still posting verify ${round}` };
 		}
 		const posted = roundPostedFile(recordDir, round);
 		if (exists(posted)) {
@@ -305,6 +312,7 @@ export async function claimRound(
 			return { reason: `another verify is still posting verify ${round}` };
 		}
 		await sleep(options.pollMs ?? POLL_MS);
+		waited = true;
 	}
 }
 

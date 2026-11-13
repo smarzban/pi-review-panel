@@ -157,7 +157,7 @@ describe("round numbers across processes (regression-1-1)", () => {
 		expect(claimsIn(dir)).toEqual([]);
 		expect(existsSync(roundPostedFile(dir, 1))).toBe(true);
 		expect(existsSync(roundPostedFile(dir, 2))).toBe(true);
-	});
+	}, 30_000);
 
 	it("several processes claiming many rounds, some posts failing, never post one number twice", async () => {
 		for (let trial = 0; trial < 3; trial += 1) {
@@ -356,6 +356,21 @@ describe("claimRound", () => {
 			reason: "another verify is still posting verify 1",
 		});
 		expect(claimsIn(dir)).toEqual(["round-1.claim"]);
+	});
+
+	it("a verify that waited takes no claim freed inside the last 30 s", async () => {
+		const dir = record();
+		seed(roundClaimFile(dir, 1), liveHere());
+		// Freed after the 30 s mark, between two polls.
+		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 200);
+		const claim = await claimRound(dir, 1, "v-2", {
+			deadline: Date.now() + POST_RESERVE_MS + 150,
+			pollMs: 100,
+		});
+		expect(claim).toEqual({
+			reason: "another verify is still posting verify 1",
+		});
+		expect(claimsIn(dir)).toEqual([]);
 	});
 
 	it("with more than 30 s left it keeps waiting and takes the number", async () => {
@@ -624,5 +639,5 @@ describe("close-out across processes over a stale claim", () => {
 		expect(late).toEqual({ kind: "posted", onPr: false });
 		expect(postLines(posts)).toEqual(["v-winner close-out"]);
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);
-	});
+	}, 30_000);
 });

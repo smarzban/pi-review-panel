@@ -31,7 +31,7 @@ import { postedCode, postedText } from "../src/tool/posted-text.js";
 import { createReviewPanelTool } from "../src/tool/review-panel.js";
 import {
 	assertVerifyJudgment,
-	CLOSEOUT_CLAIM_MARKER,
+	CLOSEOUT_POSTED_MARKER,
 	defaultRunGh,
 	type RoundGhRunner as GhRunner,
 	GITHUB_COMMENT_LIMIT,
@@ -1917,7 +1917,7 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 	it("a claim already in the review record stops the close-out", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			const { CLOSEOUT_CLAIM_MARKER } = await import(
+			const { CLOSEOUT_POSTED_MARKER } = await import(
 				"../src/tool/round-post.js"
 			);
 			writeFileSync(
@@ -1926,7 +1926,7 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 					".review-panel",
 					"runs",
 					REVIEW_ID,
-					CLOSEOUT_CLAIM_MARKER,
+					CLOSEOUT_POSTED_MARKER,
 				),
 				"v-0",
 			);
@@ -2485,7 +2485,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 			expect(
 				JSON.parse(
 					readFileSync(
-						path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER),
+						path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER),
 						"utf8",
 					),
 				),
@@ -2518,7 +2518,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 				"PR close-out: not posted (a close-out for this review is already on PR #12)",
 			);
 			expect(
-				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER)),
+				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER)),
 			).toBe(true);
 		});
 	});
@@ -2542,7 +2542,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 				"PR close-out: not posted (a close-out for this review is already on PR #12)",
 			);
 			expect(
-				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER)),
+				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER)),
 			).toBe(true);
 			expect(claimsLeft(repo)).toEqual([]);
 		});
@@ -2569,7 +2569,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 	it("closeout.posted: already posted, and the PR is not asked", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			writeClaim(repo, CLOSEOUT_CLAIM_MARKER, "{}");
+			writeClaim(repo, CLOSEOUT_POSTED_MARKER, "{}");
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
@@ -2607,7 +2607,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 			await verifyOnce(repo, gh, "v-1", clean);
 			expect(claimsLeft(repo)).toEqual([]);
 			expect(
-				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_CLAIM_MARKER)),
+				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER)),
 			).toBe(false);
 		});
 	});
@@ -2989,6 +2989,42 @@ describe("fix round 2: nits", () => {
 		expect(() =>
 			assertVerifyJudgment(findings, ["F-2"], [], ["F-2"]),
 		).not.toThrow();
+	});
+});
+
+describe("fix round 3: the interrupt reply", () => {
+	it("an interrupt during a verify's POST gives its number back, and the reply says so exactly", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const controller = new AbortController();
+			const runGh: GhRunner = (args, options) => {
+				if (!args.includes("POST")) {
+					return gh.runGh(args, options);
+				}
+				setTimeout(() => controller.abort(), 10);
+				return new Promise((_resolve, reject) => {
+					options?.signal?.addEventListener("abort", () =>
+						reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+					);
+				});
+			};
+			const result = await verifyOnce(
+				repo,
+				{ runGh },
+				"v-1",
+				STILL,
+				controller.signal,
+			);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR comment: not posted (the run was interrupted; verify 1 is left for the next verify)",
+			);
+			expect(
+				readdirSync(reviewRecordDir(repo)).filter((name) =>
+					name.startsWith("round-"),
+				),
+			).toEqual([]);
+		});
 	});
 });
 

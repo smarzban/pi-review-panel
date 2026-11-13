@@ -262,17 +262,20 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     deletes its claim. If the post fails, it deletes its claim and the reply says so
     (`… ; verify 1 is left for the next verify`), so a waiting or later verify takes that number.
   - A claim another verify still holds is waited on. The verify stops waiting while 30 s of the
-    round's 60 s deadline are still left, so a claim it wins always has time for its POST. When it
-    gives up it posts no comment for that round, and the reply says
+    round's 60 s deadline are still left, and once it has waited it takes no claim after that
+    point, so a claim it wins after waiting always has time for its POST. When it gives up it
+    posts no comment for that round, and the reply says
     `PR comment: not posted (another verify is still posting verify N)`.
   - A stale claim, left by a verify that crashed, is never taken over, renamed or removed. It
     stays where it is and the verify tries N+1. A claim is stale when it is older than the round
     deadline plus 5 s (65 s), or when it was made on this host and its process is gone. A claim
     from another host (a shared or synced folder, a container and its host) is judged by age
     alone. A claim with unreadable content is judged by its age on disk.
-  - Mutual exclusion comes only from the exclusive create, so two verifies never post the same
-    number. A crash can leave a gap in the numbering (`verify 3` after `verify 1`), never a
-    duplicate.
+  - Mutual exclusion comes only from the exclusive create, so two verifies never hold the same
+    number at once. A crash can leave a gap in the numbering (`verify 3` after `verify 1`), never a
+    duplicate. One case is set aside: when `gh` reports a POST as failed (it timed out or was
+    interrupted) after GitHub had already accepted it, the number is given back and the next
+    verify posts it again.
   It lists each kept id as resolved, still present or inconclusive with the panel's one-line
   evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept, and the
   regressions as new findings. Verify checks `dismissed` and `lowAdvisory` against the review

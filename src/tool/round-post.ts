@@ -84,7 +84,7 @@ export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
  * on the PR; no verify posts a close-out after it. The card is claimed
  * first with `closeout.claim-<g>` (see `round-claim.ts`).
  */
-export const CLOSEOUT_CLAIM_MARKER = CLOSEOUT_POSTED_FILE;
+export const CLOSEOUT_POSTED_MARKER = CLOSEOUT_POSTED_FILE;
 /**
  * Written in a verify's run record once its comment is on the PR. The
  * review's record also gets `round-<N>.posted` (see `round-claim.ts`).
@@ -1017,8 +1017,8 @@ export async function postVerifyRound(
 		if (
 			await closeoutAlreadyPosted(verify.gh, verify.target, card.reviewRunId)
 		) {
-			// The card is there already (a manual card, or a post whose
-			// marker a crash lost): record it, and post nothing.
+			// An automatic close-out is there already (one whose marker a
+			// crash lost): record it, and post nothing.
 			settleCloseout(claim, true);
 			lines.push(
 				notPosted(
