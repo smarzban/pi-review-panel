@@ -8,3 +8,6 @@ node_modules/
 *.log
 .DS_Store
 .review-panel/
+
+# The review-panel CLI build output; built at pack time, never committed.
+cli/dist/
