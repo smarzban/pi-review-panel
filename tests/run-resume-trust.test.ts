@@ -1212,8 +1212,9 @@ describe("resume trusts only records signed with the owner's record key", () => 
 					}),
 				);
 			});
+			// With no plan.mac at all, it reads as a run cut off before signing.
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/Resume refused: run ".*" has no valid signature from this owner's record key/,
+				/Resume refused: run ".*" was interrupted before its plan was signed/,
 			);
 			// A MAC made with some other key does not pass either.
 			signPlan(recordPath, Buffer.alloc(32, 9));
@@ -1226,6 +1227,36 @@ describe("resume trusts only records signed with the owner's record key", () => 
 				/has no valid signature/,
 			);
 			expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(false);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	it("says a run cut off between plan.json and plan.mac was interrupted, not forged", async () => {
+		const repo = createHostRepo();
+		try {
+			const recordPath = await interruptedReview(repo);
+			const runId = path.basename(recordPath);
+			const macPath = path.join(recordPath, "plan.mac");
+			rmSync(macPath);
+			let message = "";
+			try {
+				loadResumable(repo, runId, TEST_RECORD_KEY);
+			} catch (error) {
+				message = error instanceof Error ? error.message : String(error);
+			}
+			expect(message).toMatch(
+				/^Resume refused: run ".*" was interrupted before its plan was signed, so it cannot be resumed\. Start a new run instead\.$/,
+			);
+			expect(message).not.toMatch(
+				/signature|this owner's review_panel did not/,
+			);
+			// A plan.mac that is there but is not a regular file is not a crash
+			// the package can leave; it is refused as unsigned.
+			symlinkSync(path.join(recordPath, "plan.json"), macPath);
+			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
+				/has no valid signature/,
+			);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}

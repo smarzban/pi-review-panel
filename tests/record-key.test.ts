@@ -3,6 +3,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	statSync,
@@ -11,8 +12,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	checkRecordKey,
 	loadRecordKey,
 	planMac,
 	RECORD_KEY_FILE,
@@ -32,14 +34,22 @@ beforeEach(() => {
 	root = mkdtempSync(path.join(tmpdir(), "record-key-"));
 	configDir = path.join(root, "config");
 	repoDir = path.join(root, "repo");
-	mkdirSync(configDir);
+	// 0700 explicitly: a group-writable key folder is refused, and a bare
+	// mkdirSync under a permissive umask would make one.
+	mkdirSync(configDir, { mode: 0o700 });
+	chmodSync(configDir, 0o700);
 	mkdirSync(repoDir);
 	keyPath = recordKeyPath(path.join(configDir, "config.json"));
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
+	chmodSync(configDir, 0o700);
 	rmSync(root, { recursive: true, force: true });
 });
+
+const posix = process.platform !== "win32";
+const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
 
 describe("the owner's record key", () => {
 	it("lives beside the owner config", () => {
@@ -131,6 +141,204 @@ describe("the owner's record key", () => {
 			}),
 		).toThrow(/inside the reviewed repository/);
 		expect(statSync(repoDir).isDirectory()).toBe(true);
+	});
+});
+
+describe("the record key's owner and folder", () => {
+	it.skipIf(!posix)("refuses a key file another user owns", () => {
+		loadRecordKey(keyPath, { create: true, repoDir });
+		const me = process.getuid?.() ?? 0;
+		vi.spyOn(process, "getuid").mockReturnValue(me + 1);
+		expect(() => loadRecordKey(keyPath, { create: false, repoDir })).toThrow(
+			/is not owned by you and is refused/,
+		);
+	});
+
+	it.skipIf(!posix)(
+		"skips the owner check where process.getuid does not exist",
+		() => {
+			const key = loadRecordKey(keyPath, { create: true, repoDir });
+			const original = Object.getOwnPropertyDescriptor(process, "getuid");
+			Object.defineProperty(process, "getuid", {
+				value: undefined,
+				configurable: true,
+			});
+			try {
+				expect(
+					loadRecordKey(keyPath, { create: false, repoDir }).equals(key),
+				).toBe(true);
+			} finally {
+				if (original === undefined) {
+					Reflect.deleteProperty(process, "getuid");
+				} else {
+					Object.defineProperty(process, "getuid", original);
+				}
+			}
+		},
+	);
+
+	it.skipIf(!posix)(
+		"refuses a key folder writable by group or other users, with or without a key in it",
+		() => {
+			for (const mode of [0o770, 0o707, 0o777, 0o1777]) {
+				chmodSync(configDir, mode);
+				expect(() => loadRecordKey(keyPath, { create: true, repoDir })).toThrow(
+					/folder .* is writable by group or other users and is refused/,
+				);
+			}
+			expect(readdirSync(configDir)).toEqual([]);
+			chmodSync(configDir, 0o700);
+			loadRecordKey(keyPath, { create: true, repoDir });
+			chmodSync(configDir, 0o775);
+			expect(() => loadRecordKey(keyPath, { create: false, repoDir })).toThrow(
+				/is writable by group or other users/,
+			);
+		},
+	);
+
+	it("accepts a key folder that is a symlink to a safe folder", () => {
+		const linked = path.join(root, "linked-config");
+		symlinkSync(configDir, linked);
+		const key = loadRecordKey(path.join(linked, RECORD_KEY_FILE), {
+			create: true,
+			repoDir,
+		});
+		expect(readFileSync(keyPath).equals(key)).toBe(true);
+	});
+});
+
+describe("the record key creation race", () => {
+	it("gives two creators one key: the loser reads the winner's bytes", () => {
+		let other: Buffer | undefined;
+		const mine = loadRecordKey(keyPath, {
+			create: true,
+			repoDir,
+			// The second creator runs in full between the first one's temp
+			// write and its link, so the first one's link meets EEXIST.
+			beforeLink: () => {
+				other = loadRecordKey(keyPath, { create: true, repoDir });
+			},
+		});
+		expect(other).toBeDefined();
+		expect(mine.equals(other as Buffer)).toBe(true);
+		expect(readFileSync(keyPath).equals(mine)).toBe(true);
+		expect(readdirSync(configDir)).toEqual([RECORD_KEY_FILE]);
+	});
+});
+
+describe("checking the record key without writing (diagnose)", () => {
+	function listing(): string[] {
+		return readdirSync(configDir).sort();
+	}
+
+	it("passes a writable 0700 folder with no key yet, and creates nothing", () => {
+		writeFileSync(path.join(configDir, "config.json"), "{}", { mode: 0o600 });
+		expect(checkRecordKey(keyPath, { repoDir })).toBeUndefined();
+		expect(listing()).toEqual(["config.json"]);
+	});
+
+	it("passes a valid key and leaves it untouched", () => {
+		const key = loadRecordKey(keyPath, { create: true, repoDir });
+		const before = statSync(keyPath);
+		expect(checkRecordKey(keyPath, { repoDir })).toBeUndefined();
+		expect(listing()).toEqual([RECORD_KEY_FILE]);
+		expect(readFileSync(keyPath).equals(key)).toBe(true);
+		expect(statSync(keyPath).mtimeMs).toBe(before.mtimeMs);
+	});
+
+	it("says nothing when the config folder does not exist: the configuration row covers that", () => {
+		const missing = path.join(root, "missing", RECORD_KEY_FILE);
+		expect(checkRecordKey(missing, { repoDir })).toBeUndefined();
+		expect(() => lstatSync(path.dirname(missing))).toThrow();
+	});
+
+	it.skipIf(!posix || isRoot)(
+		"reports a read-only folder with no key, and how to fix it",
+		() => {
+			chmodSync(configDir, 0o555);
+			const problem = checkRecordKey(keyPath, { repoDir });
+			expect(problem?.cause).toMatch(
+				/record key .*record-key cannot be created: its folder .* is not writable/,
+			);
+			expect(problem?.fix).toMatch(/chmod u\+w/);
+			expect(problem?.fix).toMatch(/PI_REVIEW_PANEL_CONFIG/);
+			expect(listing()).toEqual([]);
+			// The same folder refuses a review's create, for the same cause.
+			expect(() => loadRecordKey(keyPath, { create: true, repoDir })).toThrow(
+				/could not be created/,
+			);
+		},
+	);
+
+	it.skipIf(!posix)("reports each unusable key with its cause and fix", () => {
+		const cases: Array<{
+			plant: () => void;
+			cause: RegExp;
+			fix: RegExp;
+		}> = [
+			{
+				plant: () => {
+					const elsewhere = path.join(root, "elsewhere");
+					writeFileSync(elsewhere, Buffer.alloc(32, 1), { mode: 0o600 });
+					symlinkSync(elsewhere, keyPath);
+				},
+				cause: /is a symlink and is refused/,
+				fix: /regular file/,
+			},
+			{
+				plant: () => {
+					writeFileSync(keyPath, Buffer.alloc(32, 1));
+					chmodSync(keyPath, 0o644);
+				},
+				cause: /readable by group or other users/,
+				fix: /chmod 600/,
+			},
+			{
+				plant: () => writeFileSync(keyPath, "short", { mode: 0o600 }),
+				cause: /is not 32 bytes/,
+				fix: /Delete/,
+			},
+			{
+				plant: () => mkdirSync(keyPath),
+				cause: /not a regular file/,
+				fix: /Remove/,
+			},
+			{
+				plant: () => {
+					chmodSync(configDir, 0o777);
+				},
+				cause: /is writable by group or other users/,
+				fix: /chmod go-w/,
+			},
+		];
+		for (const { plant, cause, fix } of cases) {
+			rmSync(keyPath, { recursive: true, force: true });
+			chmodSync(configDir, 0o700);
+			plant();
+			const before = listing();
+			const problem = checkRecordKey(keyPath, { repoDir });
+			expect(problem?.cause).toMatch(cause);
+			expect(problem?.cause).toContain(keyPath);
+			expect(problem?.fix).toMatch(fix);
+			expect(listing()).toEqual(before);
+		}
+	});
+
+	it.skipIf(!posix)("reports a key another user owns", () => {
+		loadRecordKey(keyPath, { create: true, repoDir });
+		const me = process.getuid?.() ?? 0;
+		vi.spyOn(process, "getuid").mockReturnValue(me + 1);
+		const problem = checkRecordKey(keyPath, { repoDir });
+		expect(problem?.cause).toMatch(/is not owned by you/);
+		expect(problem?.fix).toMatch(/chown|Delete/);
+	});
+
+	it("reports a key inside the reviewed repository", () => {
+		const inside = recordKeyPath(path.join(repoDir, "config.json"));
+		const problem = checkRecordKey(inside, { repoDir });
+		expect(problem?.cause).toMatch(/inside the reviewed repository/);
+		expect(problem?.fix).toMatch(/PI_REVIEW_PANEL_CONFIG/);
+		expect(() => lstatSync(inside)).toThrow();
 	});
 });
 

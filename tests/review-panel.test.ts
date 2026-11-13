@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+	chmodSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -7,6 +8,7 @@ import {
 	realpathSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1534,6 +1536,156 @@ describe("review_panel record key", () => {
 			}),
 		);
 	});
+
+	/** A key another process could read: the run that needs it must refuse. */
+	function plantOpenKey(configDir: string): void {
+		const keyPath = path.join(configDir, "record-key");
+		writeFileSync(keyPath, Buffer.alloc(32, 9));
+		chmodSync(keyPath, 0o644);
+	}
+
+	it.skipIf(process.platform === "win32")(
+		"review refuses, and runs no seat, when the record key is unusable",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					plantOpenKey(configDir);
+					let reviewed = 0;
+					const tool = ownerTool(configDir, {
+						runReview: async () => {
+							reviewed += 1;
+							throw new Error("runReview must not be called");
+						},
+					});
+					await expect(
+						tool.execute(
+							"tool-call",
+							{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
+							undefined,
+							undefined,
+							{},
+						),
+					).rejects.toThrow(
+						/Review refused: record key .*record-key is readable by group or other users and is refused/,
+					);
+					expect(reviewed).toBe(0);
+				}),
+			);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"audit refuses, and runs no seat, when the record key is unusable",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					symlinkSync(
+						path.join(configDir, "elsewhere"),
+						path.join(configDir, "record-key"),
+					);
+					let audited = 0;
+					const tool = ownerTool(configDir, {
+						loadConfig: () => ({
+							...roster,
+							defaults: { seats: ["seat-0", "seat-1"] },
+						}),
+						runAudit: async () => {
+							audited += 1;
+							throw new Error("runAudit must not be called");
+						},
+					});
+					await expect(
+						tool.execute(
+							"tool-call",
+							{ action: "audit", repository, passes: ["security"] },
+							undefined,
+							undefined,
+							{},
+						),
+					).rejects.toThrow(
+						/Audit refused: record key .*record-key is a symlink and is refused/,
+					);
+					expect(audited).toBe(0);
+				}),
+			);
+		},
+	);
+
+	it("diagnose reports ready for a usable key folder with no key, and creates none", async () => {
+		await withRepository((repository) =>
+			withConfigDir(async (configDir) => {
+				const tool = ownerTool(configDir);
+				const response = await tool.execute(
+					"tool-call",
+					{ action: "diagnose", repository },
+					undefined,
+					undefined,
+					{},
+				);
+				expect(response.content[0]?.text).toContain("- Status: ready");
+				expect(readdirSync(configDir)).toEqual([]);
+			}),
+		);
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"diagnose reports an unusable record key as one row with its path, cause and fix",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					plantOpenKey(configDir);
+					const keyPath = path.join(configDir, "record-key");
+					const tool = ownerTool(configDir);
+					const response = await tool.execute(
+						"tool-call",
+						{ action: "diagnose", repository },
+						undefined,
+						undefined,
+						{},
+					);
+					const text = response.content[0]?.text ?? "";
+					expect(text).toContain("- Status: needs setup");
+					expect(text).toContain(
+						`- record key ${keyPath}: record key ${keyPath} is readable by group or other users and is refused.`,
+					);
+					expect(text).toContain(`chmod 600 ${keyPath}`);
+					expect(statSync(keyPath).mode & 0o777).toBe(0o644);
+				}),
+			);
+		},
+	);
+
+	it.skipIf(
+		process.platform === "win32" ||
+			(typeof process.getuid === "function" && process.getuid() === 0),
+	)(
+		"diagnose reports a read-only config folder, and writes nothing there",
+		async () => {
+			await withRepository((repository) =>
+				withConfigDir(async (configDir) => {
+					chmodSync(configDir, 0o555);
+					try {
+						const tool = ownerTool(configDir);
+						const response = await tool.execute(
+							"tool-call",
+							{ action: "diagnose", repository },
+							undefined,
+							undefined,
+							{},
+						);
+						const text = response.content[0]?.text ?? "";
+						expect(text).toContain("- Status: needs setup");
+						expect(text).toMatch(
+							/- record key .*record-key: record key .*record-key cannot be created: its folder .* is not writable/,
+						);
+						expect(readdirSync(configDir)).toEqual([]);
+					} finally {
+						chmodSync(configDir, 0o700);
+					}
+				}),
+			);
+		},
+	);
 
 	it("resume never creates the key, and refuses without one", async () => {
 		await withRepository((repository) =>
