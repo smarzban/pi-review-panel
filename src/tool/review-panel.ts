@@ -203,10 +203,16 @@ export function ownerRecordKey(input: RecordKeyInput): Buffer {
 export function ownerRecordKeyCheck(
 	input: Omit<RecordKeyInput, "create">,
 ): RecordKeyProblem | undefined {
-	return checkRecordKey(
-		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
-		{ repoDir: input.repoDir },
-	);
+	let configPath: string;
+	try {
+		configPath = resolveConfigPath({ env: input.env, home: input.home });
+	} catch {
+		// A bad config override is the configuration row's to report.
+		return undefined;
+	}
+	return checkRecordKey(recordKeyPath(configPath), {
+		repoDir: input.repoDir,
+	});
 }
 
 export type ReviewPanelTool = {
