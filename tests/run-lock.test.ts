@@ -49,6 +49,8 @@ const fsLog = vi.hoisted(() => ({
 	links: [] as Array<{ target: string; body: string }>,
 	/** When set, every link fails with this code, as on a filesystem without hard links. */
 	linkErrorCode: undefined as string | undefined,
+	/** When set, a write to this path fails with ENOSPC after it was opened. */
+	failWriteTo: undefined as string | undefined,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -58,6 +60,22 @@ vi.mock("node:fs", async (importOriginal) => {
 		writeFileSync: (...args: Parameters<typeof real.writeFileSync>) => {
 			fsLog.writes.push(String(args[0]));
 			return real.writeFileSync(...args);
+		},
+		writeSync: (...args: Parameters<typeof real.writeSync>) => {
+			const target = fsLog.failWriteTo;
+			if (
+				target !== undefined &&
+				real.fstatSync(args[0]).ino ===
+					real.statSync(target, { throwIfNoEntry: false })?.ino
+			) {
+				throw Object.assign(
+					new Error("ENOSPC: no space left on device, write"),
+					{
+						code: "ENOSPC",
+					},
+				);
+			}
+			return (real.writeSync as (...a: unknown[]) => number)(...args);
 		},
 		openSync: (...args: Parameters<typeof real.openSync>) => {
 			const flags = args[1];
@@ -261,6 +279,26 @@ describe("publishing the run lock", () => {
 describe("the run lock on a filesystem without hard links", () => {
 	afterEach(() => {
 		fsLog.linkErrorCode = undefined;
+		fsLog.failWriteTo = undefined;
+	});
+
+	it("leaves no lock behind when the in-place write fails", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.failWriteTo = lockPath;
+
+			expect(() => acquireRunLock(record)).toThrow(/ENOSPC/);
+			expect(readdirSync(record)).toEqual([]);
+
+			// Once space is back, the next run takes the lock.
+			fsLog.failWriteTo = undefined;
+			const release = acquireRunLock(record);
+			release();
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
 	});
 
 	it.each(["ENOTSUP", "EOPNOTSUPP", "EPERM", "ENOSYS"])(

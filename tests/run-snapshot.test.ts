@@ -680,20 +680,48 @@ describe("each guard on what the sweep trusts holds on its own", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32").each([0o720, 0o702])(
-		"never trusts the owner file in a holder with mode %o that others can write",
-		(mode) => {
+	it.skipIf(process.platform === "win32").each([
+		["0o720", 0o720],
+		["0o702", 0o702],
+	])(
+		"never trusts the owner file in a holder with mode %s that others can write",
+		(_shown, mode) => {
 			const repo = createHostRepo();
 			const { worktree, holder } = deadSnapshot(repo);
 			try {
 				chmodSync(holder, mode);
 				expectKept(repo, worktree);
 			} finally {
-				chmodSync(holder, 0o700);
+				if (existsSync(holder)) {
+					chmodSync(holder, 0o700);
+				}
 				removeFixture(repo, worktree);
 			}
 		},
 	);
+
+	it("never trusts an owner.json in an old-layout snapshot whose .git file is gone", () => {
+		const repo = createHostRepo();
+		const folder = legacySnapshot(repo);
+		try {
+			// Registered straight in the temp folder (0.3.0's layout), so the
+			// folder is the checked-out tree, not a holder, even without `.git`.
+			rmSync(path.join(folder, ".git"));
+			writeFileSync(
+				path.join(folder, "owner.json"),
+				`${JSON.stringify({ pid: deadPid(), repo: commonGitDir(repo) })}\n`,
+				{ mode: 0o600 },
+			);
+
+			const swept = sweepStaleSnapshots(repo);
+
+			expect(swept.removed).toEqual([]);
+			expect(existsSync(path.join(folder, "committed.txt"))).toBe(true);
+			expect(worktreeCount(repo)).toBe(2);
+		} finally {
+			removeFixture(repo, folder);
+		}
+	});
 
 	it("never trusts an owner file with a second hard link", () => {
 		const repo = createHostRepo();
