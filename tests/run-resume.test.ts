@@ -172,6 +172,45 @@ describe("durable seat outcomes", () => {
 	});
 });
 
+describe("a failed seat-file write", () => {
+	it("never costs the run its seats: execution.json still carries every seat", async () => {
+		const repo = createHostRepo();
+		try {
+			let blocked = false;
+			const result = await runReview(
+				{ repoDir: repo, baseRef: "origin/main", seats: threeSeats() },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake().factory,
+					onProgress: (event) => {
+						if (event.kind === "seat-started" && !blocked) {
+							// A file where the seats folder belongs: every seat write fails.
+							blocked = true;
+							const seatsDir = path.join(onlyRecord(repo), SEATS_DIR);
+							rmSync(seatsDir, { recursive: true, force: true });
+							writeFileSync(seatsDir, "not a folder\n");
+						}
+					},
+				},
+			);
+			expect(blocked).toBe(true);
+			const execution = JSON.parse(
+				readFileSync(path.join(result.recordPath, "execution.json"), "utf8"),
+			);
+			expect(
+				execution.outcomes.map(
+					(facts: { seat: { lens: string } }) => facts.seat.lens,
+				),
+			).toEqual(["correctness", "security", "tests"]);
+			expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
+				true,
+			);
+		} finally {
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("resume", () => {
 	it("re-runs only the unsettled seats at the record's head and reports every planned seat", async () => {
 		const repo = createHostRepo();
