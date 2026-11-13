@@ -1219,12 +1219,12 @@ describe("resume trusts only records signed with the owner's record key", () => 
 			// A MAC made with some other key does not pass either.
 			signPlan(recordPath, Buffer.alloc(32, 9));
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/has no valid signature/,
+				/has no valid signature from this owner's record key/,
 			);
 			// Nor does a malformed one.
 			writeFileSync(path.join(recordPath, "plan.mac"), "not-a-mac");
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/has no valid signature/,
+				/has no valid signature from this owner's record key/,
 			);
 			expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(false);
 		} finally {
@@ -1255,7 +1255,7 @@ describe("resume trusts only records signed with the owner's record key", () => 
 			// the package can leave; it is refused as unsigned.
 			symlinkSync(path.join(recordPath, "plan.json"), macPath);
 			expect(() => loadResumable(repo, runId, TEST_RECORD_KEY)).toThrow(
-				/has no valid signature/,
+				/has no valid signature from this owner's record key/,
 			);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
@@ -1273,7 +1273,7 @@ describe("resume trusts only records signed with the owner's record key", () => 
 			renameSync(recordPath, moved);
 			expect(() =>
 				loadResumable(repo, path.basename(moved), TEST_RECORD_KEY),
-			).toThrow(/has no valid signature/);
+			).toThrow(/has no valid signature from this owner's record key/);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}
