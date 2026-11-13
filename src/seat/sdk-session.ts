@@ -82,7 +82,7 @@ export async function createSdkSeatSession(
 ): Promise<SdkSeatSession> {
 	const sdk = input.sdk ?? (await loadPiSdk());
 	const profile = profileFor(input.spec);
-	const { services, model, authenticated, extensionFailures } =
+	const { services, model, authenticated, authError, extensionFailures } =
 		await resolveSeatRuntime({
 			sdk,
 			cwd: input.spec.worktree,
@@ -111,7 +111,7 @@ export async function createSdkSeatSession(
 	}
 	if (!authenticated) {
 		throw new Error(
-			`seat model is not authenticated: ${input.spec.provider}/${input.spec.model}`,
+			`seat model is not authenticated: ${input.spec.provider}/${input.spec.model}${authError === undefined ? "" : `: ${authError}`}`,
 		);
 	}
 

@@ -11,7 +11,14 @@
 
 export type SeatModelRuntime = {
 	getModel: (provider: string, model: string) => unknown;
-	/** Runs the provider's own auth `check` when it defines one. */
+	/** The registered provider, used to see whether it has its own check. */
+	getProvider?: (
+		provider: string,
+	) => { auth?: { apiKey?: { check?: unknown } } } | undefined;
+	/**
+	 * Runs the provider's own auth `check` when it defines one. It reads the
+	 * process environment only: Pi gives it no environment override.
+	 */
 	checkAuth: (provider: string) => Promise<unknown>;
 	getAuth: (
 		providerOrModel: unknown,
@@ -71,6 +78,8 @@ export type SeatRuntime = {
 	model: unknown;
 	/** True only when the provider's own check and request auth both pass. */
 	authenticated: boolean;
+	/** Why auth could not be decided, when the check or resolution threw. */
+	authError?: string;
 	extensionFailures: ExtensionFailure[];
 };
 
@@ -115,20 +124,47 @@ export async function resolveSeatRuntime(
 	});
 	const runtime = services.modelRuntime;
 	const model = runtime.getModel(input.provider, input.model);
-	// `getAuth` resolves request credentials but never runs a provider's own
-	// `check` (for example "is the Claude Code CLI logged in"); `checkAuth`
-	// does, and falls back to the same resolution when there is no check.
-	const checked = (await runtime.checkAuth(input.provider)) !== undefined;
-	const resolved =
-		checked &&
-		(await runtime.getAuth(
-			model ?? input.provider,
-			input.authEnv === undefined ? undefined : { env: input.authEnv },
-		)) !== undefined;
+	let authenticated = false;
+	let authError: string | undefined;
+	try {
+		authenticated =
+			(await providerCheckPasses(runtime, input.provider)) &&
+			(await runtime.getAuth(
+				model ?? input.provider,
+				input.authEnv === undefined ? undefined : { env: input.authEnv },
+			)) !== undefined;
+	} catch (error) {
+		// A check or resolution that throws (for example a provider CLI that is
+		// missing) is an auth failure; the model and the extension failures
+		// found by this load still stand.
+		authError = error instanceof Error ? error.message : String(error);
+	}
 	return {
 		services,
 		model,
-		authenticated: resolved,
+		authenticated,
+		...(authError === undefined ? {} : { authError }),
 		extensionFailures: extensionFailures(services),
 	};
+}
+
+/**
+ * `getAuth` resolves request credentials but never runs a provider's own
+ * `check` (for example "is the Claude Code CLI logged in"), so a provider
+ * that defines one must also pass `checkAuth`. A provider without its own
+ * check is decided by `getAuth` alone, which honours the caller's
+ * environment overrides; `checkAuth` would read only the process
+ * environment. When the runtime cannot show the provider, `checkAuth` runs.
+ */
+async function providerCheckPasses(
+	runtime: SeatModelRuntime,
+	provider: string,
+): Promise<boolean> {
+	if (
+		runtime.getProvider !== undefined &&
+		typeof runtime.getProvider(provider)?.auth?.apiKey?.check !== "function"
+	) {
+		return true;
+	}
+	return (await runtime.checkAuth(provider)) !== undefined;
 }
