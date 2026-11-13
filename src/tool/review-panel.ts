@@ -20,7 +20,13 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
-import { loadRecordKey, recordKeyPath } from "../run/record-key.js";
+import {
+	checkRecordKey,
+	loadRecordKey,
+	RecordKeyError,
+	type RecordKeyProblem,
+	recordKeyPath,
+} from "../run/record-key.js";
 import { SCOPING_NOTE_DROPPED } from "../run/render.js";
 import {
 	loadResumable,
@@ -167,6 +173,14 @@ export type ReviewPanelDependencies = {
 	 * the owner config, and created there by a first review or audit.
 	 */
 	recordKey?: (input: RecordKeyInput) => Buffer;
+	/**
+	 * The `diagnose` check of the record key, which never writes. By default it
+	 * checks `record-key` beside the owner config the way review and audit use
+	 * it.
+	 */
+	checkRecordKey?: (
+		input: Omit<RecordKeyInput, "create">,
+	) => RecordKeyProblem | undefined;
 };
 
 export type RecordKeyInput = {
@@ -182,6 +196,16 @@ export function ownerRecordKey(input: RecordKeyInput): Buffer {
 	return loadRecordKey(
 		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
 		{ create: input.create, repoDir: input.repoDir },
+	);
+}
+
+/** Checks the owner's record key for `diagnose`, without writing anything. */
+export function ownerRecordKeyCheck(
+	input: Omit<RecordKeyInput, "create">,
+): RecordKeyProblem | undefined {
+	return checkRecordKey(
+		recordKeyPath(resolveConfigPath({ env: input.env, home: input.home })),
+		{ repoDir: input.repoDir },
 	);
 }
 
@@ -537,6 +561,7 @@ export function createReviewPanelTool(
 	const postComment = deps?.postComment ?? postCloseoutComment;
 	const resume = deps?.resumeRun ?? resumeRun;
 	const keyOf = deps?.recordKey ?? ownerRecordKey;
+	const checkKey = deps?.checkRecordKey ?? ownerRecordKeyCheck;
 
 	return {
 		name: "review_panel",
@@ -563,8 +588,9 @@ export function createReviewPanelTool(
 						create,
 					});
 				} catch (error) {
+					const fix = error instanceof RecordKeyError ? ` ${error.fix}` : "";
 					throw new Error(
-						`${refusal}: ${error instanceof Error ? error.message : String(error)}`,
+						`${refusal}: ${error instanceof Error ? error.message : String(error)}.${fix}`,
 					);
 				}
 			};
@@ -587,7 +613,27 @@ export function createReviewPanelTool(
 					env: runtime.env,
 					home: runtime.home,
 				});
-				return { content: [{ type: "text", text: renderReadiness(report) }] };
+				// Review and audit refuse to start without a usable record key,
+				// so diagnose checks it too, without creating it.
+				const keyProblem = checkKey({
+					repoDir,
+					env: runtime.env,
+					home: runtime.home,
+				});
+				const shown =
+					keyProblem === undefined
+						? report
+						: {
+								ready: false,
+								rows: [
+									...report.rows,
+									{
+										prerequisite: `record key ${recordKeyPath(resolveConfigPath({ env: runtime.env, home: runtime.home }))}`,
+										remediation: `${keyProblem.cause}. ${keyProblem.fix}`,
+									},
+								],
+							};
+				return { content: [{ type: "text", text: renderReadiness(shown) }] };
 			}
 
 			if (action === "audit") {

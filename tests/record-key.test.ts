@@ -183,7 +183,7 @@ describe("the record key's owner and folder", () => {
 			for (const mode of [0o770, 0o707, 0o777, 0o1777]) {
 				chmodSync(configDir, mode);
 				expect(() => loadRecordKey(keyPath, { create: true, repoDir })).toThrow(
-					/folder .* is writable by group or other users and is refused/,
+					/record-key is refused: its folder .* is writable by group or other users/,
 				);
 			}
 			expect(readdirSync(configDir)).toEqual([]);

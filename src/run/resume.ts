@@ -439,7 +439,15 @@ function readPlan(
 		);
 	}
 	const mac = planMac(key, runId, text);
-	if (!macMatches(mac, readRegularFile(path.join(recordPath, PLAN_MAC_FILE)))) {
+	const macPath = path.join(recordPath, PLAN_MAC_FILE);
+	if (!pathExists(macPath)) {
+		// plan.json is written, then plan.mac: a run killed between the two
+		// leaves a plan with no MAC at all, and no seat has run yet.
+		refuse(
+			`run "${runId}" was interrupted before its plan was signed, so it cannot be resumed. Start a new run instead.`,
+		);
+	}
+	if (!macMatches(mac, readRegularFile(macPath))) {
 		refuse(
 			`run "${runId}" has no valid signature from this owner's record key, so this owner's review_panel did not write it, or wrote it for another run. Start a new run instead.`,
 		);
@@ -542,4 +550,14 @@ function isNotFound(error: unknown): boolean {
 		"code" in error &&
 		error.code === "ENOENT"
 	);
+}
+
+/** True when anything at all, even a dangling symlink, is at `target`. */
+function pathExists(target: string): boolean {
+	try {
+		lstatSync(target);
+		return true;
+	} catch {
+		return false;
+	}
 }
