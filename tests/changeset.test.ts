@@ -266,13 +266,27 @@ describe("a diff the parser cannot read is reported, never read as no match", ()
 	it("reports a diff with too many added lines as unavailable, instead of holding them all", () => {
 		withRange(
 			{
-				"fixtures/many.txt": "x\n".repeat(200_001),
+				"fixtures/many.txt": "x\n".repeat(200_000),
 				"src/a.ts": 'require("child_process");\n',
 			},
 			(range) => {
 				expect(suggestLenses(range.repo, range.base, range.head)).toEqual({
 					unavailable: "the diff adds over 200,000 lines",
 				});
+			},
+		);
+	});
+
+	it("still reads a diff that adds exactly 200,000 lines", () => {
+		withRange(
+			{
+				"fixtures/many.txt": "x\n".repeat(199_999),
+				"src/a.ts": 'require("child_process");\n',
+			},
+			(range) => {
+				expect(securityEvidence(range)).toEqual([
+					{ file: "src/a.ts", line: 1 },
+				]);
 			},
 		);
 	});
