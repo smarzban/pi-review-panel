@@ -250,25 +250,45 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 
 - A review posts `## Review panel · review`: the reply's summary, `Seats:`, `Lost:`, findings and
   `Suggest:`, with the run id instead of the local record path.
-- Each verify posts `## Review panel · verify N`, where N counts the verify runs of the same review.
+- Each verify posts `## Review panel · verify N`. N is one more than the earlier verifies of the
+  same review whose comment reached the PR (each records that in its run record), so the PR never
+  shows `verify 2` without a `verify 1`.
   It lists each kept id as resolved, still present or inconclusive with the panel's one-line
   evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept, and the
   regressions as new findings. Verify checks `dismissed` and `lowAdvisory` against the review
   record before any seat runs.
-- When a verify finds every kept id resolved and no regressions, it also posts the close-out card
-  as a separate comment, `## Review panel · close-out`, built from the review, that verify and its
-  `dismissed` and `lowAdvisory`. It posts once per review: a close-out for the same review already
-  on the PR by the same author is not posted again. When the card cannot be built (for example a
-  high or medium finding that was neither kept nor dismissed with a reason), the reply says why.
+- When every verify seat voted (none was lost), each marked every kept id resolved, and none
+  reported a regression, the verify also posts the close-out card as a separate comment,
+  `## Review panel · close-out`, built from the review, that verify and its `dismissed` and
+  `lowAdvisory`. A kept finding of any severity counts as fixed; a kept low need not be listed in
+  `lowAdvisory`. Otherwise only the verify comment is posted, and the reply says why, such as
+  `PR close-out: not posted (seats disagree on F-2)` or
+  `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card's `Lost:` line
+  names the review's lost seats and any lost verify seats.
+- The close-out posts once per review. The verify that posts it first creates `closeout.posted`
+  exclusively in the review's run record, so two verifies, even concurrent ones, cannot both post
+  it; a close-out for the same review already on the PR by the same author also stops it. If the
+  post fails, the claim is removed so a later verify can post it. When the card cannot be built
+  (for example a high or medium finding that was neither kept nor dismissed with a reason), the
+  reply says why.
+- An explicit `pr` must be an open pull request whose head is the run's head. Otherwise nothing is
+  posted and the reply says why, such as `PR comment: not posted (PR #7 is not open)`.
 - Every post is a new comment. Nothing edits or deletes an earlier one. Audit and resume never post.
 - `prComment: false` (CLI `--no-pr-comment`) turns posting off for one run.
 - No open PR, more than one, `gh` missing, signed out or failing: nothing is posted, and the reply
   ends with one line saying why, such as `PR comment: not posted (no open PR has this head)`. A
   failed post never fails the run and never changes an exit code.
-- Posted text is made safe: `@mentions`, `#123` references and heading markers in seat text and
-  file names are broken with a zero-width joiner, control, bidi and invisible characters are
-  removed, the body is cut by whole rows below GitHub's 65,536-character limit (saying how many
-  were cut), and it goes to `gh` on stdin.
+- Every posted body (the review and verify comments, the automatic close-out and the manual
+  `comment` card) uses one sanitizer. Text a seat wrote, dismissed reasons, record fields and refs
+  become one line of plain text: line breaks fold to spaces; `` \ ` * _ [ ] ( ) # ! < > | ~ & $ ``
+  are backslash-escaped, so no HTML, image, link, emphasis or heading forms; a zero-width joiner
+  follows every `@` and `＠`, every `#` (so `#123` and `owner/repo#123` do not link), the `-` in
+  `GH-123`, and the `:` of `://` and the `.` of `www.`; control, bidi and invisible characters
+  become U+FFFD. File names and ids are code spans whose fence is longer than any backtick run
+  inside, so they cannot be closed early and need no escaping. The body is cut by whole rows below
+  GitHub's 65,536-character limit (saying how many were cut) and goes to `gh` on stdin.
+- `gh` runs asynchronously, so a slow call never blocks Pi; each call has a 30 s limit and one
+  round's calls share a 60 s deadline. Comment listings read every page.
 
 The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
 or updates its own card with the heading `## Review panel`, separate from the automatic

@@ -36,8 +36,8 @@ What you get instead:
 - **Verify the keep list.** After you fix, a new HEAD is checked against the
   ids you kept — not a second full discovery circus.
 - **Each round on the PR.** When the head is an open PR, the review and each
-  verify post a new comment there, and a verify that finds every kept id resolved
-  with no regressions also posts the close-out card: counts, dismissals with
+  verify post a new comment there, and a verify where every seat voted and
+  resolved every kept id, with no regressions, also posts the close-out card: counts, dismissals with
   reasons, leftover lows. No Fixed list. No “ready to merge.” Turn it off per run
   with `prComment: false`, or set `defaults.prComment: "ownerApproved"` so every
   post needs the owner's yes.

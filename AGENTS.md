@@ -38,8 +38,9 @@ snapshot (no base/head range). Default passes are code-health, over-engineering,
 across the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
 GitHub comment. Review and verify post each round to the one open PR whose head is the
 run's head, by default, as a new comment (`## Review panel · review`, `## Review panel · verify N`);
-a verify with every kept id resolved and no regressions also posts the close-out card on its own
-(`## Review panel · close-out`, once per review). `prComment: false` (CLI `--no-pr-comment`)
+a verify where every verify seat voted, each marked every kept id resolved, and none reported a
+regression also posts the close-out card on its own (`## Review panel · close-out`, once per
+review). The card is presentation, not a verdict: the agents judge and the owner merges. `prComment: false` (CLI `--no-pr-comment`)
 turns posting off for a run, and owner config `defaults.prComment: "ownerApproved"` makes every
 post need `ownerApproved: true`. A post that cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card after the owner says yes
@@ -63,10 +64,16 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR by default, always as a new comment that is
   never edited or deleted; audit and resume never post. The automatic close-out posts once per
-  review, only after a verify with every kept id resolved and no regressions. Posted text is
-  sanitized (no `@mention` or `#123` that GitHub acts on, no control, bidi or invisible character),
-  capped under 65,536 characters, and sent to `gh` on stdin. Tests never reach GitHub: a failing
-  fake `gh` stands first on PATH in both vitest configs.
+  review (an exclusive `closeout.posted` claim in the review's run record, then a check of the PR's
+  comments), only after a verify with no lost seat, every voting seat marking every kept id
+  resolved, and no regressions. An explicit `pr` must be open with the run's head as its head.
+  Every posted body (review, verify, the automatic close-out and the manual `comment` card) goes
+  through `src/tool/posted-text.ts`: seat text, record fields and refs are one line of
+  backslash-escaped plain text with a zero-width joiner after every `@`, `＠` and `#`, in `GH-123`
+  and in `://` / `www.`, and control, bidi and invisible characters replaced; file names and ids
+  are code spans with a fence longer than any backtick run inside. Bodies are capped under 65,536
+  characters and sent to `gh` on stdin; `gh` runs asynchronously within one deadline per round.
+  Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
   `publish.yml` checks the tag matches the version, publishes to npm, and creates the GitHub release

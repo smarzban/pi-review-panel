@@ -102,8 +102,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
 - `review` and `verify` post their round to the open pull request whose head is the run's
-  head, as a new comment, through `gh`; a verify with every kept id resolved and no
-  regressions also posts the close-out card once per review. `--no-pr-comment` turns that
+  head, as a new comment, through `gh`; a verify where every seat voted and resolved every
+  kept id, with no regressions, also posts the close-out card once per review. `--no-pr-comment` turns that
   off for one run, and `--pr` names the PR. When the owner config sets
   `defaults.prComment: "ownerApproved"`, a round posts only with `--owner-approved`. A post
   that cannot be made ends the report with one line saying why, and the exit code does not

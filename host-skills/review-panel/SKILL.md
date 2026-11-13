@@ -138,8 +138,9 @@ Do not start a new full discovery review on the same change.
 
 Posting is on by default. When the run's head is the head of exactly one open PR, `review`
 posts its round there as a new comment, and each `verify` posts what was fixed, what was not
-and why, and what is new. A verify with every kept id resolved and no regressions also posts
-the close-out card on its own, once per review. The report ends with a `PR comment:` line
+and why, and what is new. A verify where every seat voted and marked every kept id resolved,
+with no regressions, also posts the close-out card on its own, once per review; a kept low counts
+as fixed and need not be listed in `--low-advisory`. The report ends with a `PR comment:` line
 (and a `PR close-out:` line) saying where it posted or why it did not; a failed post never
 changes the exit code.
 
