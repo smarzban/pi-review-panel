@@ -19,7 +19,34 @@ export function shown(token: string): string {
 		/^-{0,2}[a-z][a-z-]*$/.test(token) &&
 		token.length <= 40 &&
 		words.every((word) => word.length <= 16);
-	return plain ? `"${token}"` : "(not shown, in case it is a key)";
+	return plain ? `"${token}"` : NOT_SHOWN;
+}
+
+const NOT_SHOWN = "(not shown, in case it is a key)";
+
+/**
+ * Removes from an error message every argument name that is not shaped like
+ * one of the tool's (camelCase letters, no digits, no long runs), in case it
+ * is a key passed in a `call` object by mistake.
+ */
+export function withoutKeyLikeNames(
+	text: string,
+	names: readonly string[],
+): string {
+	let result = text;
+	for (const name of names) {
+		const words = name.split(/(?=[A-Z])/);
+		const plain =
+			/^[a-z][A-Za-z]*$/.test(name) &&
+			name.length <= 40 &&
+			words.every((word) => word.length <= 16);
+		if (!plain && name !== "") {
+			result = result
+				.replaceAll(`"${name}"`, NOT_SHOWN)
+				.replaceAll(name, NOT_SHOWN);
+		}
+	}
+	return result;
 }
 
 export const ACTIONS = [

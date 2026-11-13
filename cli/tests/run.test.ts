@@ -605,4 +605,31 @@ describe("usage errors never echo an argument that could be a key", () => {
 		expect(h.err()).toContain('auth: unknown command "logn"');
 		expect(h.err()).toContain('review: unknown option "--modle"');
 	});
+
+	it.each([
+		['{"action":"diagnose","sk-ant-api03-Abc9SECRET":1}', "diagnose"],
+		[
+			'{"action":"comment","ownerApproved":true,"priorRunId":"r","sk-ant-abc123secret":1}',
+			"comment",
+		],
+	])(
+		"call %s: an unknown argument name that could be a key",
+		async (payload, action) => {
+			const h = harness();
+			expect(await h.run(["call", payload])).toBe(EXIT_USAGE);
+			expect(h.err()).toContain(
+				`${action} does not accept argument (not shown, in case it is a key)`,
+			);
+			expect(h.err()).not.toMatch(/secret/i);
+			expect(h.calls).toEqual({});
+		},
+	);
+
+	it("still names a plain unknown call argument", async () => {
+		const h = harness();
+		await h.run(["call", '{"action":"diagnose","modle":1}']);
+		await h.run(["call", '{"action":"diagnose","priorRunId":"r"}']);
+		expect(h.err()).toContain('diagnose does not accept argument "modle"');
+		expect(h.err()).toContain('diagnose does not accept argument "priorRunId"');
+	});
 });

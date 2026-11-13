@@ -38,6 +38,7 @@ import {
 	HELP,
 	parseCommand,
 	UsageError,
+	withoutKeyLikeNames,
 } from "./args.js";
 import {
 	AuthError,
@@ -168,7 +169,10 @@ async function runAction(
 	try {
 		input = PARSERS[action](args);
 	} catch (error) {
-		throw new UsageError(message(error));
+		// A `call` object's unknown argument name may be a key pasted there.
+		throw new UsageError(
+			withoutKeyLikeNames(message(error), Object.keys(args)),
+		);
 	}
 	const context: ActionContext = {
 		signal: io.signal,
