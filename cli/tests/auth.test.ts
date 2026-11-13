@@ -25,9 +25,11 @@ const CODEX: Provider = {
 	name: "ChatGPT",
 	auth: { oauth: {} },
 };
-const OPENAI: Provider = {
-	id: "openai",
-	name: "OpenAI",
+// Key login only, as Baseten has in Pi SDK 1.5.2 (the built-bin test logs in
+// to the real one without --api-key).
+const BASETEN: Provider = {
+	id: "baseten",
+	name: "Baseten",
 	auth: { apiKey: { login: () => {} } },
 };
 const OLLAMA: Provider = { id: "ollama", name: "Ollama", auth: { apiKey: {} } };
@@ -38,7 +40,7 @@ function fakeRuntime(
 	const stored = new Map<string, string>();
 	const logins: { provider: string; type: string; deviceId?: string }[] = [];
 	const runtime: LoginRuntime = {
-		getProviders: () => [ANTHROPIC, CODEX, OPENAI, OLLAMA],
+		getProviders: () => [ANTHROPIC, BASETEN, CODEX, OLLAMA],
 		login: vi.fn(async (provider, type, interaction, options) => {
 			await script(interaction);
 			logins.push({
@@ -137,7 +139,7 @@ describe("auth login --api-key", () => {
 		});
 		const term = terminal({ interactive: true, secrets: ["typed-key"] });
 		await login({
-			provider: "openai",
+			provider: "baseten",
 			apiKey: true,
 			agentDir: "/a",
 			cwd: "/",
@@ -146,7 +148,7 @@ describe("auth login --api-key", () => {
 			signal,
 		});
 		expect(seen).toBe("typed-key");
-		expect(term.asked).toEqual(["Enter OpenAI API key: "]);
+		expect(term.asked).toEqual(["Enter Baseten API key: "]);
 	});
 
 	it("refuses an empty key", async () => {
@@ -298,7 +300,7 @@ describe("auth login (account sign-in)", () => {
 				signal,
 			}),
 		).rejects.toThrow(
-			"Unknown provider. Providers with a login: anthropic, openai, openai-codex",
+			"Unknown provider. Providers with a login: anthropic, baseten, openai-codex",
 		);
 	});
 
@@ -323,20 +325,20 @@ describe("auth login (account sign-in)", () => {
 			seen = await interaction.prompt({ type: "secret", message: "key" });
 		});
 		const line = await login({
-			provider: "openai",
+			provider: "baseten",
 			apiKey: false,
 			agentDir: "/a",
 			cwd: "/",
 			sdk: sdkFor(runtime),
-			terminal: terminal({ interactive: false, stdin: "sk-openai\n" }).value,
+			terminal: terminal({ interactive: false, stdin: "sk-baseten\n" }).value,
 			signal,
 		});
-		expect(seen).toBe("sk-openai");
+		expect(seen).toBe("sk-baseten");
 		expect(logins).toEqual([
-			{ provider: "openai", type: "api_key", deviceId: "device-1" },
+			{ provider: "baseten", type: "api_key", deviceId: "device-1" },
 		]);
 		expect(line).toBe(
-			"Saved the API key for OpenAI. Credentials are in /a/auth.json",
+			"Saved the API key for Baseten. Credentials are in /a/auth.json",
 		);
 	});
 
