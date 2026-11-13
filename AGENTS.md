@@ -36,7 +36,13 @@ Install as a Pi package with `pi install npm:pi-review-panel` (not `npm install`
 path still wins. `audit` is a periodic whole-repository advisory sweep against one pinned `HEAD`
 snapshot (no base/head range). Default passes are code-health, over-engineering, tests, and security
 across the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
-GitHub comment. `comment` posts or updates one PR card after the owner says yes
+GitHub comment. Review and verify post each round to the one open PR whose head is the
+run's head, by default, as a new comment (`## Review panel · review`, `## Review panel · verify N`);
+a verify with every kept id resolved and no regressions also posts the close-out card on its own
+(`## Review panel · close-out`, once per review). `prComment: false` (CLI `--no-pr-comment`)
+turns posting off for a run, and owner config `defaults.prComment: "ownerApproved"` makes every
+post need `ownerApproved: true`. A post that cannot be made is one reply line, never a run failure.
+`comment` stays the manual path: it posts or updates one PR card after the owner says yes
 (`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
 list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
 run whose `priorRunId` is this review marks them resolved. Host agents (Grok,
@@ -55,7 +61,12 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Repair implementation is orchestrator-owned. The package selects and launches no fixer.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
-- Close-out comments are owner-asked only. The tool does not post when the panel first finishes.
+- Review and verify post each round to the open PR by default, always as a new comment that is
+  never edited or deleted; audit and resume never post. The automatic close-out posts once per
+  review, only after a verify with every kept id resolved and no regressions. Posted text is
+  sanitized (no `@mention` or `#123` that GitHub acts on, no control, bidi or invisible character),
+  capped under 65,536 characters, and sent to `gh` on stdin. Tests never reach GitHub: a failing
+  fake `gh` stands first on PATH in both vitest configs.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
   `publish.yml` checks the tag matches the version, publishes to npm, and creates the GitHub release

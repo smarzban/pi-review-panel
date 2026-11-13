@@ -124,10 +124,29 @@ Give the owner each finding with keep or skip and the reason, plus coverage and 
    a relative path does not.
 
 ```bash
-review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-1,F-2
+review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-1,F-2 \
+  --low-advisory F-3 --dismissed '[{"id":"F-4","reason":"..."}]'
 ```
 
+Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
+`--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
+carry your reasons. An unknown id refuses the verify before any seat runs.
+
 Do not start a new full discovery review on the same change.
+
+### Posting to the PR
+
+Posting is on by default. When the run's head is the head of exactly one open PR, `review`
+posts its round there as a new comment, and each `verify` posts what was fixed, what was not
+and why, and what is new. A verify with every kept id resolved and no regressions also posts
+the close-out card on its own, once per review. The report ends with a `PR comment:` line
+(and a `PR close-out:` line) saying where it posted or why it did not; a failed post never
+changes the exit code.
+
+- Add `--no-pr-comment` to keep a run off the PR, and `--pr <n>` to name the PR.
+- If the report says `the owner config asks for approval first`, ask the owner, and after a
+  yes add `--owner-approved` to the next round.
+- Audit and resume never post.
 
 ## 7. Resume
 
@@ -145,8 +164,9 @@ is pass 3. A dirty third pass stops and asks the owner. Never review-fix-review-
 
 Recommend landing only when every kept item is resolved, there is no new high/medium
 regression on the fix, and lost coverage is named; or when the discovery report had nothing
-you would keep. Name who voted, who failed, and what you kept or skipped. Then ask whether to post the
-close-out comment. Do not post until they say yes. After a yes:
+you would keep. Name who voted, who failed, and what you kept or skipped. When the automatic
+close-out was not posted (the report's `PR close-out:` line says why, or nothing was kept), ask
+whether to post the close-out comment. Do not post until they say yes. After a yes:
 
 ```bash
 review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \

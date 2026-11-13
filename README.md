@@ -35,8 +35,12 @@ What you get instead:
   you may drop or promote.
 - **Verify the keep list.** After you fix, a new HEAD is checked against the
   ids you kept — not a second full discovery circus.
-- **One owner-asked PR comment.** Counts, dismissals with reasons, leftover
-  lows. No Fixed list. No “ready to merge.” You have to say yes before it posts.
+- **Each round on the PR.** When the head is an open PR, the review and each
+  verify post a new comment there, and a verify that finds every kept id resolved
+  with no regressions also posts the close-out card: counts, dismissals with
+  reasons, leftover lows. No Fixed list. No “ready to merge.” Turn it off per run
+  with `prComment: false`, or set `defaults.prComment: "ownerApproved"` so every
+  post needs the owner's yes.
 
 ## Install
 
@@ -133,6 +137,17 @@ not write `AUDIT.md` or post an audit comment.
 ```json
 {"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
 ```
+
+Pass the reasons for findings you chose not to fix, so the verify comment and the
+close-out carry them:
+
+```json
+{"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"],"dismissed":[{"id":"F-2","reason":"by design"}],"lowAdvisory":["F-3"]}
+```
+
+Review and verify post their round to the open PR whose head is the run's head
+(see [Posting rounds](docs/configuration.md#posting-rounds-to-the-pull-request)).
+`comment` is the manual close-out card, posted or updated only after the owner says yes:
 
 ```json
 {"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29}

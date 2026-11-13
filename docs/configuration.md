@@ -55,6 +55,11 @@ Save these exact bytes as your config file (the entry below names the file locat
   - `lenses`: package-owned lens names (see below), no repeats.
   - `seatBudgetMs` (optional): per-seat wall-clock budget in milliseconds, an integer from 1 through
     2147483647. Omitted uses the built-in default of 1200000 ms (20 minutes).
+  - `prComment` (optional): how review and verify rounds reach the open pull request. `"auto"`,
+    the default when the field is absent, posts each round. `"ownerApproved"` posts a round only
+    when the call also passes `ownerApproved: true` (CLI `--owner-approved`); without it the reply
+    ends with `PR comment: not posted (the owner config asks for approval first)`. Any other value
+    refuses the config. See [Posting rounds to the pull request](#posting-rounds-to-the-pull-request).
 - Unknown fields refuse at every level: the root, each roster row, and `defaults` each reject keys
   they do not declare. Any single error refuses the whole config; there is no partial acceptance.
 
@@ -235,6 +240,39 @@ moment, and stays that way if the process is killed in that moment (a failed wri
 removes it). A `run.lock` that names no pid is therefore one another process is still writing, or
 one a crashed process left unfinished: it is refused, never taken over, and the message says to
 delete it when no review_panel run is active.
+
+## Posting rounds to the pull request
+
+When a review or verify run's head commit is the head of exactly one open pull request, the tool
+posts that round to it as a new comment when the run finishes. It finds the PR with
+`gh api repos/{owner}/{repo}/commits/<head-oid>/pulls`, keeping open PRs whose head is that commit;
+`pr` (CLI `--pr`) names one instead. The same rule holds for public and private repositories.
+
+- A review posts `## Review panel · review`: the reply's summary, `Seats:`, `Lost:`, findings and
+  `Suggest:`, with the run id instead of the local record path.
+- Each verify posts `## Review panel · verify N`, where N counts the verify runs of the same review.
+  It lists each kept id as resolved, still present or inconclusive with the panel's one-line
+  evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept, and the
+  regressions as new findings. Verify checks `dismissed` and `lowAdvisory` against the review
+  record before any seat runs.
+- When a verify finds every kept id resolved and no regressions, it also posts the close-out card
+  as a separate comment, `## Review panel · close-out`, built from the review, that verify and its
+  `dismissed` and `lowAdvisory`. It posts once per review: a close-out for the same review already
+  on the PR by the same author is not posted again. When the card cannot be built (for example a
+  high or medium finding that was neither kept nor dismissed with a reason), the reply says why.
+- Every post is a new comment. Nothing edits or deletes an earlier one. Audit and resume never post.
+- `prComment: false` (CLI `--no-pr-comment`) turns posting off for one run.
+- No open PR, more than one, `gh` missing, signed out or failing: nothing is posted, and the reply
+  ends with one line saying why, such as `PR comment: not posted (no open PR has this head)`. A
+  failed post never fails the run and never changes an exit code.
+- Posted text is made safe: `@mentions`, `#123` references and heading markers in seat text and
+  file names are broken with a zero-width joiner, control, bidi and invisible characters are
+  removed, the body is cut by whole rows below GitHub's 65,536-character limit (saying how many
+  were cut), and it goes to `gh` on stdin.
+
+The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
+or updates its own card with the heading `## Review panel`, separate from the automatic
+`## Review panel · close-out` comment.
 
 ## Snapshot cleanup
 

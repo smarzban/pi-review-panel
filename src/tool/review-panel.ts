@@ -153,7 +153,7 @@ export function createReviewPanelTool(
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, suggest lenses for a base...head change (no seat runs; you choose the lenses), review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, suggest lenses for a base...head change (no seat runs; you choose the lenses), review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Review and verify post each round to the open PR whose head is the run's head by default (prComment: false skips it); a clean verify also posts the close-out card. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {

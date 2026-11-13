@@ -15,7 +15,7 @@ Host agents (Grok, Codex, Claude Code) drive the CLI through the
 
 The CLI is not on npm yet, and its `package.json` is marked `"private": true`, so an
 accidental `npm publish` from `cli/` is refused. `npm pack` still works. It needs Node 26 or
-newer, `git`, and `gh` for `comment`.
+newer, `git`, and `gh` for posting rounds to a pull request and for `comment`.
 
 ```sh
 git clone https://github.com/smarzban/pi-review-panel.git
@@ -90,9 +90,9 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 |---|---|
 | `review-panel diagnose` | `{"action":"diagnose"}` |
 | `review-panel suggest --base main --head HEAD` | `base`, `head` |
-| `review-panel review --base main --head HEAD [--seats a,b] [--lenses tests,security] [--scoping-note <text>]` | `base`, `head`, `seats`, `lenses`, `scopingNote` |
+| `review-panel review --base main --head HEAD [--seats a,b] [--lenses tests,security] [--scoping-note <text>] [--no-pr-comment] [--pr 22] [--owner-approved]` | `base`, `head`, `seats`, `lenses`, `scopingNote`, `prComment: false`, `pr`, `ownerApproved` |
 | `review-panel audit [--seats a,b] [--passes code-health,security] [--scoping-note <text>]` | `seats`, `passes`, `scopingNote` |
-| `review-panel verify --prior-run-id <run> --head HEAD --kept-finding-ids F-1,F-2 [--seats a,b] [--scoping-note <text>]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none), `seats`, `scopingNote` |
+| `review-panel verify --prior-run-id <run> --head HEAD --kept-finding-ids F-1,F-2 [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `prComment: false`, `pr`, `ownerApproved` |
 | `review-panel resume --prior-run-id <run>` | `priorRunId` |
 | `review-panel comment --prior-run-id <run> --owner-approved [--pr 22] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -]` | `priorRunId`, `ownerApproved`, `pr`, `verifyRunId`, `head`, `lowAdvisory`, `dismissed` |
 | `review-panel call '<json>'` | The tool's whole argument object, for example `'{"action":"review","base":"main","head":"HEAD"}'`. `-` reads it from stdin. |
@@ -101,9 +101,16 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   reads for `defaults.lenses`. It prints each lens the diff's rules
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
-- `comment` posts the close-out card on the pull request. It is refused without
-  `--owner-approved`: pass that flag only after the owner said to post.
-- `--dismissed` is a JSON list of `{"id": "...", "reason": "..."}` objects, given inline,
+- `review` and `verify` post their round to the open pull request whose head is the run's
+  head, as a new comment, through `gh`; a verify with every kept id resolved and no
+  regressions also posts the close-out card once per review. `--no-pr-comment` turns that
+  off for one run, and `--pr` names the PR. When the owner config sets
+  `defaults.prComment: "ownerApproved"`, a round posts only with `--owner-approved`. A post
+  that cannot be made ends the report with one line saying why, and the exit code does not
+  change. See [Posting rounds to the pull request](../docs/configuration.md#posting-rounds-to-the-pull-request).
+- `comment` posts or updates the manual close-out card on the pull request. It is refused
+  without `--owner-approved`: pass that flag only after the owner said to post.
+- `--dismissed` (comment, verify) is a JSON list of `{"id": "...", "reason": "..."}` objects, given inline,
   from a file (`@dismissed.json`) or from stdin (`-`).
 - Inside a `call` object, `repository` works as it does in the tool. Give the repository
   either there or with `--repo`, not both.
