@@ -4,6 +4,17 @@
  * them. Each `parse*Arguments` validates a raw argument record the way the
  * tool always has; each `*Action` runs one action and returns the tool's
  * result object.
+ *
+ * Each action validates its own input with the same checks, in the same order
+ * and with the same messages as its parser, so a front end that builds the
+ * input itself gets the refusals the tool gives. The parser adds only the
+ * refusal of argument keys the action does not take.
+ *
+ * No Pi host and no TypeBox are needed to import or call these. Running a
+ * seat (review, audit, verify, resume) and diagnose's model check still load
+ * the Pi SDK (`@earendil-works/pi-coding-agent`) through a dynamic `import()`
+ * in `src/seat/sdk-session.ts` and `src/config/readiness.ts`, so a front end
+ * that runs those needs the SDK installed. Comment and the parsers do not.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -314,6 +325,12 @@ export function parseDiagnoseArguments(
 
 export function parseAuditArguments(args: Record<string, unknown>): AuditInput {
 	refuseUnknownArguments(args, "audit", ["seats", "passes", "scopingNote"]);
+	return validateAuditInput(args);
+}
+
+function validateAuditInput(
+	args: AuditInput | Record<string, unknown>,
+): AuditInput {
 	const seats = optionalStringArray(args.seats, "seats");
 	const passes = optionalStringArray(args.passes, "passes");
 	const scopingNote = optionalNonEmptyString(args.scopingNote, "scopingNote");
@@ -334,6 +351,12 @@ export function parseVerifyArguments(
 		"seats",
 		"scopingNote",
 	]);
+	return validateVerifyInput(args);
+}
+
+function validateVerifyInput(
+	args: VerifyInput | Record<string, unknown>,
+): VerifyInput {
 	const priorRunId = validateNonEmptyString(args.priorRunId, "priorRunId");
 	const head = validateNonEmptyString(args.head, "head");
 	if (!Array.isArray(args.keptFindingIds)) {
@@ -357,6 +380,12 @@ export function parseResumeArguments(
 	args: Record<string, unknown>,
 ): ResumeInput {
 	refuseUnknownArguments(args, "resume", ["priorRunId"]);
+	return validateResumeInput(args);
+}
+
+function validateResumeInput(
+	args: ResumeInput | Record<string, unknown>,
+): ResumeInput {
 	return { priorRunId: validateNonEmptyString(args.priorRunId, "priorRunId") };
 }
 
@@ -425,6 +454,16 @@ export function parseCommentArguments(
 			throw new Error(`comment does not accept argument "${String(key)}"`);
 		}
 	}
+	return validateCommentInput(args);
+}
+
+/**
+ * The owner's approval is checked here, before the run is read or anything
+ * is posted, so no caller can post without `ownerApproved: true`.
+ */
+function validateCommentInput(
+	args: CommentInput | Record<string, unknown>,
+): CommentInput {
 	if (args.ownerApproved !== true) {
 		throw new Error(
 			"comment refused: ownerApproved must be true after the owner asked to post",
@@ -456,6 +495,12 @@ export function parseReviewArguments(
 		"lenses",
 		"scopingNote",
 	]);
+	return validateReviewInput(args);
+}
+
+function validateReviewInput(
+	args: ReviewInput | Record<string, unknown>,
+): ReviewInput {
 	const base = validateNonEmptyString(args.base, "base");
 	const head = validateNonEmptyString(args.head, "head");
 	return {
@@ -593,7 +638,8 @@ export async function auditAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir, seats, passes, scopingNote } = input;
+	const { repoDir } = input;
+	const { seats, passes, scopingNote } = validateAuditInput(input);
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
 	const panel = resolveAuditPanel({
@@ -642,8 +688,9 @@ export async function verifyAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir, priorRunId, head, keptFindingIds, seats, scopingNote } =
-		input;
+	const { repoDir } = input;
+	const { priorRunId, head, keptFindingIds, seats, scopingNote } =
+		validateVerifyInput(input);
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
 	const headRevision = resolved.oidOf(repoDir, head);
@@ -685,7 +732,9 @@ export async function commentAction(
 	context: ActionContext = {},
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
-	const { repoDir, priorRunId, dismissed, lowAdvisory } = input;
+	const { repoDir } = input;
+	const valid = validateCommentInput(input);
+	const { priorRunId, dismissed, lowAdvisory } = valid;
 	const facts = loadCloseoutRun(repoDir, priorRunId);
 	const accounted = accountCloseoutFindings({
 		findings: facts.run.findings,
@@ -693,14 +742,14 @@ export async function commentAction(
 		lowAdvisory,
 	});
 	if (accounted.fixed.length > 0) {
-		if (input.verifyRunId === undefined) {
+		if (valid.verifyRunId === undefined) {
 			throw new Error(
 				`comment refused: ${accounted.fixed.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
 			);
 		}
 		assertFixedResolved(
 			repoDir,
-			input.verifyRunId,
+			valid.verifyRunId,
 			accounted.fixed.map((row) => row.id),
 			facts.run.runId,
 		);
@@ -712,12 +761,12 @@ export async function commentAction(
 		meta: facts.run.meta,
 		dismissed,
 		lowAdvisory,
-		...(input.head === undefined ? {} : { headRef: input.head }),
+		...(valid.head === undefined ? {} : { headRef: valid.head }),
 	});
 	const posted = resolved.postComment({
 		repository: repoDir,
 		body,
-		...(input.pr === undefined ? {} : { pr: input.pr }),
+		...(valid.pr === undefined ? {} : { pr: valid.pr }),
 	});
 	return textResult(
 		[
@@ -735,7 +784,8 @@ export async function resumeAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir, priorRunId } = input;
+	const { repoDir } = input;
+	const { priorRunId } = validateResumeInput(input);
 	await requireReady(resolved, repoDir);
 	// Resume never creates the key: a record it did not sign is not
 	// this owner's.
@@ -813,7 +863,9 @@ export async function reviewAction(
 ): Promise<ActionResult> {
 	const resolved = resolveDependencies(context.deps);
 	const { elapsed, emit } = progress(context);
-	const { repoDir, base, head } = input;
+	const { repoDir } = input;
+	const valid = validateReviewInput(input);
+	const { base, head } = valid;
 	const baseRevision = resolved.oidOf(repoDir, base);
 	const headRevision = resolved.oidOf(repoDir, head);
 	if (baseRevision === headRevision) {
@@ -821,9 +873,9 @@ export async function reviewAction(
 	}
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
-	const seats = optionalStringArray(input.seats, "seats");
-	const lenses = optionalStringArray(input.lenses, "lenses");
-	const scopingNote = optionalNonEmptyString(input.scopingNote, "scopingNote");
+	const seats = optionalStringArray(valid.seats, "seats");
+	const lenses = optionalStringArray(valid.lenses, "lenses");
+	const scopingNote = optionalNonEmptyString(valid.scopingNote, "scopingNote");
 
 	const panel: PlannedSeat[] = resolved.panelOf({
 		config,
