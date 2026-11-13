@@ -1,6 +1,7 @@
 {
 	"name": "review-panel",
 	"version": "0.1.0",
+	"private": true,
 	"description": "Standalone command-line front end for the pi-review-panel multi-model review panel",
 	"license": "MIT",
 	"author": "Saeed Marzban",

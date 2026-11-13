@@ -27,6 +27,11 @@ const SIGINT_READY = path.join(
 	"fixtures",
 	"sigint-ready.mjs",
 );
+const CLI_VERSION = (
+	JSON.parse(readFileSync(path.join(CLI_DIR, "package.json"), "utf8")) as {
+		version: string;
+	}
+).version;
 const EXTENSION_FIXTURES = path.join(
 	REPO,
 	"tests",
@@ -157,6 +162,13 @@ describe("the built bin", () => {
 		}
 	});
 
+	it("--version prints cli/package.json's version", () => {
+		const { code, stdout } = cli(tempHome(), ["--version"]);
+		expect(code).toBe(0);
+		expect(stdout).toBe(`${CLI_VERSION}\n`);
+		expect(CLI_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+	});
+
 	it("exits 2 on a usage error and 1 on comment without --owner-approved", () => {
 		const home = tempHome();
 		expect(cli(home, ["review", "--model", "x"]).code).toBe(2);
@@ -175,7 +187,9 @@ describe("agent folder selection", () => {
 		expect(diagnose.stdout).toContain(
 			`Agent folder: ${path.join(home, ".pi-review-panel", "agent")} (review-panel's own folder`,
 		);
-		expect(diagnose.stdout).toMatch(/review-panel \S+ \(Pi SDK 1\.5\.2\)/);
+		expect(diagnose.stdout).toContain(
+			`review-panel ${CLI_VERSION} (Pi SDK 1.5.2)`,
+		);
 		expect(cli(home, ["auth", "status"]).code).toBe(0);
 		expect(
 			cli(home, ["auth", "login", "anthropic", "--api-key"], { input: "k" })
@@ -254,6 +268,20 @@ describe("auth against a temporary agent folder", () => {
 		).toBeUndefined();
 	});
 
+	it("a provider with only key login (baseten) takes a piped key without --api-key", () => {
+		const home = tempHome();
+		const agent = path.join(home, "agent");
+		const result = cli(home, ["auth", "login", "baseten"], {
+			env: { PI_CODING_AGENT_DIR: agent },
+			input: "bt-from-stdin\n",
+		});
+		expect(result.code).toBe(0);
+		expect(result.stdout).toContain("Saved the API key for Baseten");
+		expect(
+			JSON.parse(readFileSync(path.join(agent, "auth.json"), "utf8")).baseten,
+		).toMatchObject({ type: "api_key", key: "bt-from-stdin" });
+	});
+
 	it("refuses a key on the command line", () => {
 		const home = tempHome();
 		const result = cli(home, [
@@ -306,7 +334,7 @@ describe("Ctrl-C", () => {
 	);
 });
 
-describe("errors never echo an argument that could be a key", () => {
+describe("usage errors never echo a token that could be a key", () => {
 	const KEYS = ["sk-ant-api03-Abc9XyZ0SECRET", "sk-ant-abc123secret"];
 
 	it.each(KEYS)("auth login -k<key> (%s)", (key) => {
@@ -337,6 +365,7 @@ describe("errors never echo an argument that could be a key", () => {
 			["KEY"],
 			["call", "KEY"],
 			["auth", "login", "anthropic", "--KEY"],
+			["call", '{"action":"diagnose","KEY":1}'],
 		].map((argv) => [argv.join(" "), argv] as const),
 	)("%s", (_name, argv) => {
 		for (const key of KEYS) {
@@ -410,6 +439,13 @@ describe("a provider registered by an extension", () => {
 });
 
 describe("the packed tarball", () => {
+	it("is private, so npm refuses to publish it", () => {
+		const manifest = JSON.parse(
+			readFileSync(path.join(CLI_DIR, "package.json"), "utf8"),
+		) as { private?: unknown };
+		expect(manifest.private).toBe(true);
+	});
+
 	it("carries its own prompts, outside the repository", async () => {
 		const out = tempHome();
 		execFileSync(
