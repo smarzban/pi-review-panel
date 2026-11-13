@@ -1,5 +1,5 @@
 import type { ReadinessReport } from "../config/readiness.js";
-import { renderSeatsLine } from "../run/render.js";
+import { inlineCode, renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type {
 	RunVerifyResult,
@@ -219,27 +219,65 @@ export function renderReadiness(
 }
 
 /**
- * One suggested lens on one line: `- lens: reason (file:line, +N more)`.
+ * Text that reaches a terminal or a model with no control character, no
+ * line break and no bidi override: each shows as U+FFFD.
+ */
+function inert(text: string): string {
+	return text.replace(
+		// biome-ignore lint/suspicious/noControlCharactersInRegex: the replacement is of control characters
+		/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+		"\uFFFD",
+	);
+}
+
+/**
+ * One suggested lens on one line: ``- lens: reason (`file:line`, +N more)``.
  * `evidence` is how many pieces to show (default one); the rest are counted.
  * `note` marks the lens, as in `- tests (already on, owner default): …`.
+ * A file name comes from the repository, so it is cut to 200 code points,
+ * made inert and shown as one code span that it cannot close.
  */
 export function formatSuggestion(
 	row: Suggestion,
 	options: { evidence?: number; note?: string } = {},
 ): string {
-	const shown = row.evidence
-		.slice(0, options.evidence ?? 1)
-		.map((piece) =>
-			truncateCodePoints(
-				piece.line === undefined ? piece.file : `${piece.file}:${piece.line}`,
-				200,
-			),
+	const shown = row.evidence.slice(0, options.evidence ?? 1).map((piece) => {
+		const file = truncateCodePoints(piece.file, 200);
+		return inlineCode(
+			inert(piece.line === undefined ? file : `${file}:${piece.line}`),
 		);
+	});
 	const rest = row.evidence.length - shown.length;
 	const where = [...shown, ...(rest > 0 ? [`+${rest} more`] : [])];
-	const label =
-		options.note === undefined ? row.lens : `${row.lens} (${options.note})`;
-	return `- ${label}: ${row.reason}${where.length === 0 ? "" : ` (${where.join(", ")})`}`;
+	const lens = inert(row.lens);
+	const label = options.note === undefined ? lens : `${lens} (${options.note})`;
+	return `- ${label}: ${inert(row.reason)}${where.length === 0 ? "" : ` (${where.join(", ")})`}`;
+}
+
+/**
+ * The `suggest` reply: a heading, the rows, and a closing line, cut to
+ * {@link MAX_PRESENTATION_BYTES} by dropping whole rows from the end and
+ * counting them, so the heading and the closing line always survive.
+ */
+export function renderSuggestResult(input: {
+	head: string[];
+	rows: string[];
+	tail: string[];
+}): string {
+	const encoder = new TextEncoder();
+	for (let kept = input.rows.length; kept >= 0; kept -= 1) {
+		const omitted = input.rows.length - kept;
+		const text = [
+			...input.head,
+			...input.rows.slice(0, kept),
+			...(omitted === 0 ? [] : [`- ${omitted} more suggestion(s) omitted.`]),
+			...input.tail,
+		].join("\n");
+		if (encoder.encode(text).length <= MAX_PRESENTATION_BYTES) {
+			return text;
+		}
+	}
+	return [...input.head, ...input.tail].join("\n");
 }
 
 const SEVERITY_RANK = { high: 0, medium: 1, low: 2 } as const;

@@ -244,7 +244,6 @@ export async function executeAudit(
 				snapshotOid: revision,
 				stamped,
 				outcomes,
-				seats: input.seats,
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined
 					? {}

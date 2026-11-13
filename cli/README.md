@@ -94,7 +94,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 | `review-panel comment --prior-run-id <run> --owner-approved [--pr 22] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -]` | `priorRunId`, `ownerApproved`, `pr`, `verifyRunId`, `head`, `lowAdvisory`, `dismissed` |
 | `review-panel call '<json>'` | The tool's whole argument object, for example `'{"action":"review","base":"main","head":"HEAD"}'`. `-` reads it from stdin. |
 
-- `suggest` runs no seat and spends no quota. It prints each lens the diff's rules
+- `suggest` runs no seat and spends no quota, but needs the owner config, which it
+  reads for `defaults.lenses`. It prints each lens the diff's rules
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
 - `comment` posts the close-out card on the pull request. It is refused without

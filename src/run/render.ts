@@ -57,13 +57,11 @@ export type RenderInput = {
 	cleanupError?: string;
 	/** Present only when a resume finished this record. */
 	resume?: ResumeFacts;
-	/** The planned seats, in planned order; defaults to the outcomes' seats. */
-	seats?: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>;
 };
 
 /**
  * The seats that ran, grouped by lens in planned order:
- * `Seats: holistic (sol, opus), tests (sol)`. A seat that failed is listed
+ * `Seats: holistic (sol, opus), tests (sol, opus)`. A seat that failed is listed
  * too; the reply's `Lost:` line names it again.
  */
 export function renderSeatsLine(
@@ -162,10 +160,7 @@ export function renderReport(input: RenderInput): string {
 		...renderCleanupSection(input.cleanupError),
 		...renderLedgerNoticesSection(annotations.notices),
 		...renderFindingsSection(input.stamped, annotations.flags),
-		...renderSeatsSection(
-			input.outcomes,
-			input.seats ?? input.outcomes.map((facts) => facts.seat),
-		),
+		...renderSeatsSection(input.outcomes),
 	];
 	return `${lines.join("\n")}\n`;
 }
@@ -276,10 +271,8 @@ function renderFinding(
 	return lines;
 }
 
-function renderSeatsSection(
-	outcomes: SeatOutcomeFacts[],
-	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>,
-): string[] {
+/** Outcomes come one per planned seat, in planned order. */
+function renderSeatsSection(outcomes: SeatOutcomeFacts[]): string[] {
 	const voted = outcomes.filter(
 		(facts) => facts.outcome.kind === "voted",
 	).length;
@@ -287,7 +280,9 @@ function renderSeatsSection(
 		"## Seats",
 		"",
 		`${outcomes.length} planned seats: ${voted} voted, ${outcomes.length - voted} failed.`,
-		...(seats.length === 0 ? [] : [renderSeatsLine(seats)]),
+		...(outcomes.length === 0
+			? []
+			: [renderSeatsLine(outcomes.map((facts) => facts.seat))]),
 		"",
 	];
 	for (const facts of outcomes) {

@@ -107,6 +107,7 @@ import {
 	renderAuditResult,
 	renderReadiness,
 	renderReviewResult,
+	renderSuggestResult,
 	renderVerifyResult,
 	truncateCodePoints,
 } from "../tool/review-presentation.js";
@@ -1018,23 +1019,29 @@ export async function suggestAction(
 	const ownerLenses = loadOwnerConfig(resolved, repoDir).defaults.lenses ?? [];
 	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
 	const range = truncateCodePoints(`${base}...${head}`, 200);
-	const lines = [
-		"# Lens suggestions",
-		`${range} · holistic always runs · owner default lenses: ${
-			ownerLenses.length === 0 ? "none" : ownerLenses.join(", ")
-		}`,
-		...(suggestions.length === 0
-			? ["- No suggestion rule matched this change."]
-			: suggestions.map((row) =>
-					formatSuggestion(row, {
-						evidence: SUGGEST_EVIDENCE,
-						...(ownerLenses.includes(row.lens)
-							? { note: "already on, owner default" }
-							: {}),
-					}),
-				)),
-		"",
-		"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
-	];
-	return textResult(lines.join("\n"));
+	return textResult(
+		renderSuggestResult({
+			head: [
+				"# Lens suggestions",
+				`${range} · holistic always runs · owner default lenses: ${
+					ownerLenses.length === 0 ? "none" : ownerLenses.join(", ")
+				}`,
+			],
+			rows:
+				suggestions.length === 0
+					? ["- No suggestion rule matched this change."]
+					: suggestions.map((row) =>
+							formatSuggestion(row, {
+								evidence: SUGGEST_EVIDENCE,
+								...(ownerLenses.includes(row.lens)
+									? { note: "already on, owner default" }
+									: {}),
+							}),
+						),
+			tail: [
+				"",
+				"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
+			],
+		}),
+	);
 }

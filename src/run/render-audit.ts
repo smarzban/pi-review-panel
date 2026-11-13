@@ -4,7 +4,7 @@ import {
 	renderResumeSection,
 	renderSeatsLine,
 } from "./render.js";
-import type { PlannedSeat, SeatOutcomeFacts, StampedFinding } from "./types.js";
+import type { SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
 	high: 0,
@@ -24,8 +24,6 @@ export function renderAuditReport(input: {
 	outcomes: SeatOutcomeFacts[];
 	cleanupError?: string;
 	resume?: ResumeFacts;
-	/** The planned seats, in planned order; defaults to the outcomes' seats. */
-	seats?: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>;
 }): string {
 	const lines = [
 		`# Repository audit ${input.runId}`,
@@ -48,10 +46,7 @@ export function renderAuditReport(input: {
 		...renderFindings(input.stamped),
 		"## Seats",
 		"",
-		...renderSeats(
-			input.outcomes,
-			input.seats ?? input.outcomes.map((facts) => facts.seat),
-		),
+		...renderSeats(input.outcomes),
 	];
 	return lines.join("\n");
 }
@@ -87,14 +82,14 @@ function renderFindings(stamped: StampedFinding[]): string[] {
 	return lines;
 }
 
-function renderSeats(
-	outcomes: SeatOutcomeFacts[],
-	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>,
-): string[] {
+/** Outcomes come one per planned seat, in planned order. */
+function renderSeats(outcomes: SeatOutcomeFacts[]): string[] {
 	const voted = outcomes.filter((outcome) => outcome.outcome.kind === "voted");
 	const lines = [
 		`${outcomes.length} planned seats: ${voted.length} voted, ${outcomes.length - voted.length} failed.`,
-		...(seats.length === 0 ? [] : [renderSeatsLine(seats)]),
+		...(outcomes.length === 0
+			? []
+			: [renderSeatsLine(outcomes.map((facts) => facts.seat))]),
 		"",
 	];
 	for (const facts of outcomes) {

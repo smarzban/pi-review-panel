@@ -574,15 +574,15 @@ describe("renderReport seats line", () => {
 		);
 	});
 
-	it("groups seats that share a lens, in the planned order it is given", () => {
+	it("groups seats that share a lens, in the planned order of the outcomes", () => {
 		const second: PlannedSeat = { ...correctnessSeat, rosterId: "second" };
-		const outcomes = panelOutcomes().slice(0, 2);
-		const report = renderReport({
-			meta,
-			stamped: [],
-			outcomes,
-			seats: [correctnessSeat, securitySeat, second],
-		});
+		const [first, other] = panelOutcomes();
+		const outcomes = [
+			first as SeatOutcomeFacts,
+			other as SeatOutcomeFacts,
+			{ ...(first as SeatOutcomeFacts), seat: second },
+		];
+		const report = renderReport({ meta, stamped: [], outcomes });
 		expect(report).toContain(
 			"Seats: correctness (roster-correctness, second), security (roster-security)\n",
 		);

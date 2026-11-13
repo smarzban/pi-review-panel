@@ -88,10 +88,11 @@ From Grok, Codex, or Claude Code, install `host-skills/pi-review` and run
 {"action":"suggest","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
 ```
 
-`suggest` runs no seat. It lists the lenses the diff's rules point at, each with
-its reason and evidence, and marks the owner's default lenses as already on. The
-calling agent chooses the lenses, with a reason for each, and passes the extras
-to review. The tool never adds a lens by itself.
+`suggest` runs no seat, but it reads the owner config for `defaults.lenses`. It
+lists the lenses the diff's rules point at, each with its reason and evidence,
+and marks the owner's default lenses as already on. The calling agent chooses
+the lenses, with a reason for each, and passes the extras to review. The tool
+never adds a lens by itself.
 
 ```json
 {"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD","lenses":["security"]}
@@ -102,17 +103,18 @@ A review reply starts like this:
 ```
 # Review panel
 4/4 voted · 8 findings · 2m 57s · $1.6012
-Seats: holistic (sol, opus), tests (sol)
+Seats: holistic (sol, opus), tests (sol, opus)
 Record: `…/.review-panel/runs/…`
 ```
 
 `Seats:` groups the seats by lens, failed seats included; a `Lost:` line under
 it names any that failed. After the findings, a `Suggest:` block lists suggested
-lenses that did not run, one per line with its reason and first evidence:
+lenses that did not run, one per line with its reason and first evidence. Each
+file name is shown as a code span, with any control character replaced:
 
 ```
 Suggest:
-- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run/record-key.ts:42, +2 more)
+- security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, +2 more)
 ```
 
 ```json

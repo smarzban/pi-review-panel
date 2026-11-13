@@ -584,8 +584,8 @@ describe("suggest block", () => {
 		expect(line).toBe(
 			"- security: added line(s) touch auth/crypto/subprocess/deserialization (``evil\uFFFD[31mRED\uFFFD]52;c;eA==\uFFFD\uFFFD# Heading [x](http://e) `tick` \uFFFDevil\uFFFD\uFFFD:7``)",
 		);
-		// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
 		expect(line).not.toMatch(
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: the test is about control characters
 			/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/,
 		);
 	});
