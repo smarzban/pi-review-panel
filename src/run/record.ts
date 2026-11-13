@@ -11,6 +11,7 @@ import {
 	renameSync,
 	rmSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import path from "node:path";
 
@@ -608,7 +609,7 @@ function createExclusive(target: string, text: string): boolean {
 			if (!isNoHardLinkError(error)) {
 				throw error;
 			}
-			writeFileSync(target, text, { flag: "wx", mode: 0o600 });
+			writeInPlace(target, text);
 		}
 		return true;
 	} catch (error) {
@@ -618,6 +619,37 @@ function createExclusive(target: string, text: string): boolean {
 		throw error;
 	} finally {
 		rmSync(temp, { force: true });
+	}
+}
+
+/**
+ * Creates `target` exclusively and writes `text` into it. If the write fails
+ * (a full disk) or the close does (a deferred network write error), the file
+ * this call just created is removed again, so it never leaves an empty lock
+ * that every later run would refuse.
+ */
+function writeInPlace(target: string, text: string): void {
+	const fd = openSync(target, "wx", 0o600);
+	let open = true;
+	try {
+		const bytes = Buffer.from(text);
+		let written = 0;
+		while (written < bytes.length) {
+			written += writeSync(fd, bytes, written);
+		}
+		// A network mount can report a deferred write error only at close.
+		open = false;
+		closeSync(fd);
+	} catch (error) {
+		if (open) {
+			try {
+				closeSync(fd);
+			} catch {
+				// The write error is the one to report.
+			}
+		}
+		rmSync(target, { force: true });
+		throw error;
 	}
 }
 
@@ -635,8 +667,8 @@ function isNoHardLinkError(error: unknown): boolean {
 /**
  * The pid holding a record's run lock, for judging whether it is stale. A
  * lock that is a regular file but names no pid is refused, never judged
- * stale: this version publishes a lock only whole, so such a lock is one
- * being written by another process (or left unfinished by a crash).
+ * stale: such a lock is one being written by another process (in place, on a
+ * filesystem without hard links) or left unfinished by a crash.
  */
 function heldRunLock(recordPath: string): number | undefined {
 	const state = runLockState(recordPath);

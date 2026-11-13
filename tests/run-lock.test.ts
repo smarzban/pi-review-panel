@@ -49,6 +49,14 @@ const fsLog = vi.hoisted(() => ({
 	links: [] as Array<{ target: string; body: string }>,
 	/** When set, every link fails with this code, as on a filesystem without hard links. */
 	linkErrorCode: undefined as string | undefined,
+	/** When set, a write to this path fails with ENOSPC after it was opened. */
+	failWriteTo: undefined as string | undefined,
+	/** When set, closing this path fails with EIO (a deferred network write error). */
+	failCloseOf: undefined as string | undefined,
+	/** When set, each write to this path writes at most one byte. */
+	shortWritesTo: undefined as string | undefined,
+	/** Each fd number `closeSync` was called with. */
+	closes: [] as number[],
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -58,6 +66,48 @@ vi.mock("node:fs", async (importOriginal) => {
 		writeFileSync: (...args: Parameters<typeof real.writeFileSync>) => {
 			fsLog.writes.push(String(args[0]));
 			return real.writeFileSync(...args);
+		},
+		writeSync: (...args: Parameters<typeof real.writeSync>) => {
+			const target = fsLog.failWriteTo;
+			if (
+				target !== undefined &&
+				real.fstatSync(args[0]).ino ===
+					real.statSync(target, { throwIfNoEntry: false })?.ino
+			) {
+				throw Object.assign(
+					new Error("ENOSPC: no space left on device, write"),
+					{
+						code: "ENOSPC",
+					},
+				);
+			}
+			const short = fsLog.shortWritesTo;
+			if (
+				short !== undefined &&
+				typeof args[1] !== "string" &&
+				real.fstatSync(args[0]).ino ===
+					real.statSync(short, { throwIfNoEntry: false })?.ino
+			) {
+				const buffer = args[1] as Buffer;
+				const offset = typeof args[2] === "number" ? args[2] : 0;
+				return real.writeSync(args[0], buffer, offset, 1);
+			}
+			return (real.writeSync as (...a: unknown[]) => number)(...args);
+		},
+		closeSync: (fd: number) => {
+			fsLog.closes.push(fd);
+			const target = fsLog.failCloseOf;
+			if (
+				target !== undefined &&
+				real.fstatSync(fd).ino ===
+					real.statSync(target, { throwIfNoEntry: false })?.ino
+			) {
+				real.closeSync(fd);
+				throw Object.assign(new Error("EIO: i/o error, close"), {
+					code: "EIO",
+				});
+			}
+			return real.closeSync(fd);
 		},
 		openSync: (...args: Parameters<typeof real.openSync>) => {
 			const flags = args[1];
@@ -261,6 +311,84 @@ describe("publishing the run lock", () => {
 describe("the run lock on a filesystem without hard links", () => {
 	afterEach(() => {
 		fsLog.linkErrorCode = undefined;
+		fsLog.failWriteTo = undefined;
+		fsLog.failCloseOf = undefined;
+		fsLog.shortWritesTo = undefined;
+	});
+
+	it("leaves no lock behind when closing the in-place lock fails", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.failCloseOf = lockPath;
+			const lockFds: number[] = [];
+			const opened = fsLog.closes.length;
+
+			expect(() => acquireRunLock(record)).toThrow(/EIO/);
+			expect(readdirSync(record)).toEqual([]);
+			// The failed close is not retried: a second close of the same number
+			// could shut an unrelated file that reused it.
+			const after = fsLog.closes.slice(opened);
+			for (const fd of after) {
+				if (after.indexOf(fd) !== after.lastIndexOf(fd)) {
+					lockFds.push(fd);
+				}
+			}
+			expect(lockFds).toEqual([]);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the original write error when the close after it also fails", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.failWriteTo = lockPath;
+			fsLog.failCloseOf = lockPath;
+
+			expect(() => acquireRunLock(record)).toThrow(/ENOSPC/);
+			expect(readdirSync(record)).toEqual([]);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("writes the whole in-place lock even when each write is short", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.shortWritesTo = lockPath;
+
+			const release = acquireRunLock(record);
+
+			expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+			release();
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves no lock behind when the in-place write fails", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			fsLog.linkErrorCode = "ENOTSUP";
+			fsLog.failWriteTo = lockPath;
+
+			expect(() => acquireRunLock(record)).toThrow(/ENOSPC/);
+			expect(readdirSync(record)).toEqual([]);
+
+			// Once space is back, the next run takes the lock.
+			fsLog.failWriteTo = undefined;
+			const release = acquireRunLock(record);
+			release();
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
 	});
 
 	it.each(["ENOTSUP", "EOPNOTSUPP", "EPERM", "ENOSYS"])(
