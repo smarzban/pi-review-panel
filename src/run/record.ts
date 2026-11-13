@@ -592,12 +592,24 @@ export function acquireRunLock(recordPath: string): () => void {
  * Creates `target` with its whole body, only if nothing (not even a dangling
  * symlink) is there. The body is written to a temp file first and then
  * hard-linked into place, so `target` never exists empty or half-written.
+ *
+ * On a filesystem without hard links (FAT, some network mounts) the body is
+ * written straight to `target` with an exclusive create instead. A reader can
+ * then see it empty or half-written for a moment; `heldRunLock` refuses such a
+ * lock as unfinished and never takes it over, so the fallback stays safe.
  */
 function createExclusive(target: string, text: string): boolean {
 	const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
 	try {
 		writeFileSync(temp, text, { flag: "wx", mode: 0o600 });
-		linkSync(temp, target);
+		try {
+			linkSync(temp, target);
+		} catch (error) {
+			if (!isNoHardLinkError(error)) {
+				throw error;
+			}
+			writeFileSync(target, text, { flag: "wx", mode: 0o600 });
+		}
 		return true;
 	} catch (error) {
 		if (isExistsError(error)) {
@@ -607,6 +619,17 @@ function createExclusive(target: string, text: string): boolean {
 	} finally {
 		rmSync(temp, { force: true });
 	}
+}
+
+/** `link` failed because this filesystem has no hard links. */
+function isNoHardLinkError(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException | undefined)?.code;
+	return (
+		code === "ENOTSUP" ||
+		code === "EOPNOTSUPP" ||
+		code === "EPERM" ||
+		code === "ENOSYS"
+	);
 }
 
 /**

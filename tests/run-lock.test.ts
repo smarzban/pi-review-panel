@@ -47,6 +47,8 @@ vi.mock("../src/run/liveness.js", async (importOriginal) => {
 const fsLog = vi.hoisted(() => ({
 	writes: [] as string[],
 	links: [] as Array<{ target: string; body: string }>,
+	/** When set, every link fails with this code, as on a filesystem without hard links. */
+	linkErrorCode: undefined as string | undefined,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -68,6 +70,12 @@ vi.mock("node:fs", async (importOriginal) => {
 			return real.openSync(...args);
 		},
 		linkSync: (existing: string, target: string) => {
+			if (fsLog.linkErrorCode !== undefined) {
+				throw Object.assign(
+					new Error(`${fsLog.linkErrorCode}: link not supported`),
+					{ code: fsLog.linkErrorCode },
+				);
+			}
 			fsLog.links.push({
 				target: String(target),
 				body: real.readFileSync(existing, "utf8"),
@@ -243,6 +251,65 @@ describe("publishing the run lock", () => {
 			// The temp file the lock was linked from is gone.
 			expect(readdirSync(record)).toEqual([RUN_LOCK_FILE]);
 			release();
+			expect(readdirSync(record)).toEqual([]);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("the run lock on a filesystem without hard links", () => {
+	afterEach(() => {
+		fsLog.linkErrorCode = undefined;
+	});
+
+	it.each(["ENOTSUP", "EOPNOTSUPP", "EPERM", "ENOSYS"])(
+		"falls back to an exclusive write when link fails with %s",
+		(code) => {
+			const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+			try {
+				const lockPath = path.join(record, RUN_LOCK_FILE);
+				fsLog.linkErrorCode = code;
+
+				const release = acquireRunLock(record);
+
+				expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(
+					process.pid,
+				);
+				expect(readdirSync(record)).toEqual([RUN_LOCK_FILE]);
+				// A second taker is still refused while the lock is held.
+				expect(() => acquireRunLock(record)).toThrow(/still in progress/);
+				release();
+				expect(readdirSync(record)).toEqual([]);
+			} finally {
+				rmSync(record, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it("takes over a stale lock through the fallback too", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			const lockPath = path.join(record, RUN_LOCK_FILE);
+			writeFileSync(lockPath, `${JSON.stringify({ pid: deadPid() })}\n`);
+			fsLog.linkErrorCode = "ENOTSUP";
+
+			const release = acquireRunLock(record);
+
+			expect(JSON.parse(readFileSync(lockPath, "utf8")).pid).toBe(process.pid);
+			expect(readdirSync(record)).toEqual([RUN_LOCK_FILE]);
+			release();
+			expect(readdirSync(record)).toEqual([]);
+		} finally {
+			rmSync(record, { recursive: true, force: true });
+		}
+	});
+
+	it("still surfaces a link error that is not about missing hard-link support", () => {
+		const record = mkdtempSync(path.join(tmpdir(), "run-lock-"));
+		try {
+			fsLog.linkErrorCode = "EIO";
+			expect(() => acquireRunLock(record)).toThrow(/EIO/);
 			expect(readdirSync(record)).toEqual([]);
 		} finally {
 			rmSync(record, { recursive: true, force: true });
