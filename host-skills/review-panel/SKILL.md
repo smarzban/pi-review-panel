@@ -20,8 +20,9 @@ seats: they come only from the owner config. Never run `review-panel auth login`
 2. Otherwise, if the owner has a pi-review-panel checkout with a built CLI, use
    `node <checkout>/cli/dist/cli/src/main.js` in place of `review-panel` below, with
    `<checkout>` written out as the checkout's absolute path in every command. A relative path
-   breaks, because the commands run from the reviewed repository. Set a shell variable once
-   only if your shell keeps it between commands.
+   breaks, because the commands run from the reviewed repository. If your shell keeps
+   variables between commands, you may set one to the checkout's absolute path (not to the
+   whole `node …` command, which some shells will not split into words).
 3. Otherwise stop and give the owner the install-from-source steps in `cli/README.md`
    (`cd cli && npm ci && npm run build && npm link`).
 
@@ -42,7 +43,8 @@ Uncommitted work is invisible to the panel.
 
 - PR: run `git fetch origin` first. Then `base` is `origin/<baseRefName>` and `head` is
   `headRefOid`, from `gh pr view --json baseRefName,headRefOid`. If the head commit is
-  missing, `gh pr checkout <n>` fetches it. A local base branch may be stale.
+  missing, `git fetch origin pull/<n>/head` fetches it without switching the owner's branch.
+  A local base branch may be stale.
 - Local committed change: `base` is the merge base with main, `head` is `HEAD`.
 - Dirty tree: ask the owner to commit first, or review only the committed range.
 
@@ -125,7 +127,7 @@ Give the owner each finding with keep or skip and the reason, plus coverage and 
 review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-1,F-2
 ```
 
-Do not start a new discovery review on the same change.
+Do not start a new full discovery review on the same change.
 
 ## 7. Resume
 
