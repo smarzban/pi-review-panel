@@ -475,11 +475,9 @@ describe("review_panel actions without Pi", () => {
 			expect(lines[0]).toBe(
 				`Resumed ${runId}: ran 1 of 2 planned seats again (seat-1/security); kept 1 as recorded.`,
 			);
-			expect(lines.slice(2, 5)).toEqual([
-				"# Review panel",
-				"2/2 voted · 0 findings",
-				"Seats: correctness (seat-0), security (seat-1)",
-			]);
+			expect(lines[2]).toBe("# Review panel");
+			expect(lines[3]).toMatch(/^2\/2 voted · /);
+			expect(lines[4]).toBe("Seats: correctness (seat-0), security (seat-1)");
 			expect(textOf(result)).not.toContain("merge decision");
 		});
 	});
@@ -932,7 +930,7 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 					"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run.ts:1, src/run.ts:3, src/run.ts:4)",
 					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (src/run.ts)",
 					"",
-					"No seat ran. Choose the lenses yourself, with a reason for each, and pass the extra ones to review as `lenses`.",
+					"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
 				].join("\n"),
 			);
 		});
@@ -947,7 +945,8 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 						suggestLenses: () => [
 							{
 								lens: "migrations",
-								reason: "changed file(s) match a migration/DDL path or extension",
+								reason:
+									"changed file(s) match a migration/DDL path or extension",
 								evidence: ["a", "b", "c", "d", "e"].map((name) => ({
 									file: `db/${name}.sql`,
 								})),

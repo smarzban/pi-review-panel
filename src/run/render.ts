@@ -57,7 +57,29 @@ export type RenderInput = {
 	cleanupError?: string;
 	/** Present only when a resume finished this record. */
 	resume?: ResumeFacts;
+	/** The planned seats, in planned order; defaults to the outcomes' seats. */
+	seats?: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>;
 };
+
+/**
+ * The seats that ran, grouped by lens in planned order:
+ * `Seats: holistic (sol, opus), tests (sol)`. A seat that failed is listed
+ * too; the reply's `Lost:` line names it again.
+ */
+export function renderSeatsLine(
+	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>,
+): string {
+	const byLens = new Map<string, string[]>();
+	for (const seat of seats) {
+		const ids = byLens.get(seat.lens) ?? [];
+		ids.push(seat.rosterId);
+		byLens.set(seat.lens, ids);
+	}
+	const groups = [...byLens.entries()].map(
+		([lens, ids]) => `${lens} (${ids.join(", ")})`,
+	);
+	return `Seats: ${groups.join(", ")}`;
+}
 
 /**
  * Which planned seats a resume ran again, which it kept as recorded, and
@@ -140,7 +162,10 @@ export function renderReport(input: RenderInput): string {
 		...renderCleanupSection(input.cleanupError),
 		...renderLedgerNoticesSection(annotations.notices),
 		...renderFindingsSection(input.stamped, annotations.flags),
-		...renderSeatsSection(input.outcomes),
+		...renderSeatsSection(
+			input.outcomes,
+			input.seats ?? input.outcomes.map((facts) => facts.seat),
+		),
 	];
 	return `${lines.join("\n")}\n`;
 }
@@ -251,7 +276,10 @@ function renderFinding(
 	return lines;
 }
 
-function renderSeatsSection(outcomes: SeatOutcomeFacts[]): string[] {
+function renderSeatsSection(
+	outcomes: SeatOutcomeFacts[],
+	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>,
+): string[] {
 	const voted = outcomes.filter(
 		(facts) => facts.outcome.kind === "voted",
 	).length;
@@ -259,6 +287,7 @@ function renderSeatsSection(outcomes: SeatOutcomeFacts[]): string[] {
 		"## Seats",
 		"",
 		`${outcomes.length} planned seats: ${voted} voted, ${outcomes.length - voted} failed.`,
+		...(seats.length === 0 ? [] : [renderSeatsLine(seats)]),
 		"",
 	];
 	for (const facts of outcomes) {

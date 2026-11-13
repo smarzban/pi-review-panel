@@ -559,7 +559,9 @@ describe("suggest block", () => {
 		expect(formatSuggestion({ ...migrations, evidence: [] })).toBe(
 			"- migrations: changed file(s) match a migration/DDL path or extension",
 		);
-		expect(formatSuggestion(tests)).toBe("- tests: code changed (src/a.ts, +1 more)");
+		expect(formatSuggestion(tests)).toBe(
+			"- tests: code changed (src/a.ts, +1 more)",
+		);
 		expect(formatSuggestion(security, { evidence: 2 })).toBe(
 			"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run/record-key.ts:42, src/run/record-key.ts:50, +1 more)",
 		);

@@ -1,6 +1,10 @@
 import type { Finding } from "../seat/schema.js";
-import { type ResumeFacts, renderResumeSection } from "./render.js";
-import type { SeatOutcomeFacts, StampedFinding } from "./types.js";
+import {
+	type ResumeFacts,
+	renderResumeSection,
+	renderSeatsLine,
+} from "./render.js";
+import type { PlannedSeat, SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 const SEVERITY_RANK: Record<Finding["severity"], number> = {
 	high: 0,
@@ -20,6 +24,8 @@ export function renderAuditReport(input: {
 	outcomes: SeatOutcomeFacts[];
 	cleanupError?: string;
 	resume?: ResumeFacts;
+	/** The planned seats, in planned order; defaults to the outcomes' seats. */
+	seats?: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>;
 }): string {
 	const lines = [
 		`# Repository audit ${input.runId}`,
@@ -42,9 +48,10 @@ export function renderAuditReport(input: {
 		...renderFindings(input.stamped),
 		"## Seats",
 		"",
-		...renderSeats(input.outcomes),
-		"Not a merge decision.",
-		"",
+		...renderSeats(
+			input.outcomes,
+			input.seats ?? input.outcomes.map((facts) => facts.seat),
+		),
 	];
 	return lines.join("\n");
 }
@@ -80,10 +87,14 @@ function renderFindings(stamped: StampedFinding[]): string[] {
 	return lines;
 }
 
-function renderSeats(outcomes: SeatOutcomeFacts[]): string[] {
+function renderSeats(
+	outcomes: SeatOutcomeFacts[],
+	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>,
+): string[] {
 	const voted = outcomes.filter((outcome) => outcome.outcome.kind === "voted");
 	const lines = [
 		`${outcomes.length} planned seats: ${voted.length} voted, ${outcomes.length - voted.length} failed.`,
+		...(seats.length === 0 ? [] : [renderSeatsLine(seats)]),
 		"",
 	];
 	for (const facts of outcomes) {

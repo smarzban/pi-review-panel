@@ -735,7 +735,7 @@ describe("suggest", () => {
 					"- security: added line(s) touch auth/crypto/subprocess/deserialization (src/run.ts:1)",
 					"- tests (already on, owner default): code changed: check coverage, and that each added, edited, or deleted test can fail and is worth keeping (src/run.ts)",
 					"",
-					"No seat ran. Choose the lenses yourself, with a reason for each, and pass the extra ones to review as `lenses`.",
+					"No seat ran. Choose the lenses yourself, with a reason for each, then call review with the extra ones as `lenses`.",
 					"",
 				].join("\n"),
 			);
@@ -766,7 +766,15 @@ describe("suggest", () => {
 	it("refuses options and arguments suggest does not take", async () => {
 		const h = harness();
 		expect(
-			await h.run(["suggest", "--base", "main", "--head", "HEAD", "--lenses", "x"]),
+			await h.run([
+				"suggest",
+				"--base",
+				"main",
+				"--head",
+				"HEAD",
+				"--lenses",
+				"x",
+			]),
 		).toBe(EXIT_USAGE);
 		expect(h.err()).toContain('suggest: unknown option "--lenses"');
 		expect(

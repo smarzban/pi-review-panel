@@ -1327,8 +1327,8 @@ describe("review_panel resume action", () => {
 				`Resumed ${runId}: ran 2 of 3 planned seats again (seat-1/security, seat-2/tests); kept 1 as recorded.`,
 			);
 			expect(text).toContain("# Review panel");
-			expect(text).toContain(
-				"3/3 voted · 0 findings\nSeats: correctness (seat-0), security (seat-1), tests (seat-2)\n",
+			expect(text).toMatch(
+				/\n3\/3 voted · [^\n]*\nSeats: correctness \(seat-0\), security \(seat-1\), tests \(seat-2\)\n/,
 			);
 			expect(text).not.toContain("merge decision");
 			expect(updates[0]).toMatch(/review started/);

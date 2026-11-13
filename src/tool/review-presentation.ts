@@ -1,4 +1,5 @@
 import type { ReadinessReport } from "../config/readiness.js";
+import { renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type {
 	RunVerifyResult,
@@ -217,6 +218,30 @@ export function renderReadiness(
 	].join("\n");
 }
 
+/**
+ * One suggested lens on one line: `- lens: reason (file:line, +N more)`.
+ * `evidence` is how many pieces to show (default one); the rest are counted.
+ * `note` marks the lens, as in `- tests (already on, owner default): …`.
+ */
+export function formatSuggestion(
+	row: Suggestion,
+	options: { evidence?: number; note?: string } = {},
+): string {
+	const shown = row.evidence
+		.slice(0, options.evidence ?? 1)
+		.map((piece) =>
+			truncateCodePoints(
+				piece.line === undefined ? piece.file : `${piece.file}:${piece.line}`,
+				200,
+			),
+		);
+	const rest = row.evidence.length - shown.length;
+	const where = [...shown, ...(rest > 0 ? [`+${rest} more`] : [])];
+	const label =
+		options.note === undefined ? row.lens : `${row.lens} (${options.note})`;
+	return `- ${label}: ${row.reason}${where.length === 0 ? "" : ` (${where.join(", ")})`}`;
+}
+
 const SEVERITY_RANK = { high: 0, medium: 1, low: 2 } as const;
 const EVIDENCE_CHARS = 280;
 
@@ -328,7 +353,11 @@ export function renderReviewResult(input: {
 	if (totals !== undefined) {
 		summary.push(formatDuration(totals.durationMs), formatCost(totals.cost));
 	}
-	const lines = ["# Review panel", summary.join(" · ")];
+	const lines = [
+		"# Review panel",
+		summary.join(" · "),
+		renderSeatsLine(input.panel),
+	];
 	if (failed.length > 0) {
 		const lost = failed.map((facts) => {
 			const klass =
@@ -357,14 +386,21 @@ export function renderReviewResult(input: {
 			}
 		}
 	}
-	const suggestions = input.suggestions ?? [];
+	// A lens that ran shows in the seats line; only untaken ones are suggested.
+	const ran = new Set(input.panel.map((seat) => seat.lens));
+	const suggestions = (input.suggestions ?? []).filter(
+		(row) => !ran.has(row.lens),
+	);
 	if (suggestions.length > 0) {
-		lines.push("", `Suggest: ${suggestions.map((row) => row.lens).join(", ")}`);
+		lines.push(
+			"",
+			"Suggest:",
+			...suggestions.map((row) => formatSuggestion(row)),
+		);
 	}
 	if (input.result.cleanupError !== undefined) {
 		lines.push("", input.result.cleanupError);
 	}
-	lines.push("", "Not a merge decision.");
 	return fitPresentation(lines);
 }
 
@@ -388,6 +424,7 @@ export function renderAuditResult(input: {
 	const lines = [
 		"# Repository audit",
 		`${voted.length}/${input.result.outcomes.length} voted · ${findings.length} finding${findings.length === 1 ? "" : "s"}`,
+		renderSeatsLine(input.panel),
 		...(areas.length === 0 ? [] : [`Areas: ${areas.join(", ")}`]),
 	];
 	if (failed.length > 0) {
@@ -413,11 +450,14 @@ export function renderAuditResult(input: {
 	if (input.result.cleanupError !== undefined) {
 		lines.push("", input.result.cleanupError);
 	}
-	lines.push("", "Not a merge decision.");
 	return fitPresentation(lines);
 }
 
-export function renderVerifyResult(result: RunVerifyResult): string {
+/** `panel` is the planned verify seats; it defaults to the outcomes' seats. */
+export function renderVerifyResult(
+	result: RunVerifyResult,
+	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
+): string {
 	const voted = result.outcomes.filter(
 		(facts) => facts.outcome.kind === "voted",
 	);
@@ -472,7 +512,11 @@ export function renderVerifyResult(result: RunVerifyResult): string {
 			? "no regressions"
 			: `${regressions.length} regression${regressions.length === 1 ? "" : "s"}`,
 	];
-	const lines = ["# Review panel verify", summary.join(" · ")];
+	const lines = [
+		"# Review panel verify",
+		summary.join(" · "),
+		...(panel.length === 0 ? [] : [renderSeatsLine(panel)]),
+	];
 	if (failed.length > 0) {
 		lines.push(
 			`Lost: ${failed.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`).join(", ")}`,
@@ -494,6 +538,5 @@ export function renderVerifyResult(result: RunVerifyResult): string {
 	if (result.cleanupError !== undefined) {
 		lines.push("", result.cleanupError);
 	}
-	lines.push("", "Not a merge decision.");
 	return fitPresentation(lines);
 }

@@ -296,6 +296,7 @@ export async function executeReview(
 				meta,
 				stamped,
 				outcomes,
+				seats: config.seats,
 				annotations,
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined

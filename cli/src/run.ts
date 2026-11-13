@@ -18,9 +18,11 @@ import {
 	parseDiagnoseArguments,
 	parseResumeArguments,
 	parseReviewArguments,
+	parseSuggestArguments,
 	parseVerifyArguments,
 	resumeAction,
 	reviewAction,
+	suggestAction,
 	verifyAction,
 } from "../../src/actions/actions.js";
 import {
@@ -64,6 +66,7 @@ export type ActionFunctions = {
 	verify: typeof verifyAction;
 	resume: typeof resumeAction;
 	comment: typeof commentAction;
+	suggest: typeof suggestAction;
 };
 
 export const realActions: ActionFunctions = {
@@ -73,6 +76,7 @@ export const realActions: ActionFunctions = {
 	verify: verifyAction,
 	resume: resumeAction,
 	comment: commentAction,
+	suggest: suggestAction,
 };
 
 export type RunIo = {
@@ -107,6 +111,7 @@ const PARSERS: Record<
 	verify: parseVerifyArguments,
 	resume: parseResumeArguments,
 	comment: parseCommentArguments,
+	suggest: parseSuggestArguments,
 };
 
 function message(error: unknown): string {

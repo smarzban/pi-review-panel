@@ -16,9 +16,11 @@ import {
 	parseDiagnoseArguments,
 	parseResumeArguments,
 	parseReviewArguments,
+	parseSuggestArguments,
 	parseVerifyArguments,
 	resumeAction,
 	reviewAction,
+	suggestAction,
 	validateNonEmptyString,
 	verifyAction,
 } from "../actions/actions.js";
@@ -57,7 +59,7 @@ const parameters = Type.Object(
 		action: Type.Optional(
 			Type.String({
 				description:
-					'Required action: "diagnose", "review", "audit", "verify", "resume", or "comment".',
+					'Required action: "diagnose", "suggest", "review", "audit", "verify", "resume", or "comment".',
 			}),
 		),
 		repository: Type.Optional(absoluteRepository),
@@ -79,7 +81,7 @@ const parameters = Type.Object(
 );
 
 const USAGE =
-	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "review", "base": "main", "head": "HEAD" } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "resume", "priorRunId": "<interrupted-run-directory>" } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
+	'review_panel needs an action. Never call it with {}. Omit repository when this process is already in the repo. Copy one of: { "action": "diagnose" } | { "action": "suggest", "base": "main", "head": "HEAD" } | { "action": "review", "base": "main", "head": "HEAD", "lenses": ["tests"] } | { "action": "audit" } | { "action": "verify", "priorRunId": "<run-directory-or-record-path>", "head": "HEAD", "keptFindingIds": ["F-1"] } | { "action": "resume", "priorRunId": "<interrupted-run-directory>" } | { "action": "comment", "priorRunId": "<run-directory-or-record-path>", "ownerApproved": true }';
 
 type ReviewToolArguments = Record<string, unknown>;
 
@@ -146,7 +148,7 @@ export function createReviewPanelTool(
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, suggest lenses for a base...head change (no seat runs; you choose the lenses), review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {
@@ -199,6 +201,11 @@ export function createReviewPanelTool(
 						{ repoDir, ...parseResumeArguments(args) },
 						actionContext,
 					);
+				case "suggest":
+					return suggestAction(
+						{ repoDir, ...parseSuggestArguments(args) },
+						actionContext,
+					);
 				case "review":
 					return reviewAction(
 						{ repoDir, ...parseReviewArguments(args) },
@@ -206,7 +213,7 @@ export function createReviewPanelTool(
 					);
 				default:
 					throw new Error(
-						`review_panel action must be "diagnose", "review", "audit", "verify", "resume", or "comment", got "${action}"`,
+						`review_panel action must be "diagnose", "suggest", "review", "audit", "verify", "resume", or "comment", got "${action}"`,
 					);
 			}
 		},
