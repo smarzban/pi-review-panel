@@ -1,5 +1,10 @@
-import type { PanelRecord, StampedFinding } from "../run/types.js";
-import { fitCommentBody, postedCode, postedText } from "./posted-text.js";
+import type { PanelRecord, PlannedSeat, StampedFinding } from "../run/types.js";
+import {
+	fitCommentBody,
+	markerTail,
+	postedCode,
+	postedText,
+} from "./posted-text.js";
 
 const OID_DISPLAY_LENGTH = 7;
 
@@ -19,8 +24,8 @@ export type CloseoutCommentInput = {
 	fixed: number;
 	dismissed: CloseoutDismissed[];
 	lowAdvisory: CloseoutLow[];
-	seats: string[];
-	extras: string[];
+	/** The review's seats, shown grouped by lens as the reply's `Seats:` line. */
+	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>;
 	lost: string[];
 	/** Verify seats that were lost, listed after the review's on `Lost:`. */
 	verifyLost?: string[];
@@ -30,9 +35,11 @@ export type CloseoutCommentInput = {
 	headOid: string;
 	/** Defaults to `## Review panel`, the manual `comment` card's heading. */
 	heading?: string;
-	/** One line under the heading, such as the run ids an automatic card is for. */
-	runLine?: string;
+	/** The run ids the card is for, carried in its hidden marker only. */
+	runIds?: CloseoutRunIds;
 };
+
+export type CloseoutRunIds = { review: string; verify?: string };
 
 export type CloseoutJudgmentRow = {
 	id: string;
@@ -64,7 +71,7 @@ export type AssembleCloseoutInput = AccountCloseoutInput & {
 	meta: { baseRef: string; baseOid: string; headOid: string };
 	headRef?: string;
 	heading?: string;
-	runLine?: string;
+	runIds?: CloseoutRunIds;
 };
 
 function shortOid(oid: string): string {
@@ -85,13 +92,15 @@ function requireReason(id: string, reason: string): string {
 
 /** One close-out card as its head lines and its list rows. */
 export type CloseoutCardParts = {
-	/** The heading, run line, counts, `Seats:`, `Lost:` and the range. */
+	/** The heading, counts, `Seats:`, `Lost:` and the range. */
 	head: string[];
 	/**
 	 * One row per list item. A section heading goes with the first item
 	 * under it, so a cut never leaves a heading without items.
 	 */
 	rows: string[][];
+	/** A blank line and the hidden run marker, when there are run ids. */
+	tail: string[];
 };
 
 /**
@@ -107,10 +116,6 @@ export function closeoutCardParts(
 	}
 
 	const findingWord = input.submitted === 1 ? "finding" : "findings";
-	const extras =
-		input.extras.length === 0
-			? ""
-			: ` · extras: ${input.extras.map((name) => postedText(name)).join(", ")}`;
 	const lostNames = [
 		...input.lost.map((name) => postedText(name)),
 		...(input.verifyLost ?? []).map((name) => `${postedText(name)} (verify)`),
@@ -119,11 +124,10 @@ export function closeoutCardParts(
 	const headRef = input.headRef ?? "HEAD";
 	const head = [
 		input.heading ?? "## Review panel",
-		...(input.runLine === undefined ? [] : [input.runLine]),
 		"",
 		`${input.submitted} ${findingWord} submitted · ${input.fixed} fixed · ${input.dismissed.length} dismissed · ${input.lowAdvisory.length} left as low/advisory`,
-		`Seats: ${input.seats.map((name) => postedText(name)).join(", ")} (holistic)${extras}`,
-		`Lost: ${lost}`,
+		`**Seats:** ${seatGroups(input.seats)}`,
+		`**Lost:** ${lost}`,
 		`${postedCode(input.baseRef)} (${postedCode(shortOid(input.baseOid))}) → ${postedCode(headRef)} (${postedCode(shortOid(input.headOid))})`,
 	];
 	const rows: string[][] = [];
@@ -136,55 +140,50 @@ export function closeoutCardParts(
 		"### Dismissed",
 		input.dismissed.map(
 			(row) =>
-				`- ${postedText(row.id, 40)} ${postedText(row.title)} — ${postedText(row.reason, 1_000)}`,
+				`- **${postedText(row.id, 40)}** ${postedText(row.title)} — ${postedText(row.reason, 1_000)}`,
 		),
 	);
 	section(
 		"### Low / advisory (not kept)",
 		input.lowAdvisory.map(
-			(row) => `- ${postedText(row.id, 40)} ${postedText(row.title)}`,
+			(row) => `- **${postedText(row.id, 40)}** ${postedText(row.title)}`,
 		),
 	);
-	return { head, rows };
+	return {
+		head,
+		rows,
+		tail: input.runIds === undefined ? [] : markerTail(input.runIds),
+	};
+}
+
+/**
+ * The seats grouped by lens, in the reply's `Seats:` format
+ * (`holistic (sol, opus), tests (sol, opus)`), each name as posted text.
+ */
+function seatGroups(
+	seats: ReadonlyArray<Pick<PlannedSeat, "rosterId" | "lens">>,
+): string {
+	const byLens = new Map<string, string[]>();
+	for (const seat of seats) {
+		const ids = byLens.get(seat.lens) ?? [];
+		ids.push(seat.rosterId);
+		byLens.set(seat.lens, ids);
+	}
+	if (byLens.size === 0) {
+		return "none";
+	}
+	return [...byLens.entries()]
+		.map(
+			([lens, ids]) =>
+				`${postedText(lens)} (${ids.map((id) => postedText(id)).join(", ")})`,
+		)
+		.join(", ");
 }
 
 /** Presentation-only close-out card. Counts and lists, no merge claim. */
 export function renderCloseoutComment(input: CloseoutCommentInput): string {
-	const { head, rows } = closeoutCardParts(input);
-	return fitCommentBody(head, rows, [], "row");
-}
-
-function uniqueInOrder(
-	values: readonly string[],
-	skip?: (value: string) => boolean,
-): string[] {
-	const seen = new Set<string>();
-	const ordered: string[] = [];
-	for (const value of values) {
-		if (skip?.(value) || seen.has(value)) {
-			continue;
-		}
-		seen.add(value);
-		ordered.push(value);
-	}
-	return ordered;
-}
-
-export function seatsFromPanel(panel: PanelRecord): {
-	seats: string[];
-	extras: string[];
-} {
-	return {
-		seats: uniqueInOrder(
-			panel.seats
-				.filter((seat) => seat.lens === "holistic")
-				.map((seat) => seat.rosterId),
-		),
-		extras: uniqueInOrder(
-			panel.seats.map((seat) => seat.lens),
-			(lens) => lens === "holistic" || lens === "fix-verification",
-		),
-	};
+	const { head, rows, tail } = closeoutCardParts(input);
+	return fitCommentBody(head, rows, tail, "row");
 }
 
 /** Split a review record into dismissed, leftover lows, and remaining (fixed) ids. */
@@ -257,14 +256,12 @@ export function assembleCloseoutParts(
 	input: AssembleCloseoutInput,
 ): CloseoutCardParts {
 	const accounted = accountCloseoutFindings(input);
-	const { seats, extras } = seatsFromPanel(input.panel);
 	return closeoutCardParts({
 		submitted: accounted.submitted,
 		fixed: accounted.fixed.length,
 		dismissed: accounted.dismissed,
 		lowAdvisory: accounted.lowAdvisory,
-		seats,
-		extras,
+		seats: input.panel.seats,
 		lost: [...input.lost],
 		...(input.verifyLost === undefined
 			? {}
@@ -274,7 +271,7 @@ export function assembleCloseoutParts(
 		headOid: input.meta.headOid,
 		...(input.headRef === undefined ? {} : { headRef: input.headRef }),
 		...(input.heading === undefined ? {} : { heading: input.heading }),
-		...(input.runLine === undefined ? {} : { runLine: input.runLine }),
+		...(input.runIds === undefined ? {} : { runIds: input.runIds }),
 	});
 }
 
@@ -283,6 +280,6 @@ export function assembleCloseoutParts(
  * cut by whole rows to stay under GitHub's comment limit.
  */
 export function assembleCloseoutComment(input: AssembleCloseoutInput): string {
-	const { head, rows } = assembleCloseoutParts(input);
-	return fitCommentBody(head, rows, [], "row");
+	const { head, rows, tail } = assembleCloseoutParts(input);
+	return fitCommentBody(head, rows, tail, "row");
 }

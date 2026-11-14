@@ -6,6 +6,14 @@ import {
 	renderCloseoutComment,
 } from "../src/tool/closeout-comment.js";
 
+function seatsOf(
+	...groups: Array<[lens: string, ids: string[]]>
+): Array<{ rosterId: string; lens: string }> {
+	return groups.flatMap(([lens, ids]) =>
+		ids.map((rosterId) => ({ rosterId, lens })),
+	);
+}
+
 const baseOid = "a1b2c3dffffffffeeeeeeeeeeeeeeeeeeeeeee";
 const headOid = "e4f5a6bffffffffeeeeeeeeeeeeeeeeeeeeeee";
 
@@ -101,8 +109,11 @@ describe("renderCloseoutComment", () => {
 				{ id: "F-8", title: "rename the helper" },
 				{ id: "F-9", title: "extra log line" },
 			],
-			seats: ["terra", "glm", "deepseek"],
-			extras: ["security", "tests"],
+			seats: seatsOf(
+				["holistic", ["terra", "glm", "deepseek"]],
+				["security", ["terra", "glm"]],
+				["tests", ["terra", "glm"]],
+			),
 			lost: [],
 			baseRef: "origin/main",
 			baseOid,
@@ -114,29 +125,28 @@ describe("renderCloseoutComment", () => {
 				"## Review panel",
 				"",
 				"10 findings submitted · 6 fixed · 2 dismissed · 2 left as low/advisory",
-				"Seats: terra, glm, deepseek (holistic) · extras: security, tests",
-				"Lost: none",
+				"**Seats:** holistic (terra, glm, deepseek), security (terra, glm), tests (terra, glm)",
+				"**Lost:** none",
 				"`origin/main` (`a1b2c3d`) → `HEAD` (`e4f5a6b`)",
 				"",
 				"### Dismissed",
-				"- F-4 stale cache claim — the cache key includes the tenant",
-				"- F-5 auth header optional — the handler still rejects a missing token",
+				"- **F-4** stale cache claim — the cache key includes the tenant",
+				"- **F-5** auth header optional — the handler still rejects a missing token",
 				"",
 				"### Low / advisory (not kept)",
-				"- F-8 rename the helper",
-				"- F-9 extra log line",
+				"- **F-8** rename the helper",
+				"- **F-9** extra log line",
 			].join("\n"),
 		);
 	});
 
-	it("omits empty dismissed and low sections and the extras clause", () => {
+	it("omits empty dismissed and low sections", () => {
 		const text = renderCloseoutComment({
 			submitted: 0,
 			fixed: 0,
 			dismissed: [],
 			lowAdvisory: [],
-			seats: ["terra"],
-			extras: [],
+			seats: seatsOf(["holistic", ["terra"]]),
 			lost: [],
 			baseRef: "main",
 			baseOid,
@@ -149,14 +159,13 @@ describe("renderCloseoutComment", () => {
 				"## Review panel",
 				"",
 				"0 findings submitted · 0 fixed · 0 dismissed · 0 left as low/advisory",
-				"Seats: terra (holistic)",
-				"Lost: none",
+				"**Seats:** holistic (terra)",
+				"**Lost:** none",
 				"`main` (`a1b2c3d`) → `feat/x` (`e4f5a6b`)",
 			].join("\n"),
 		);
 		expect(text).not.toContain("### Dismissed");
 		expect(text).not.toContain("### Low / advisory");
-		expect(text).not.toContain("extras:");
 	});
 
 	it("lists lost coverage and never adds a Fixed list or merge claim", () => {
@@ -165,15 +174,14 @@ describe("renderCloseoutComment", () => {
 			fixed: 1,
 			dismissed: [],
 			lowAdvisory: [],
-			seats: ["terra", "glm"],
-			extras: ["security"],
+			seats: seatsOf(["holistic", ["terra", "glm"]], ["security", ["terra"]]),
 			lost: ["deepseek/holistic"],
 			baseRef: "origin/main",
 			baseOid,
 			headOid,
 		});
 
-		expect(text).toContain("Lost: deepseek/holistic");
+		expect(text).toContain("**Lost:** deepseek/holistic");
 		expect(text).toContain("1 finding submitted · 1 fixed");
 		expect(text).not.toContain("### Fixed");
 		expect(text).not.toContain("Record:");
@@ -197,8 +205,7 @@ describe("renderCloseoutComment", () => {
 				},
 			],
 			lowAdvisory: [{ id: "F-2", title: "@bot\n## ship it" }],
-			seats: ["terra"],
-			extras: [],
+			seats: seatsOf(["holistic", ["terra"]]),
 			lost: [],
 			baseRef: "main",
 			baseOid,
@@ -211,7 +218,7 @@ describe("renderCloseoutComment", () => {
 		expect(text).not.toMatch(/^## Ready to merge$/m);
 		expect(text).not.toContain("@org");
 		expect(text).not.toContain("@bot");
-		expect(text).toContain("F-1 auth bypass");
+		expect(text).toContain("**F-1** auth bypass");
 		expect(text).toContain("@\u200Dorg/maintainers please land");
 	});
 
@@ -222,8 +229,7 @@ describe("renderCloseoutComment", () => {
 				fixed: 0,
 				dismissed: [{ id: "F-1", title: "auth bypass", reason: "   " }],
 				lowAdvisory: [],
-				seats: ["terra"],
-				extras: [],
+				seats: seatsOf(["holistic", ["terra"]]),
 				lost: [],
 				baseRef: "main",
 				baseOid,
@@ -255,12 +261,12 @@ describe("assembleCloseoutComment", () => {
 			"4 findings submitted · 2 fixed · 1 dismissed · 1 left as low/advisory",
 		);
 		expect(text).toContain(
-			"Seats: terra, glm, deepseek (holistic) · extras: security, tests",
+			"**Seats:** holistic (terra, glm, deepseek), security (terra, glm), tests (terra, glm)",
 		);
 		expect(text).toContain(
-			"- F-4 stale cache claim — the cache key includes the tenant",
+			"- **F-4** stale cache claim — the cache key includes the tenant",
 		);
-		expect(text).toContain("- F-3 rename helper");
+		expect(text).toContain("- **F-3** rename helper");
 		expect(text).not.toContain("### Fixed");
 		expect(text).not.toContain("F-1");
 		expect(text).not.toContain("F-2");

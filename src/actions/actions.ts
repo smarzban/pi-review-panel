@@ -48,7 +48,7 @@ import {
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
-import { loadPriorRun } from "../run/prior-run.js";
+import { loadPriorRun, resolvePriorRunId } from "../run/prior-run.js";
 import {
 	checkRecordKey,
 	loadRecordKey,
@@ -928,6 +928,25 @@ export async function verifyAction(
 	return textResult(withRoundLines(report, roundLines));
 }
 
+/**
+ * The verify run id for the card's hidden marker: the run directory name,
+ * also when `verifyRunId` was given as a record path. A value that names no
+ * run under this repository is left out of the marker.
+ */
+function markerVerifyId(
+	repoDir: string,
+	verifyRunId: string | undefined,
+): string | undefined {
+	if (verifyRunId === undefined) {
+		return undefined;
+	}
+	try {
+		return resolvePriorRunId(repoDir, verifyRunId);
+	} catch {
+		return undefined;
+	}
+}
+
 export async function commentAction(
 	input: RepositoryInput & CommentInput,
 	context: ActionContext = {},
@@ -955,6 +974,7 @@ export async function commentAction(
 			facts.run.runId,
 		);
 	}
+	const verifyRunId = markerVerifyId(repoDir, valid.verifyRunId);
 	const body = assembleCloseoutComment({
 		findings: facts.run.findings,
 		panel: facts.panel,
@@ -963,6 +983,10 @@ export async function commentAction(
 		dismissed,
 		lowAdvisory,
 		...(valid.head === undefined ? {} : { headRef: valid.head }),
+		runIds: {
+			review: facts.run.runId,
+			...(verifyRunId === undefined ? {} : { verify: verifyRunId }),
+		},
 	});
 	const posted = resolved.postComment({
 		repository: repoDir,

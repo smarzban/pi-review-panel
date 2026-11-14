@@ -386,7 +386,7 @@ function verifyRun(
 const REVIEW_ID = "20261113-review";
 
 describe("a review round posts to the PR whose head it reviewed", () => {
-	it("posts exactly one new review comment with the run id and no local path", async () => {
+	it("posts exactly one new review comment with the run id in its hidden marker and no local path", async () => {
 		await withRepository(async (repo, head) => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await reviewAction(
@@ -410,9 +410,9 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			expect(posted[0]?.args.join(" ")).not.toContain("Review panel");
 			const body = bodyOf(posted[0]);
 			expect(body.split("\n")[0]).toBe("## Review panel · review");
-			expect(body).toContain("r-1");
+			expect(body.split("\n").at(-1)).toBe("<!-- review-panel review=r-1 -->");
 			expect(body).toContain("F-1");
-			expect(body).toContain("Seats: holistic (terra, claude)");
+			expect(body).toContain("**Seats:** holistic (terra, claude)");
 			expect(body).not.toContain(repo);
 			expect(body).not.toContain("Record:");
 			// No call edits or deletes a comment.
@@ -700,11 +700,11 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			expect(body.split("\n")[0]).toBe("## Review panel · verify 2");
 			expect(body).toContain("v-2");
 			expect(body).toContain(REVIEW_ID);
-			expect(body).toMatch(/F-1 resolved .*the guard now checks null/);
+			expect(body).toMatch(/F-1 resolved\*\* .*the guard now checks null/);
 			expect(body).toMatch(/F-2 still present/);
-			expect(body).toMatch(/F-3 .*by design, see ADR 4/);
-			expect(body).toMatch(/### Low \/ advisory \(not kept\)\n- F-4/);
-			expect(body).toMatch(/R-1 .*new crash on empty input/);
+			expect(body).toMatch(/F-3\*\* .*by design, see ADR 4/);
+			expect(body).toMatch(/### Low \/ advisory \(not kept\)\n- \*\*F-4\*\*/);
+			expect(body).toMatch(/R-1\*\* .*new crash on empty input/);
 			expect(body).not.toContain(repo);
 			expect(textOf(result)).toContain("PR comment: posted to #12");
 			// Not every kept id is resolved: no close-out, and the reply says why.
@@ -844,7 +844,7 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 					{
 						id: 9,
 						user: { login: "saeed" },
-						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					},
 				],
 			});
@@ -985,7 +985,11 @@ describe("posted text is safe", () => {
 			expect(body).not.toMatch(/[\u202E\u202C\u2066\u2069\u200B]/);
 			expect(body).not.toContain("\u0007");
 			expect(body.replace(/[@#]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
-			expect(body).not.toContain("<!--");
+			// The one HTML comment is the tool's own hidden marker, last.
+			expect(body.split("\n").at(-1)).toBe("<!-- review-panel review=r-1 -->");
+			expect(body.split("\n").slice(0, -1).join("\n")).not.toMatch(
+				/(?<!\\)<!--/,
+			);
 			// Only our own heading line looks like a Review panel heading.
 			expect(
 				body
@@ -1015,12 +1019,14 @@ describe("posted text is safe", () => {
 				body,
 			);
 			expect(cut).not.toBeNull();
-			const shown = body.split("\n").filter((line) => /^- F-\d+ /.test(line));
+			const shown = body
+				.split("\n")
+				.filter((line) => /^- \*\*F-\d+ /.test(line));
 			expect(shown.length + Number(cut?.[1])).toBe(400);
 			// Every shown finding row keeps its evidence line: rows are whole.
 			const lines = body.split("\n");
 			for (const [index, line] of lines.entries()) {
-				if (/^- F-\d+ /.test(line)) {
+				if (/^- \*\*F-\d+ /.test(line)) {
 					expect(lines[index + 1]?.startsWith("  ")).toBe(true);
 				}
 			}
@@ -1212,7 +1218,7 @@ describe("edge cases of the lookup and the run", () => {
 	it("escapes & so no HTML entity reaches GitHub", () => {
 		const safe = githubSafe("&#64;octocat &lt;x");
 		expect(safe).not.toMatch(/(?<!\\)&/);
-		expect(safe.startsWith("\\&\\#\u200D64;")).toBe(true);
+		expect(safe.startsWith("\\&#\u200D64;")).toBe(true);
 	});
 });
 
@@ -1314,7 +1320,17 @@ function outsideCodeSpans(line: string): string {
  * followed by a joiner, and no line our own renderer did not start.
  */
 function expectInert(body: string): void {
-	for (const line of body.split("\n")) {
+	for (const raw of body.split("\n")) {
+		if (
+			/^<!-- review-panel( (review|verify)=[A-Za-z0-9._-]+)+ -->$/.test(raw)
+		) {
+			// The tool's own hidden run marker.
+			continue;
+		}
+		// The tool's own bold labels: `**Seats:**` and the `- **F-1 …**` id.
+		const line = raw
+			.replace(/^(\s*)\*\*([A-Z][A-Za-z ]*:)\*\*/, "$1$2")
+			.replace(/^- \*\*((?:[^*\\]|\\.)*?)\*\*/, "- $1");
 		if (/^#{2,3} [A-Z]/.test(line)) {
 			// Our own headings: `## Review panel · …` and `### Kept` and so on.
 			expect(line).toMatch(
@@ -1323,10 +1339,14 @@ function expectInert(body: string): void {
 			continue;
 		}
 		expect(line).not.toMatch(/^\s*(={2,}|-{2,}|>|`{3}|~{3}|#|\d+\.\s)/);
-		const outside = outsideCodeSpans(line);
+		// The tool's own plain dollar: `<span>$</span>`. Any other `$` could
+		// open GitHub math.
+		const outside = outsideCodeSpans(line).replaceAll("<span>$</span>", "");
+		expect(outside).not.toContain("$");
 		// An escaped backslash escapes nothing after it: drop `\\` pairs first.
 		const unpaired = outside.replace(/\\\\/g, "");
-		expect(unpaired).not.toMatch(/(?<!\\)[<>!*_~|&`$]/);
+		expect(unpaired).not.toMatch(/(?<!\\)[<>*_~|&`]/);
+		expect(unpaired).not.toMatch(/(?<!\\)!\\?\[/);
 		expect(outside).not.toMatch(/www\./i);
 		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low)\])/);
 		expect(outside).not.toMatch(/(?<!\\)\]\(/);
@@ -1357,6 +1377,7 @@ const HOSTILE = [
 	"&#64;octocat",
 	"*bold* _em_ ~~s~~ | t",
 	"$x$",
+	"$\\color{white}{hidden}$",
 	"www.evil.example/p?q=1",
 	"_www.e.example",
 	"(www.f.example)",
@@ -1548,8 +1569,8 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			expect(lines).toContain(
 				"2 findings submitted · 2 fixed · 0 dismissed · 0 left as low/advisory",
 			);
-			expect(lines.some((line) => line.startsWith("Seats: terra"))).toBe(true);
-			expect(lines).toContain("Lost: none");
+			expect(lines).toContain("**Seats:** holistic (terra)");
+			expect(lines).toContain("**Lost:** none");
 			expect(
 				lines.some((line) => /^`main` \(`aaaaaaa`\) → `HEAD` \(`/.test(line)),
 			).toBe(true);
@@ -1671,6 +1692,11 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 		expect(text.split("\n").at(-1)).toBe(
 			"PR close-out: not posted (lost verify coverage: claude/fix-verification)",
 		);
+		expect(
+			bodyOf(posts(gh.calls)[0])
+				.split("\n")
+				.filter((line) => line.includes("Lost:")),
+		).toEqual(["**Lost:** claude/fix-verification"]);
 	});
 
 	it("a regression: the reply says so", async () => {
@@ -1707,7 +1733,7 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 			lowAdvisory: [],
 		});
 		expect(card.split("\n")).toContain(
-			"Lost: glm/holistic, claude/fix-verification (verify)",
+			"**Lost:** glm/holistic, claude/fix-verification (verify)",
 		);
 	});
 });
@@ -1717,7 +1743,7 @@ describe("fix round 1: the comment listing is read across pages (F-2)", () => {
 	const existing = {
 		id: 9,
 		user: { login: "saeed" },
-		body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+		body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 	};
 	const filler = Array.from({ length: 30 }, (_, index) => ({
 		id: 200 + index,
@@ -2074,7 +2100,7 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			{
 				id: 9,
 				user: { login: "mallory" },
-				body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+				body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 			},
 		],
 		[
@@ -2082,7 +2108,7 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			{
 				id: 9,
 				user: { login: "saeed" },
-				body: "## Review panel · close-out\nReview `other-review`",
+				body: "## Review panel · close-out\n\n<!-- review-panel review=other-review -->",
 			},
 		],
 		[
@@ -2090,7 +2116,7 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			{
 				id: 9,
 				user: { login: "saeed" },
-				body: `## Review panel · verify 1\nReview \`${REVIEW_ID}\``,
+				body: `## Review panel · verify 1\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 			},
 		],
 	] as const) {
@@ -2345,18 +2371,19 @@ function verifyOnce(
 	id: string,
 	votes: SeatVote[] = STILL,
 	signal?: AbortSignal,
+	reviewId = REVIEW_ID,
 ) {
 	return verifyAction(
 		{
 			repoDir: repo,
-			priorRunId: REVIEW_ID,
+			priorRunId: reviewId,
 			head: "HEAD",
 			keptFindingIds: ["F-1"],
 		},
 		{
 			...(signal === undefined ? {} : { signal }),
 			deps: deps(gh.runGh, {
-				runVerify: verifyRunSeats(repo, id, REVIEW_ID, ROWS_R2, votes),
+				runVerify: verifyRunSeats(repo, id, reviewId, ROWS_R2, votes),
 			}),
 		},
 	);
@@ -2508,7 +2535,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 					{
 						id: 9,
 						user: { login: "saeed" },
-						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					},
 				],
 			});
@@ -2532,7 +2559,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 					{
 						id: 9,
 						user: { login: "saeed" },
-						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					},
 				],
 			});
@@ -2545,6 +2572,74 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER)),
 			).toBe(true);
 			expect(claimsLeft(repo)).toEqual([]);
+		});
+	});
+
+	it("a review id with -- (base HEAD^) still finds its card on the PR", async () => {
+		const reviewId = "2026-11-14T17-24-42-501Z-head--e52d7adb77ca8882";
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, reviewId, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${reviewId} verify=v-0 -->`,
+					},
+				],
+			});
+			const result = await verifyOnce(
+				repo,
+				gh,
+				"v-1",
+				clean,
+				undefined,
+				reviewId,
+			);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("a card posted before T498, with the review id visible on line 2, still counts", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\` · verify \`v-0\`\n\n1 finding submitted`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("a pre-T498 lookalike whose line 2 names another review does not count", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}-other\` · verify \`v-0\`\n\nsee \`${REVIEW_ID}\``,
+					},
+				],
+			});
+			await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
 		});
 	});
 
@@ -2797,7 +2892,7 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 			"see www\\.evil.example/p",
 		);
 		expect(postedText("_www.e.example")).toBe("\\_www\\.e.example");
-		expect(postedText("(WWW.x.example)")).toBe("\\(WWW\\.x.example\\)");
+		expect(postedText("(WWW.x.example)")).toBe("(WWW\\.x.example)");
 		expect(postedText("www.e")).not.toMatch(/‍/);
 	});
 
@@ -2806,8 +2901,10 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 		expect(postedText("trail\\")).toBe("trail\\\\");
 	});
 
-	it("escapes $ so no math renders", () => {
-		expect(postedText("$x$ and $$y$$")).toBe("\\$x\\$ and \\$\\$y\\$\\$");
+	it("keeps $ out of GitHub math (T498)", () => {
+		expect(postedText("$x$ and $$y$$")).toBe(
+			"<span>$</span>x<span>$</span> and <span>$</span><span>$</span>y<span>$</span><span>$</span>",
+		);
 	});
 
 	it("puts no joiner inside a code span, so copied paths still work", () => {
@@ -3044,5 +3141,292 @@ describe("fix round 3: nits", () => {
 
 	it("a visible code value is still a code span", () => {
 		expect(postedCode(" a ")).toBe("`a`");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// T498: readable PR comments
+// ---------------------------------------------------------------------------
+
+describe("T498: readable PR comments", () => {
+	const REVIEW_RUN = "2026-11-14T17-24-42-501Z-main-e52d7adb77ca8882";
+	const VERIFY_RUN = "2026-11-14T18-00-00-000Z-main-e52d7adb77ca8882";
+
+	it("the review comment: no visible run id, bold labels, the marker last", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: reviewRun(repo, REVIEW_RUN, [
+							{
+								id: "F-1",
+								severity: "high",
+								title: "**not bold** (really)",
+								evidence: "calls f(x) for $5",
+							},
+						]),
+					}),
+				},
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			const base = git(repo, ["rev-parse", "--short=7", "main~1"]);
+			expect(body).toBe(
+				[
+					"## Review panel · review",
+					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\``,
+					"2/2 voted · 1 finding",
+					"**Seats:** holistic (terra, claude)",
+					"",
+					"- **F-1 [high]** \\*\\*not bold\\*\\* (really) (`src/a.ts:3`) — terra/holistic",
+					"  **Evidence:** calls f(x) for <span>$</span>5",
+					"",
+					`<!-- review-panel review=${REVIEW_RUN} -->`,
+				].join("\n"),
+			);
+		});
+	});
+
+	it("the review comment bolds the Lost label of a failed seat", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const voted = reviewRun(repo, REVIEW_RUN, []);
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: async (runConfig: { seats: PlannedSeat[] }) => {
+							const result = await voted(runConfig);
+							const [first, ...rest] = result.outcomes;
+							return {
+								...result,
+								outcomes: [
+									first,
+									...rest.map((facts) => ({
+										...facts,
+										outcome: {
+											kind: "failed" as const,
+											class: "provider-error",
+											reason: "quota",
+										},
+									})),
+								],
+							} as unknown as RunReviewResult;
+						},
+					}),
+				},
+			);
+			const lines = bodyOf(posts(gh.calls)[0]).split("\n");
+			expect(lines).toContain("**Lost:** claude/holistic (provider-error)");
+			expect(lines.filter((line) => line.includes("Lost:"))).toHaveLength(1);
+		});
+	});
+
+	it("the review comment bolds the Suggest label of an untaken lens", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: reviewRun(repo, REVIEW_RUN, []),
+						suggestLenses: () => [
+							{
+								lens: "migrations",
+								reason: "changed file(s) match a migration path",
+								evidence: [{ file: "db/a.sql" }],
+							},
+						],
+					}),
+				},
+			);
+			const lines = bodyOf(posts(gh.calls)[0]).split("\n");
+			expect(lines).toContain("**Suggest:**");
+			expect(lines.filter((line) => line.includes("Suggest:"))).toEqual([
+				"**Suggest:**",
+			]);
+		});
+	});
+
+	it("the verify comment and the automatic close-out: no visible run id, bold labels, the marker last", async () => {
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = [
+				{ id: "F-1", severity: "high" },
+				{ id: "F-2", severity: "medium" },
+			];
+			writeReviewRecord(repo, REVIEW_RUN, rows);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_RUN,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-2", reason: "by design (ADR 4)" }],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(
+							repo,
+							VERIFY_RUN,
+							REVIEW_RUN,
+							[rows[0] as Row],
+							[{ rosterId: "terra", items: [resolved("F-1")] }],
+						),
+					}),
+				},
+			);
+			const [verify, card] = posts(gh.calls).map(bodyOf);
+			const marker = `<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN} -->`;
+			expect(verify).toBe(
+				[
+					"## Review panel · verify 1",
+					`\`bbbbbbb\` → \`${head.slice(0, 7)}\``,
+					"1/1 voted · F-1 resolved · no regressions",
+					"**Seats:** fix-verification (terra)",
+					"",
+					"### Kept",
+					"- **F-1 resolved** — F-1 title — `src/a.ts`: fixed",
+					"",
+					"### Dismissed (not fixed)",
+					"- **F-2** — F-2 title — by design (ADR 4)",
+					"",
+					marker,
+				].join("\n"),
+			);
+			expect(card).toBe(
+				[
+					"## Review panel · close-out",
+					"",
+					"2 findings submitted · 1 fixed · 1 dismissed · 0 left as low/advisory",
+					"**Seats:** holistic (terra)",
+					"**Lost:** none",
+					`\`main\` (\`aaaaaaa\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
+					"",
+					"### Dismissed",
+					"- **F-2** F-2 title — by design (ADR 4)",
+					"",
+					marker,
+				].join("\n"),
+			);
+			for (const body of [verify, card]) {
+				expect((body ?? "").split("\n").slice(0, -1).join("\n")).not.toContain(
+					REVIEW_RUN,
+				);
+				expect((body ?? "").split("\n").slice(0, -1).join("\n")).not.toContain(
+					VERIFY_RUN,
+				);
+			}
+		});
+	});
+
+	it("the manual card: no visible run id, the marker last", async () => {
+		const { assembleCloseoutComment } = await import(
+			"../src/tool/closeout-comment.js"
+		);
+		const card = assembleCloseoutComment({
+			findings: [stamped({ id: "F-1", severity: "low" })],
+			panel: {
+				runId: REVIEW_RUN,
+				baseRef: "main",
+				seats: [
+					{ rosterId: "terra", lens: "holistic", provider: "p", model: "m" },
+					{ rosterId: "glm", lens: "holistic", provider: "p", model: "m" },
+					{ rosterId: "terra", lens: "tests", provider: "p", model: "m" },
+				],
+			} as never,
+			lost: [],
+			meta: {
+				baseRef: "main",
+				baseOid: "a".repeat(40),
+				headOid: "b".repeat(40),
+			},
+			dismissed: [],
+			lowAdvisory: ["F-1"],
+			runIds: { review: REVIEW_RUN, verify: VERIFY_RUN },
+		});
+		expect(card).toBe(
+			[
+				"## Review panel",
+				"",
+				"1 finding submitted · 0 fixed · 0 dismissed · 1 left as low/advisory",
+				"**Seats:** holistic (terra, glm), tests (terra)",
+				"**Lost:** none",
+				"`main` (`aaaaaaa`) → `HEAD` (`bbbbbbb`)",
+				"",
+				"### Low / advisory (not kept)",
+				"- **F-1** F-1 title",
+				"",
+				`<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN} -->`,
+			].join("\n"),
+		);
+	});
+
+	it("the close-out check finds an earlier card by its hidden marker", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n1 finding\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->\n`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", [
+				{ rosterId: "terra", items: [resolved("F-1")] },
+			]);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("the close-out check ignores the old visible id, a seat-authored lookalike and another author", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const marker = `<!-- review-panel review=${REVIEW_ID} -->`;
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 7,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+					},
+					{
+						id: 8,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n- **F-1** ${postedText(marker)}`,
+					},
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n- **F-1** ${postedCode(marker)}`,
+					},
+					{
+						id: 10,
+						user: { login: "someone-else" },
+						body: `## Review panel · close-out\n\n${marker}`,
+					},
+					{
+						id: 11,
+						user: { login: "saeed" },
+						body: `## Review panel · review\n\n${marker}`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", [
+				{ rosterId: "terra", items: [resolved("F-1")] },
+			]);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			expect(textOf(result).split("\n").at(-1)).toMatch(
+				/^PR close-out: posted to #12/,
+			);
+		});
 	});
 });
