@@ -146,7 +146,7 @@ function outcomes(): SeatOutcomeFacts[] {
 	}));
 }
 
-function result(grouping?: GroupingFacts): RunReviewResult {
+function result(grouping?: GroupingFacts): Omit<RunReviewResult, "findings"> {
 	return {
 		recordPath: "/repo/.review-panel/runs/r1",
 		outcomes: outcomes(),

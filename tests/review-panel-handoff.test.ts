@@ -23,7 +23,32 @@ import {
 	interruptedReviewRecord,
 	plannedSeats,
 } from "./fixtures/interrupted-run.js";
-import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+
+/** A complete review record signed with the test key, as verify needs. */
+function writeSignedReview(repo: string, runId: string): void {
+	const recordPath = path.join(repo, ".review-panel", "runs", runId);
+	mkdirSync(recordPath, { recursive: true });
+	writeFileSync(
+		path.join(recordPath, "meta.json"),
+		JSON.stringify({
+			runId,
+			baseRef: "main",
+			baseOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
+			headOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
+		}),
+	);
+	writeFileSync(path.join(recordPath, "findings.json"), "[]");
+	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	signReviewRecord(recordPath);
+}
+
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 /**
@@ -158,8 +183,9 @@ describe("review_panel execute signal reaches the runner", () => {
 	});
 
 	it("verify", async () => {
-		await withRepository((repo) =>
-			expectSignalHandedOff(
+		await withRepository((repo) => {
+			writeSignedReview(repo, "run-1");
+			return expectSignalHandedOff(
 				{
 					action: "verify",
 					priorRunId: "run-1",
@@ -180,8 +206,8 @@ describe("review_panel execute signal reaches the runner", () => {
 					},
 				}),
 				repo,
-			),
-		);
+			);
+		});
 	});
 
 	it("resume", async () => {

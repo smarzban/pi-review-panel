@@ -1,12 +1,13 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import path from "node:path";
 
 import {
 	loadPriorRun,
+	NEW_REVIEW_FIX,
 	type PriorRun,
 	resolvePriorRunId,
 } from "../run/prior-run.js";
-import { COMPLETE_MARKER, EXECUTION_FILE, PANEL_FILE } from "../run/record.js";
+import { COMPLETE_MARKER, readSignedRecord } from "../run/record.js";
 import type { PanelRecord } from "../run/types.js";
 
 export type CloseoutRunFacts = {
@@ -28,12 +29,9 @@ function asCommentError(error: unknown): Error {
 	return new Error(message.replace(/^Verify refused:/, "comment refused:"));
 }
 
-function readJson(filePath: string, label: string): unknown {
-	if (!isRealFile(filePath)) {
-		throw new Error(`comment refused: ${label} is missing`);
-	}
+function parseJson(text: string, label: string): unknown {
 	try {
-		return JSON.parse(readFileSync(filePath, "utf8"));
+		return JSON.parse(text);
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
 		throw new Error(`comment refused: ${label} is invalid: ${cause}`);
@@ -71,20 +69,31 @@ export function lostFromExecution(raw: unknown): string[] {
 	return lost;
 }
 
+/**
+ * The review record the close-out card is built from, only when it is signed
+ * by the owner's record key (see `loadPriorRun`). The panel and lost seats are
+ * parsed from the same signed bytes.
+ */
 export function loadCloseoutRun(
 	repoDir: string,
 	priorRunId: string,
+	recordKey: Buffer,
 ): CloseoutRunFacts {
 	let run: PriorRun;
 	try {
-		run = loadPriorRun(repoDir, priorRunId);
+		run = loadPriorRun(repoDir, priorRunId, recordKey);
 	} catch (error) {
 		throw asCommentError(error);
 	}
-	const panelRaw = readJson(
-		path.join(run.recordPath, PANEL_FILE),
-		"panel.json",
-	);
+	return closeoutFactsOf(run);
+}
+
+/**
+ * The close-out facts of a review record already loaded and authenticated by
+ * `loadPriorRun`, parsed from its signed bytes, never read again from disk.
+ */
+export function closeoutFactsOf(run: PriorRun): CloseoutRunFacts {
+	const panelRaw = parseJson(run.panelText, "panel.json");
 	if (
 		panelRaw === null ||
 		typeof panelRaw !== "object" ||
@@ -93,10 +102,9 @@ export function loadCloseoutRun(
 		throw new Error("comment refused: panel.json is invalid");
 	}
 	const panel = panelRaw as PanelRecord;
-	const executionPath = path.join(run.recordPath, EXECUTION_FILE);
-	const lost = isRealFile(executionPath)
-		? lostFromExecution(readJson(executionPath, "execution.json"))
-		: [];
+	const lost = lostFromExecution(
+		parseJson(run.executionText, "execution.json"),
+	);
 	return { run, panel, lost };
 }
 
@@ -107,11 +115,18 @@ type VerificationOutcome = {
 	};
 };
 
+/**
+ * Checks that a verify run of this review marked every fixed id resolved. The
+ * verify record is taken only when it is signed by the owner's record key
+ * (`record.mac` over its panel, meta and verification bytes, bound to its
+ * own run id); a planted or copied verify record is refused.
+ */
 export function assertFixedResolved(
 	repoDir: string,
 	verifyRunId: string,
 	fixedIds: readonly string[],
 	expectedPriorRunId: string,
+	recordKey: Buffer,
 ): void {
 	if (fixedIds.length === 0) {
 		return;
@@ -126,8 +141,22 @@ export function assertFixedResolved(
 	if (!isRealFile(path.join(recordPath, COMPLETE_MARKER))) {
 		throw new Error(`comment refused: verify run "${runId}" is not complete`);
 	}
-	const raw = readJson(
-		path.join(recordPath, "verification.json"),
+	let signed: ReadonlyMap<string, string>;
+	try {
+		signed = readSignedRecord(
+			recordPath,
+			"verify",
+			recordKey,
+			`verify run "${runId}"`,
+			`${NEW_REVIEW_FIX}, then verify it`,
+		);
+	} catch (error) {
+		throw new Error(
+			`comment refused: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	const raw = parseJson(
+		signed.get("verification.json") as string,
 		"verification.json",
 	);
 	if (raw === null || typeof raw !== "object") {

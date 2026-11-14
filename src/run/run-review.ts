@@ -15,7 +15,9 @@ import {
 	projectSeat,
 	type RecordSeal,
 	reserve,
+	sealRecord,
 	writeExecution,
+	writeOwnRecordFile,
 	writePanel,
 	writePlan,
 	writeRecordFile,
@@ -39,17 +41,25 @@ import {
 	type SnapshotReleaseOutcome,
 } from "./snapshot.js";
 import type {
+	PanelRecordInput,
 	PlannedSeat,
 	ReservedRecord,
 	RunConfig,
 	RunResult,
 	SeatOutcomeFacts,
+	StampedFinding,
 } from "./types.js";
 
 /** Filename for a durable snapshot-cleanup failure notice (AC-19). */
 export const CLEANUP_ERROR_FILE = "cleanup-error.txt";
 
 export type RunReviewResult = RunResult & {
+	/**
+	 * The stamped findings exactly as this run wrote them to `findings.json`.
+	 * The reply and the PR comment use these; the file is never read back,
+	 * since a writer in the repository could replace it after the seal.
+	 */
+	findings: StampedFinding[];
 	cleanupError?: string;
 	/** Seats a resume ran again; absent on a first run. */
 	resumedSeats?: PlannedSeat[];
@@ -92,6 +102,12 @@ export type ResumeState = {
 	scopingNoteDropped?: boolean;
 	/** Signs the seats this resume runs; absent only for an unsigned record. */
 	seal?: RecordSeal;
+	/**
+	 * The panel record as the signed plan gives it (base ref, scoping note
+	 * and seat rows), written again before the record is signed: what is in
+	 * the folder may have been planted, and resume does not pass the note on.
+	 */
+	panel?: PanelRecordInput;
 };
 
 export type RunReviewOptions = {
@@ -227,16 +243,22 @@ export async function executeReview(
 	try {
 		// The planned panel is durable before any pinning or scheduling, so a
 		// run that reaches reservation retains it even if it aborts (AC-25).
-		if (resume === undefined) {
-			const panelWrite = options.writePanel ?? writePanel;
-			panelWrite(record, {
+		// A resume writes the panel again too, from its signed plan: the
+		// record's panel.json is signed at completion, so it must be this
+		// run's, never what is in the folder.
+		const panelWrite = options.writePanel ?? writePanel;
+		panelWrite(
+			record,
+			resume?.panel ?? {
 				runId: record.runId,
 				baseRef: config.baseRef,
 				...(config.scopingNote === undefined
 					? {}
 					: { scopingNote: config.scopingNote }),
 				seats: config.seats,
-			});
+			},
+		);
+		if (resume === undefined) {
 			seal = writePlan(
 				record,
 				{
@@ -293,6 +315,9 @@ export async function executeReview(
 		});
 		stage = "collect";
 		const stamped = collectFindings(outcomes);
+		// The exact findings.json text, fixed now: the grouping is signed over
+		// it, and the same bytes are written below.
+		const findingsText = renderFindingsJson(stamped);
 		stage = "flag";
 		const annotations = flagPersistence(stamped, config.priorRecordPaths ?? []);
 		stage = "group";
@@ -333,7 +358,9 @@ export async function executeReview(
 					record.recordPath,
 					grouping.seat,
 					grouping.outcome.groups,
-					seal?.key,
+					seal === undefined
+						? undefined
+						: { key: seal.key, planMac: seal.planMac, findingsText },
 				);
 			}
 		}
@@ -372,9 +399,10 @@ export async function executeReview(
 						}),
 			}),
 		);
-		writeRecordFile(record.findingsPath, renderFindingsJson(stamped));
-		writeRecordFile(
-			path.join(record.recordPath, "meta.json"),
+		writeOwnRecordFile(record, "findings.json", findingsText);
+		writeOwnRecordFile(
+			record,
+			"meta.json",
 			`${JSON.stringify(meta, null, 2)}\n`,
 		);
 		if (cleanupError !== undefined) {
@@ -384,10 +412,16 @@ export async function executeReview(
 			);
 		}
 		stage = "complete";
+		// Signed last, over the files verify and comment read; a record
+		// without the owner's key stays unsigned, and they refuse it.
+		if (seal !== undefined) {
+			sealRecord(record, "review", seal.key, seal.planMac);
+		}
 		complete(record);
 		return {
 			recordPath: record.recordPath,
 			outcomes,
+			findings: stamped,
 			...(cleanupError === undefined ? {} : { cleanupError }),
 			...(resumedSeats === undefined ? {} : { resumedSeats }),
 			...(grouping === undefined ? {} : { grouping }),

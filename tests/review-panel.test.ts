@@ -30,7 +30,13 @@ import reviewPanelExtension, {
 	rejectFilesystemRoot,
 } from "../src/tool/review-panel.js";
 import { MAX_PRESENTATION_BYTES } from "../src/tool/review-presentation.js";
-import { signPlan, signSeat, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import {
+	signPlan,
+	signReviewRecord,
+	signSeat,
+	signVerifyRecord,
+	TEST_RECORD_KEY,
+} from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 type ReviewTool = ReturnType<typeof createReviewPanelTool>;
@@ -727,6 +733,9 @@ describe("review_panel public tool adapter", () => {
 
 	it("verify renders kept dispositions and regressions", async () => {
 		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "run-1", {
+				findings: [{ id: "F-1", severity: "high", title: "bug" }],
+			});
 			const tool = toolWith({
 				runVerify: async () => ({
 					recordPath: path.join(
@@ -858,6 +867,9 @@ describe("review_panel public tool adapter", () => {
 
 	it("forwards in-flight verify progress to the host onUpdate", async () => {
 		await withRepository(async (repository) => {
+			writeReviewRecord(repository, "run-1", {
+				findings: [{ id: "F-1", severity: "high", title: "bug" }],
+			});
 			const updates: string[] = [];
 			const tool = toolWith({
 				runVerify: async (_input, options) => {
@@ -964,8 +976,14 @@ function writeReviewRecord(
 			{
 				runId,
 				baseRef: "origin/main",
-				baseOid: "a1b2c3dffffffffeeeeeeeeeeeeeeeeeeeeeee",
-				headOid: "e4f5a6bffffffffeeeeeeeeeeeeeeeeeeeeeee",
+				baseOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+					cwd: repository,
+					encoding: "utf8",
+				}).trim(),
+				headOid: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repository,
+					encoding: "utf8",
+				}).trim(),
 			},
 			null,
 			2,
@@ -1014,6 +1032,7 @@ function writeReviewRecord(
 		)}\n`,
 	);
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	signReviewRecord(recordPath);
 }
 
 function writeVerifyRecord(
@@ -1057,6 +1076,7 @@ function writeVerifyRecord(
 		)}\n`,
 	);
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	signVerifyRecord(recordPath);
 }
 
 describe("review_panel comment", () => {

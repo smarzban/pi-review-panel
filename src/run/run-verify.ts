@@ -1,5 +1,3 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { loadRoleTable } from "../config/roles.js";
 import {
@@ -19,7 +17,13 @@ import type { SeatSpec } from "../seat/sdk-session.js";
 import type { VerificationResult } from "../seat/verification-schema.js";
 import { inertLine } from "./inert-text.js";
 import { loadPriorRun, selectKeptFindings } from "./prior-run.js";
-import { complete, reserve, writePanel } from "./record.js";
+import {
+	complete,
+	reserve,
+	sealRecord,
+	writeOwnRecordFile,
+	writePanel,
+} from "./record.js";
 import { DEFAULT_SEAT_BUDGET_MS, HEARTBEAT_INTERVAL_MS } from "./scheduler.js";
 import { pinSnapshot } from "./snapshot.js";
 import type { PlannedSeat, StampedFinding } from "./types.js";
@@ -67,6 +71,11 @@ export type VerifyProgressEvent = {
 };
 
 export type RunVerifyOptions = {
+	/**
+	 * The owner's record key: the prior review is taken only when it is signed
+	 * with it, and this verify record is signed with it at completion.
+	 */
+	recordKey: Buffer;
 	abortSignal?: AbortSignal;
 	sessionFactory?: SdkSessionFactory;
 	runAdvisorySeat?: typeof runAdvisorySeat;
@@ -192,12 +201,16 @@ export class VerifyCancelledError extends Error {
 
 export async function runVerify(
 	input: RunVerifyInput,
-	options: RunVerifyOptions = {},
+	options: RunVerifyOptions,
 ): Promise<RunVerifyResult> {
 	if (options.abortSignal?.aborted) {
 		throw new VerifyCancelledError();
 	}
-	const prior = loadPriorRun(input.repoDir, input.priorRunId);
+	const prior = loadPriorRun(
+		input.repoDir,
+		input.priorRunId,
+		options.recordKey,
+	);
 	if (prior.meta.headOid === input.headRevision) {
 		throw new Error(
 			"Verify refused: head resolves to the same commit as the prior run",
@@ -350,12 +363,14 @@ export async function runVerify(
 		}
 	}
 
-	writeFileSync(
-		path.join(record.recordPath, "verification.json"),
+	writeOwnRecordFile(
+		record,
+		"verification.json",
 		`${JSON.stringify({ priorRunId: prior.runId, keptFindingIds: input.keptFindingIds, outcomes }, null, 2)}\n`,
 	);
-	writeFileSync(
-		path.join(record.recordPath, "meta.json"),
+	writeOwnRecordFile(
+		record,
+		"meta.json",
 		`${JSON.stringify(
 			{
 				runId: record.runId,
@@ -369,6 +384,8 @@ export async function runVerify(
 			2,
 		)}\n`,
 	);
+	// Signed last, so comment can tell this record from a planted one.
+	sealRecord(record, "verify", options.recordKey, "");
 	complete(record);
 
 	return {

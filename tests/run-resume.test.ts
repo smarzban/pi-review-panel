@@ -700,7 +700,10 @@ describe("resume refusals", () => {
 		try {
 			const review = await runReview(
 				{ repoDir: repo, baseRef: "origin/main", seats: threeSeats() },
-				{ sessionFactory: createSdkSeatFake().factory },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake().factory,
+				},
 			);
 			writeFileSync(path.join(repo, "fix.txt"), "fix\n");
 			git(repo, ["add", "."]);
@@ -720,6 +723,7 @@ describe("resume refusals", () => {
 					keptFindingIds: [],
 				},
 				{
+					recordKey: TEST_RECORD_KEY,
 					sessionFactory: createSdkSeatFake([{ kind: "verification" }]).factory,
 				},
 			);

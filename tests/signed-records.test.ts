@@ -1,0 +1,902 @@
+import { execFileSync } from "node:child_process";
+import {
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+import {
+	type ActionDependencies,
+	commentAction,
+	ownerRecordKey,
+	resumeAction,
+	verifyAction,
+} from "../src/actions/actions.js";
+import type { Config } from "../src/config/schema.js";
+import { loadPriorRun } from "../src/run/prior-run.js";
+import { loadResumable, resumeRun } from "../src/run/resume.js";
+import { runReview } from "../src/run/run-review.js";
+import { runVerify } from "../src/run/run-verify.js";
+import { pinSnapshot } from "../src/run/snapshot.js";
+import { assertFixedResolved } from "../src/tool/closeout-from-run.js";
+import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
+import {
+	interruptedReviewRecord,
+	plannedSeats,
+} from "./fixtures/interrupted-run.js";
+import {
+	signReviewRecord,
+	signVerifyRecord,
+	TEST_RECORD_KEY,
+} from "./fixtures/record-key.js";
+import {
+	createAdvisorySeatRunner,
+	createSdkReviewRunner,
+	createSdkSeatFake,
+	SDK_FINDING,
+} from "./fixtures/sdk-seat-fake.js";
+
+/**
+ * Run records live in the reviewed repository, so anyone who can put files
+ * there can plant one. Verify and comment take a record as the owner's own
+ * only when its completion MAC (`record.mac`, from the owner's record key,
+ * bound to the record's run id) covers the files they read; a review record's
+ * `plan.json` must carry a valid `plan.mac` too. Anything else is refused,
+ * with the fix, before any seat runs and before anything is posted.
+ */
+
+function git(cwd: string, args: string[]): string {
+	return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+
+function commit(repo: string, file: string): void {
+	writeFileSync(path.join(repo, file), `${file}\n`);
+	git(repo, ["add", "."]);
+	git(repo, ["commit", "-m", file, "--quiet"]);
+}
+
+function withRepository(
+	test: (repo: string, root: string) => Promise<void>,
+): Promise<void> {
+	const root = mkdtempSync(path.join(tmpdir(), "signed-records-"));
+	const repo = path.join(root, "repo");
+	mkdirSync(repo);
+	git(repo, ["init", "-b", "main", "--quiet"]);
+	git(repo, ["config", "user.email", "signed@example.test"]);
+	git(repo, ["config", "user.name", "Signed Test"]);
+	commit(repo, "base.txt");
+	commit(repo, "head.txt");
+	return test(realpathSync(repo), root).finally(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+}
+
+const config: Config = {
+	roster: [{ id: "terra", provider: "openai-codex", model: "gpt-5.6-terra" }],
+	defaults: { seats: ["terra"] },
+};
+
+const OTHER_KEY = Buffer.alloc(32, 8);
+
+/** A gh that finds no open PR, so verify posts nothing on its own. */
+function noOpenPr(args: readonly string[]): string {
+	if (args[0] === "api" && args[1] === "user") {
+		return "owner";
+	}
+	if (args[0] === "repo") {
+		return "owner/demo";
+	}
+	return "[]";
+}
+
+function poster() {
+	const bodies: string[] = [];
+	return {
+		bodies,
+		postComment: (input: PostCloseoutInput) => {
+			bodies.push(input.body);
+			return {
+				action: "created" as const,
+				commentId: 1,
+				pr: 7,
+				url: "https://github.com/owner/demo/pull/7#issuecomment-1",
+			};
+		},
+	};
+}
+
+function deps(overrides: ActionDependencies = {}): ActionDependencies {
+	return {
+		env: {},
+		home: "/tmp/signed-records-home",
+		diagnose: async () => ({ ready: true, rows: [] }),
+		loadConfig: () => config,
+		recordKey: () => TEST_RECORD_KEY,
+		checkRecordKey: () => undefined,
+		runGh: noOpenPr,
+		runVerify: () => {
+			throw new Error("no verify seat may run for a refused record");
+		},
+		...overrides,
+	};
+}
+
+function recordOf(repo: string, runId: string): string {
+	return path.join(repo, ".review-panel", "runs", runId);
+}
+
+/** A complete review record with one high finding, unsigned. */
+function plantReview(repo: string, runId: string): string {
+	const recordPath = recordOf(repo, runId);
+	mkdirSync(recordPath, { recursive: true });
+	writeFileSync(
+		path.join(recordPath, "meta.json"),
+		JSON.stringify({
+			runId,
+			baseRef: "main",
+			baseOid: git(repo, ["rev-parse", "HEAD~1"]).trim(),
+			headOid: git(repo, ["rev-parse", "HEAD~1"]).trim(),
+		}),
+	);
+	writeFileSync(
+		path.join(recordPath, "findings.json"),
+		JSON.stringify([
+			{
+				id: "F-1",
+				seat: { provider: "openai-codex", model: "gpt-5.6-terra", lens: "x" },
+				finding: { ...SDK_FINDING, severity: "high" },
+			},
+		]),
+	);
+	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	return recordPath;
+}
+
+/** A complete verify record of `priorRunId` that marks F-1 resolved, unsigned. */
+function plantVerify(repo: string, runId: string, priorRunId: string): string {
+	const recordPath = recordOf(repo, runId);
+	mkdirSync(recordPath, { recursive: true });
+	writeFileSync(
+		path.join(recordPath, "verification.json"),
+		JSON.stringify({
+			priorRunId,
+			keptFindingIds: ["F-1"],
+			outcomes: [
+				{
+					seat: { rosterId: "terra", lens: "fix-verification" },
+					outcome: {
+						kind: "voted",
+						result: {
+							items: [{ id: "F-1", disposition: "resolved" }],
+							regressions: [],
+						},
+					},
+				},
+			],
+		}),
+	);
+	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	return recordPath;
+}
+
+const NOT_SIGNED =
+	/not signed by this owner's record key.*run a new review|run a new review.*not signed by this owner's record key/s;
+
+function verifyCall(repo: string, priorRunId: string) {
+	return {
+		repoDir: repo,
+		priorRunId,
+		head: "HEAD",
+		keptFindingIds: ["F-1"],
+	};
+}
+
+function commentCall(priorRunId: string, verifyRunId?: string) {
+	return {
+		ownerApproved: true as const,
+		priorRunId,
+		dismissed: [],
+		lowAdvisory: [],
+		...(verifyRunId === undefined ? {} : { verifyRunId }),
+	};
+}
+
+/**
+ * Every way a record can be planted, each built from a repository that
+ * already holds one genuine signed review `real-1`.
+ */
+const PLANTED: Array<{ name: string; plant: (repo: string) => string }> = [
+	{
+		name: "an unsigned record",
+		plant: (repo) => {
+			plantReview(repo, "planted");
+			return "planted";
+		},
+	},
+	{
+		name: "a record signed with another key",
+		plant: (repo) => {
+			signReviewRecord(plantReview(repo, "planted"), OTHER_KEY);
+			return "planted";
+		},
+	},
+	{
+		name: "a genuine signed record copied to another run id",
+		plant: (repo) => {
+			cpSync(recordOf(repo, "real-1"), recordOf(repo, "planted"), {
+				recursive: true,
+			});
+			return "planted";
+		},
+	},
+	{
+		name: "a genuine record with findings.json from another signed run",
+		plant: (repo) => {
+			const other = plantReview(repo, "real-2");
+			writeFileSync(path.join(other, "findings.json"), "[]");
+			signReviewRecord(other);
+			cpSync(
+				path.join(other, "findings.json"),
+				path.join(recordOf(repo, "real-1"), "findings.json"),
+			);
+			return "real-1";
+		},
+	},
+	{
+		name: "a genuine record with its plan.mac removed",
+		plant: (repo) => {
+			rmSync(path.join(recordOf(repo, "real-1"), "plan.mac"));
+			return "real-1";
+		},
+	},
+];
+
+describe("verify refuses a record not signed by the owner's key", () => {
+	for (const { name, plant } of PLANTED) {
+		it(`refuses ${name}, before any seat runs`, async () => {
+			await withRepository(async (repo) => {
+				signReviewRecord(plantReview(repo, "real-1"));
+				const runId = plant(repo);
+				const before = readdirSync(path.join(repo, ".review-panel", "runs"));
+				await expect(
+					verifyAction(verifyCall(repo, runId), { deps: deps() }),
+				).rejects.toThrow(NOT_SIGNED);
+				await expect(
+					verifyAction(verifyCall(repo, runId), { deps: deps() }),
+				).rejects.toThrow(/^Verify refused: /);
+				expect(readdirSync(path.join(repo, ".review-panel", "runs"))).toEqual(
+					before,
+				);
+			});
+		});
+	}
+
+	it("refuses in runVerify itself too, for a seam that skips the action", async () => {
+		await withRepository(async (repo) => {
+			plantReview(repo, "planted");
+			await expect(
+				runVerify(
+					{
+						repoDir: repo,
+						config,
+						priorRunId: "planted",
+						headRevision: git(repo, ["rev-parse", "HEAD"]).trim(),
+						keptFindingIds: ["F-1"],
+					},
+					{
+						recordKey: TEST_RECORD_KEY,
+						runAdvisorySeat: () => {
+							throw new Error("no seat may run");
+						},
+					},
+				),
+			).rejects.toThrow(NOT_SIGNED);
+		});
+	});
+
+	it("refuses with no record key, and creates none", async () => {
+		await withRepository(async (repo, root) => {
+			signReviewRecord(plantReview(repo, "real-1"));
+			const home = path.join(root, "home");
+			mkdirSync(path.join(home, ".pi-review-panel"), { recursive: true });
+			await expect(
+				verifyAction(verifyCall(repo, "real-1"), {
+					deps: deps({ home, recordKey: ownerRecordKey }),
+				}),
+			).rejects.toThrow(/^Verify refused: .*no record key/s);
+			expect(
+				existsSync(path.join(home, ".pi-review-panel", "record-key")),
+			).toBe(false);
+		});
+	});
+});
+
+describe("comment refuses a record not signed by the owner's key", () => {
+	for (const { name, plant } of PLANTED) {
+		it(`refuses ${name} and posts nothing`, async () => {
+			await withRepository(async (repo) => {
+				signReviewRecord(plantReview(repo, "real-1"));
+				const runId = plant(repo);
+				const { bodies, postComment } = poster();
+				await expect(
+					commentAction(
+						{
+							repoDir: repo,
+							...commentCall(runId),
+							dismissed: [{ id: "F-1", reason: "out of scope" }],
+						},
+						{ deps: deps({ postComment }) },
+					),
+				).rejects.toThrow(NOT_SIGNED);
+				expect(bodies).toEqual([]);
+			});
+		});
+	}
+
+	it("refuses a planted verify record that marks a genuine review's finding resolved", async () => {
+		await withRepository(async (repo) => {
+			signReviewRecord(plantReview(repo, "real-1"));
+			plantVerify(repo, "v-planted", "real-1");
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{ repoDir: repo, ...commentCall("real-1", "v-planted") },
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			expect(bodies).toEqual([]);
+		});
+	});
+
+	it("refuses a genuine verify record copied to another run id", async () => {
+		await withRepository(async (repo) => {
+			signReviewRecord(plantReview(repo, "real-1"));
+			signVerifyRecord(plantVerify(repo, "v-1", "real-1"));
+			cpSync(recordOf(repo, "v-1"), recordOf(repo, "v-copy"), {
+				recursive: true,
+			});
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{ repoDir: repo, ...commentCall("real-1", "v-copy") },
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			expect(bodies).toEqual([]);
+			// The genuine verify record itself is accepted.
+			await commentAction(
+				{ repoDir: repo, ...commentCall("real-1", "v-1") },
+				{ deps: deps({ postComment }) },
+			);
+			expect(bodies).toHaveLength(1);
+		});
+	});
+
+	it("refuses with no record key, posts nothing and creates no key", async () => {
+		await withRepository(async (repo, root) => {
+			signReviewRecord(plantReview(repo, "real-1"));
+			const home = path.join(root, "home");
+			mkdirSync(path.join(home, ".pi-review-panel"), { recursive: true });
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						...commentCall("real-1"),
+						dismissed: [{ id: "F-1", reason: "out of scope" }],
+					},
+					{ deps: deps({ home, recordKey: ownerRecordKey, postComment }) },
+				),
+			).rejects.toThrow(/^comment refused: .*no record key/s);
+			expect(bodies).toEqual([]);
+			expect(
+				existsSync(path.join(home, ".pi-review-panel", "record-key")),
+			).toBe(false);
+		});
+	});
+});
+
+describe("the owner's own records still work", () => {
+	it("review, then verify, then comment, end to end", async () => {
+		await withRepository(async (repo) => {
+			const { reviewAction } = await import("../src/actions/actions.js");
+			await reviewAction(
+				{ repoDir: repo, base: "HEAD~1", head: "HEAD" },
+				{
+					deps: deps({
+						runReview: createSdkReviewRunner([
+							{
+								kind: "findings",
+								findings: [{ ...SDK_FINDING, severity: "high" }],
+							},
+						]),
+					}),
+				},
+			);
+			const [reviewId] = readdirSync(path.join(repo, ".review-panel", "runs"));
+			expect(
+				existsSync(path.join(recordOf(repo, reviewId), "record.mac")),
+			).toBe(true);
+			commit(repo, "fix.txt");
+			await verifyAction(verifyCall(repo, reviewId as string), {
+				deps: deps({
+					runVerify: (input, options) =>
+						runVerify(input, {
+							...options,
+							runAdvisorySeat: createAdvisorySeatRunner(),
+						}),
+				}),
+			});
+			const verifyId = readdirSync(
+				path.join(repo, ".review-panel", "runs"),
+			).find((name) => name !== reviewId) as string;
+			expect(
+				existsSync(path.join(recordOf(repo, verifyId), "record.mac")),
+			).toBe(true);
+			const { bodies, postComment } = poster();
+			await commentAction(
+				{ repoDir: repo, ...commentCall(reviewId as string, verifyId) },
+				{ deps: deps({ postComment }) },
+			);
+			expect(bodies).toHaveLength(1);
+		});
+	});
+
+	it("a resumed review is signed at completion and verify reads it", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			await resumeRun(loadResumable(repo, runId, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+			});
+			const prior = loadPriorRun(repo, runId, TEST_RECORD_KEY);
+			expect(prior.findings.length).toBeGreaterThan(0);
+			expect(() => loadPriorRun(repo, runId, OTHER_KEY)).toThrow(NOT_SIGNED);
+			expect(
+				JSON.parse(
+					readFileSync(path.join(prior.recordPath, "meta.json"), "utf8"),
+				).runId,
+			).toBe(runId);
+		});
+	});
+
+	it("a resumed review keeps panel.json as the first run wrote it, scoping note included", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const controller = new AbortController();
+			const fake = createSdkSeatFake([
+				{ kind: "default" },
+				{ kind: "pending" },
+			]);
+			await runReview(
+				{
+					repoDir: repo,
+					baseRef: "HEAD~1",
+					seats,
+					scopingNote: "Only the parser changed.",
+				},
+				{
+					abortSignal: controller.signal,
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: fake.factory,
+					onProgress: (event) => {
+						if (event.kind === "seat-finished") {
+							controller.abort();
+						}
+					},
+				},
+			).catch(() => undefined);
+			const [runId] = readdirSync(path.join(repo, ".review-panel", "runs"));
+			const panelPath = path.join(
+				recordOf(repo, runId as string),
+				"panel.json",
+			);
+			const before = readFileSync(panelPath, "utf8");
+			expect(before).toContain("Only the parser changed.");
+			await resumeRun(loadResumable(repo, runId as string, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+			});
+			expect(readFileSync(panelPath, "utf8")).toBe(before);
+			expect(() =>
+				loadPriorRun(repo, runId as string, TEST_RECORD_KEY),
+			).not.toThrow();
+		});
+	});
+});
+
+describe("resume restores the panel from the signed plan (panel P-2, P-4)", () => {
+	it("replaces a different, valid panel.json planted before resume, and the record is accepted", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			const panelPath = path.join(recordOf(repo, runId), "panel.json");
+			const original = readFileSync(panelPath, "utf8");
+			writeFileSync(panelPath, PLANTED_PANEL);
+			await resumeRun(loadResumable(repo, runId, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+			});
+			expect(readFileSync(panelPath, "utf8")).toBe(original);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
+		});
+	});
+});
+
+describe("records that look like the owner's but are not finished by it", () => {
+	it("refuses a genuine finished review with only record.mac removed, as a record from before signing looks", async () => {
+		await withRepository(async (repo) => {
+			await runReview(
+				{ repoDir: repo, baseRef: "HEAD~1", seats: plannedSeats(["holistic"]) },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake([
+						{
+							kind: "findings",
+							findings: [{ ...SDK_FINDING, severity: "high" }],
+						},
+					]).factory,
+				},
+			);
+			const [runId] = readdirSync(path.join(repo, ".review-panel", "runs"));
+			const recordPath = recordOf(repo, runId as string);
+			expect(() =>
+				loadPriorRun(repo, runId as string, TEST_RECORD_KEY),
+			).not.toThrow();
+			rmSync(path.join(recordPath, "record.mac"));
+			commit(repo, "fix.txt");
+			await expect(
+				verifyAction(verifyCall(repo, runId as string), { deps: deps() }),
+			).rejects.toThrow(NOT_SIGNED);
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						...commentCall(runId as string),
+						dismissed: [{ id: "F-1", reason: "out of scope" }],
+					},
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			expect(bodies).toEqual([]);
+		});
+	});
+
+	it("refuses an interrupted signed review with planted findings, meta, execution and COMPLETE", async () => {
+		await withRepository(async (repo) => {
+			const runId = await interruptedReviewRecord(
+				repo,
+				plannedSeats(["holistic", "security"]),
+			);
+			const recordPath = recordOf(repo, runId);
+			expect(existsSync(path.join(recordPath, "plan.mac"))).toBe(true);
+			writeFileSync(
+				path.join(recordPath, "meta.json"),
+				JSON.stringify({
+					runId,
+					baseRef: "HEAD~1",
+					baseOid: git(repo, ["rev-parse", "HEAD~1"]).trim(),
+					headOid: git(repo, ["rev-parse", "HEAD~1"]).trim(),
+				}),
+			);
+			writeFileSync(path.join(recordPath, "findings.json"), "[]");
+			writeFileSync(
+				path.join(recordPath, "execution.json"),
+				JSON.stringify({ cancelled: false, lostCoverage: [], outcomes: [] }),
+			);
+			writeFileSync(path.join(recordPath, "COMPLETE"), "");
+			await expect(
+				verifyAction(
+					{ ...verifyCall(repo, runId), keptFindingIds: [] },
+					{ deps: deps() },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{ repoDir: repo, ...commentCall(runId) },
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			expect(bodies).toEqual([]);
+		});
+	});
+});
+
+/**
+ * A real snapshot whose release first runs `swap`: release comes after every
+ * seat (and grouping) has settled and before the record is signed, so a
+ * file replaced here is what a repository writer could plant mid-run.
+ */
+function swappingPin(swap: () => void): typeof pinSnapshot {
+	return (repoDir, commit) => {
+		const snapshot = pinSnapshot(repoDir, commit);
+		return {
+			worktreePath: snapshot.worktreePath,
+			release: () => {
+				swap();
+				return snapshot.release();
+			},
+		};
+	};
+}
+
+/** Replaces each named file in `recordPath`, returning the original bytes. */
+function plantOver(
+	recordPath: string,
+	planted: Record<string, string>,
+): Map<string, string> {
+	const originals = new Map<string, string>();
+	for (const [name, text] of Object.entries(planted)) {
+		originals.set(name, readFileSync(path.join(recordPath, name), "utf8"));
+		writeFileSync(path.join(recordPath, name), text);
+	}
+	return originals;
+}
+
+function restore(recordPath: string, originals: Map<string, string>): void {
+	for (const [name, text] of originals) {
+		writeFileSync(path.join(recordPath, name), text);
+	}
+}
+
+const PLANTED_PANEL = JSON.stringify({
+	runId: "planted",
+	baseRef: "main",
+	seats: [
+		{ rosterId: "x", lens: "planted-lens", provider: "evil", model: "evil" },
+	],
+});
+const PLANTED_EXECUTION = JSON.stringify({
+	cancelled: false,
+	lostCoverage: [],
+	outcomes: [],
+});
+
+describe("the seal signs the bytes the run wrote, not what is on disk at the end (P-1/P-5)", () => {
+	it("review: panel.json and execution.json replaced mid-run are refused; the originals are accepted", async () => {
+		await withRepository(async (repo) => {
+			let originals = new Map<string, string>();
+			let recordPath = "";
+			await runReview(
+				{ repoDir: repo, baseRef: "HEAD~1", seats: plannedSeats(["holistic"]) },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+					pinSnapshot: swappingPin(() => {
+						const [runId] = readdirSync(
+							path.join(repo, ".review-panel", "runs"),
+						);
+						recordPath = recordOf(repo, runId as string);
+						originals = plantOver(recordPath, {
+							"panel.json": PLANTED_PANEL,
+							"execution.json": PLANTED_EXECUTION,
+						});
+					}),
+				},
+			);
+			const runId = path.basename(recordPath);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).toThrow(
+				NOT_SIGNED,
+			);
+			restore(recordPath, originals);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
+		});
+	});
+
+	it("verify: a verify record's panel.json replaced mid-run is refused; the original is accepted", async () => {
+		await withRepository(async (repo) => {
+			signReviewRecord(plantReview(repo, "real-1"));
+			let originals = new Map<string, string>();
+			let recordPath = "";
+			const result = await runVerify(
+				{
+					repoDir: repo,
+					config,
+					priorRunId: "real-1",
+					headRevision: git(repo, ["rev-parse", "HEAD"]).trim(),
+					keptFindingIds: ["F-1"],
+				},
+				{
+					recordKey: TEST_RECORD_KEY,
+					runAdvisorySeat: createAdvisorySeatRunner(),
+					pinSnapshot: swappingPin(() => {
+						const name = readdirSync(
+							path.join(repo, ".review-panel", "runs"),
+						).find((entry) => entry !== "real-1") as string;
+						recordPath = recordOf(repo, name);
+						originals = plantOver(recordPath, { "panel.json": PLANTED_PANEL });
+					}),
+				},
+			);
+			const verifyId = path.basename(result.recordPath);
+			const check = () =>
+				assertFixedResolved(repo, verifyId, ["F-1"], "real-1", TEST_RECORD_KEY);
+			expect(check).toThrow(NOT_SIGNED);
+			restore(recordPath, originals);
+			expect(check).not.toThrow();
+		});
+	});
+
+	it("resume: a panel.json replaced mid-resume is refused; the original is accepted", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			const recordPath = recordOf(repo, runId);
+			let originals = new Map<string, string>();
+			await resumeRun(loadResumable(repo, runId, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+				pinSnapshot: swappingPin(() => {
+					originals = plantOver(recordPath, { "panel.json": PLANTED_PANEL });
+				}),
+			});
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).toThrow(
+				NOT_SIGNED,
+			);
+			restore(recordPath, originals);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
+		});
+	});
+});
+
+/** A second repository with its own, different history. */
+function otherRepository(root: string): string {
+	const other = path.join(root, "other");
+	mkdirSync(other);
+	git(other, ["init", "-b", "main", "--quiet"]);
+	git(other, ["config", "user.email", "other@example.test"]);
+	git(other, ["config", "user.name", "Other"]);
+	commit(other, "other-base.txt");
+	commit(other, "other-head.txt");
+	return realpathSync(other);
+}
+
+describe("a signed record from another repository is refused (review R-1)", () => {
+	it("refuses a record copied in from another repository, whose commits are not here", async () => {
+		await withRepository(async (repo, root) => {
+			const other = otherRepository(root);
+			signReviewRecord(plantReview(other, "real-1"));
+			cpSync(recordOf(other, "real-1"), recordOf(repo, "real-1"), {
+				recursive: true,
+			});
+			await expect(
+				verifyAction(verifyCall(repo, "real-1"), { deps: deps() }),
+			).rejects.toThrow(
+				/^Verify refused: prior run "real-1" names commit [0-9a-f]{40}, which is not a commit in this repository/,
+			);
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						...commentCall("real-1"),
+						dismissed: [{ id: "F-1", reason: "out of scope" }],
+					},
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(/^comment refused: .*not a commit in this repository/);
+			expect(bodies).toEqual([]);
+		});
+	});
+
+	for (const linked of [".review-panel", "runs"]) {
+		it(`refuses a symlinked ${linked} folder, by run name and by record path`, async () => {
+			await withRepository(async (repo, root) => {
+				const other = otherRepository(root);
+				signReviewRecord(plantReview(other, "real-1"));
+				if (linked === ".review-panel") {
+					symlinkSync(
+						path.join(other, ".review-panel"),
+						path.join(repo, ".review-panel"),
+					);
+				} else {
+					mkdirSync(path.join(repo, ".review-panel"));
+					symlinkSync(
+						path.join(other, ".review-panel", "runs"),
+						path.join(repo, ".review-panel", "runs"),
+					);
+				}
+				for (const priorRunId of ["real-1", recordOf(repo, "real-1")]) {
+					await expect(
+						verifyAction(verifyCall(repo, priorRunId), { deps: deps() }),
+					).rejects.toThrow(
+						/^Verify refused: .* is a symlink; run records must stay inside the repository/,
+					);
+				}
+			});
+		});
+	}
+});
+
+describe("resume replies with the findings it stamped, not findings.json read back (fix round 2)", () => {
+	it("ignores a findings.json swapped in after the seal", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			const findingsPath = path.join(recordOf(repo, runId), "findings.json");
+			const result = await resumeAction(
+				{ repoDir: repo, priorRunId: runId },
+				{
+					deps: deps({
+						loadConfig: () => ({
+							roster: seats.map((seat) => ({
+								id: seat.rosterId,
+								provider: seat.provider,
+								model: seat.model,
+							})),
+							defaults: { seats: seats.map((seat) => seat.rosterId) },
+						}),
+						resumeRun: (run, options) =>
+							resumeRun(run, {
+								...(options as NonNullable<typeof options>),
+								sessionFactory: createSdkSeatFake([{ kind: "default" }])
+									.factory,
+							}),
+						// After the record is sealed and COMPLETE, before the reply.
+						suggestLenses: () => {
+							writeFileSync(
+								findingsPath,
+								JSON.stringify([
+									{
+										id: "F-1",
+										seat: { provider: "evil", model: "evil", lens: "holistic" },
+										finding: { ...SDK_FINDING, title: "PLANTED TITLE" },
+									},
+								]),
+							);
+							return [];
+						},
+					}),
+				},
+			);
+			const reply = result.content[0]?.text ?? "";
+			expect(reply).toContain(SDK_FINDING.title);
+			expect(reply).not.toContain("PLANTED TITLE");
+		});
+	});
+});

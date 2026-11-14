@@ -28,6 +28,7 @@ import {
 	groupingLostLine,
 } from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import type { PriorRun } from "../run/prior-run.js";
 import { renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type { RunVerifyResult } from "../run/run-verify.js";
@@ -38,7 +39,7 @@ import {
 	assembleCloseoutParts,
 	type CloseoutJudgmentRow,
 } from "./closeout-comment.js";
-import { loadCloseoutRun } from "./closeout-from-run.js";
+import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
 import {
 	type CommentGroupRow,
@@ -564,7 +565,8 @@ export type ReviewRoundFacts = {
 	baseOid: string;
 	headOid: string;
 	panel: PlannedSeat[];
-	result: RunReviewResult;
+	/** The stamped findings travel in `findings`, as the run returned them. */
+	result: Omit<RunReviewResult, "findings">;
 	findings?: StampedFinding[];
 	suggestions?: Suggestion[] | SuggestionsUnavailable;
 };
@@ -679,6 +681,12 @@ export type VerifyRoundFacts = {
 	lowAdvisory: readonly string[];
 	/** The review record's findings, for titles; absent when unreadable. */
 	reviewFindings?: readonly StampedFinding[];
+	/**
+	 * The review record as verify loaded and authenticated it before any seat
+	 * ran. The close-out card is built from these signed bytes, never from the
+	 * record folder again, which may have changed while the seats ran.
+	 */
+	review: PriorRun;
 };
 
 function runIdOf(recordPath: string): string {
@@ -864,13 +872,17 @@ type CloseoutCard = {
 
 /** The close-out card for this review, or why it cannot be built. */
 function buildCloseout(
-	ctx: RoundContext,
 	facts: VerifyRoundFacts,
 ): CloseoutCard | { reason: string } {
 	const { result } = facts;
-	let review: ReturnType<typeof loadCloseoutRun>;
+	let review: CloseoutRunFacts;
 	try {
-		review = loadCloseoutRun(ctx.repoDir, result.priorRunId);
+		if (result.priorRunId !== facts.review.runId) {
+			throw new Error(
+				`comment refused: verify ran against "${result.priorRunId}", not the loaded review "${facts.review.runId}"`,
+			);
+		}
+		review = closeoutFactsOf(facts.review);
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}
@@ -1081,7 +1093,7 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", blocker));
 		return lines;
 	}
-	const card = buildCloseout(ctx, facts);
+	const card = buildCloseout(facts);
 	if ("reason" in card) {
 		lines.push(notPosted("PR close-out", card.reason));
 		return lines;

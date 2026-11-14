@@ -39,7 +39,15 @@ import {
 	ROUND_DEADLINE_MS,
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
-import { signGroups, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import {
+	signGroups,
+	signReviewRecord,
+	TEST_RECORD_KEY,
+} from "./fixtures/record-key.js";
+import {
+	createSdkReviewRunner,
+	SDK_FINDING,
+} from "./fixtures/sdk-seat-fake.js";
 
 /**
  * Each review and verify round posts to the open PR whose head is the run's
@@ -253,6 +261,7 @@ function reviewRun(repo: string, runId: string, rows: Row[]) {
 		);
 		return {
 			recordPath,
+			findings: rows.map(stamped),
 			outcomes: runConfig.seats.map((seat) => ({
 				seat,
 				outcome: {
@@ -288,8 +297,10 @@ function writeReviewRecord(repo: string, runId: string, rows: Row[]): void {
 		JSON.stringify({
 			runId,
 			baseRef: "main",
-			baseOid: "a".repeat(40),
-			headOid: "b".repeat(40),
+			// Real commits of the test repository: a record naming commits
+			// this repository does not hold is refused (review R-1).
+			baseOid: git(repo, ["rev-parse", "HEAD~1"]),
+			headOid: git(repo, ["rev-parse", "HEAD"]),
 		}),
 	);
 	writeFileSync(
@@ -301,6 +312,7 @@ function writeReviewRecord(repo: string, runId: string, rows: Row[]): void {
 		JSON.stringify({ cancelled: false, lostCoverage: [], outcomes: [] }),
 	);
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	signReviewRecord(recordPath);
 }
 
 /** A complete earlier verify record for `priorRunId`. */
@@ -426,6 +438,57 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			expect(reply.split("\n").at(-1)).toBe(
 				`PR comment: posted to #12 (https://github.com/${REPO_SLUG}/pull/12#issuecomment-101)`,
 			);
+		});
+	});
+
+	it("posts and replies with the findings the run stamped, not a findings.json swapped in after the seal (fix round 2)", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: createSdkReviewRunner([
+							{
+								kind: "findings",
+								findings: [{ ...SDK_FINDING, title: "ORIGINAL TITLE" }],
+							},
+						]),
+						// Runs after the record is sealed and COMPLETE, before the
+						// reply and the post are built: a fixed point to swap the file.
+						suggestLenses: () => {
+							const runs = path.join(repo, ".review-panel", "runs");
+							for (const name of readdirSync(runs)) {
+								writeFileSync(
+									path.join(runs, name, "findings.json"),
+									JSON.stringify([
+										{
+											id: "F-1",
+											seat: {
+												provider: "openai-codex",
+												model: "gpt-5.6-terra",
+												lens: "holistic",
+											},
+											finding: {
+												...SDK_FINDING,
+												severity: "high",
+												title: "PLANTED TITLE",
+											},
+										},
+									]),
+								);
+							}
+							return [];
+						},
+					}),
+				},
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			expect(body).toContain("ORIGINAL TITLE");
+			expect(body).not.toContain("PLANTED TITLE");
+			const reply = textOf(result);
+			expect(reply).toContain("ORIGINAL TITLE");
+			expect(reply).not.toContain("PLANTED TITLE");
 		});
 	});
 
@@ -894,6 +957,74 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			expect(text.split("\n").at(-1)).toMatch(
 				/^PR close-out: posted to #12 \(/,
 			);
+		});
+	});
+
+	it("builds the close-out card from the review bytes verify authenticated first, not files swapped while it ran (panel P-3)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const recordPath = path.join(repo, ".review-panel", "runs", REVIEW_ID);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-2", reason: "out of scope for this PR" }],
+					lowAdvisory: ["F-3"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[resolvedF1],
+							[],
+							() => {
+								// After verify's authenticated read of the review record.
+								writeFileSync(
+									path.join(recordPath, "panel.json"),
+									JSON.stringify({
+										runId: REVIEW_ID,
+										baseRef: "main",
+										seats: [
+											{
+												rosterId: "planted",
+												lens: "plantedlens",
+												provider: "evil",
+												model: "evil",
+											},
+										],
+									}),
+								);
+								writeFileSync(
+									path.join(recordPath, "execution.json"),
+									JSON.stringify({
+										cancelled: false,
+										lostCoverage: [],
+										outcomes: [
+											{
+												seat: { rosterId: "planted", lens: "plantedlens" },
+												outcome: { kind: "failed" },
+											},
+										],
+									}),
+								);
+							},
+						),
+					}),
+				},
+			);
+			const posted = posts(gh.calls);
+			expect(posted).toHaveLength(2);
+			const card = bodyOf(posted[1]);
+			expect(card.split("\n")[0]).toBe("## Review panel · close-out");
+			expect(card).toContain("**Seats:** holistic (terra)");
+			expect(card).toContain("**Lost:** none");
+			expect(card).not.toContain("planted");
 		});
 	});
 
@@ -1634,7 +1765,11 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			expect(lines).toContain("**Seats:** holistic (terra)");
 			expect(lines).toContain("**Lost:** none");
 			expect(
-				lines.some((line) => /^`main` \(`aaaaaaa`\) → `HEAD` \(`/.test(line)),
+				lines.some((line) =>
+					line.startsWith(
+						`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`HEAD\` (\``,
+					),
+				),
 			).toBe(true);
 		});
 	});
@@ -3364,7 +3499,7 @@ describe("T498: readable PR comments", () => {
 					"2 findings submitted · 1 fixed · 1 dismissed · 0 left as low/advisory",
 					"**Seats:** holistic (terra)",
 					"**Lost:** none",
-					`\`main\` (\`aaaaaaa\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
+					`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
 					"",
 					"### Dismissed",
 					"- **F-2** F-2 title — by design (ADR 4)",

@@ -25,8 +25,18 @@ rows and package-owned lens prompts by name; the calling agent chooses only amon
 Runs record under `<repo>/.review-panel/runs/`, each seat as it settles. `resume` finishes an
 interrupted review or audit record, running only its unsettled seats at the recorded head. Review
 and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
-the repository); resume refuses an unsigned plan and re-runs an unsigned seat. Verify reads
-those trees and writes only its posting claims and markers into the review's record
+the repository); resume refuses an unsigned plan and re-runs an unsigned seat. A finished review
+(first run or resume) and a finished verify also write `record.mac` just before `COMPLETE`: an
+HMAC bound to the run id (the folder name), the kind and the plan's MAC, over the exact bytes the
+run itself wrote to the files verify and comment read (kept on the record handle as written; the
+folder is never re-read to sign). Verify and comment take a record only when that MAC and (for a
+review) `plan.mac` check out with the owner's key, which they never create, the `.review-panel` and
+`runs` folders are not symlinks, and the review's base and head are commits in this repository;
+an unsigned, foreign, copied or pre-signing record is refused with "run a new review", before any
+seat runs or post. They use only the bytes they authenticated (the close-out card and G-ids too).
+Review and resume reply and post the findings the run stamped, never `findings.json` read back.
+`groups.mac` binds the run id, the plan's MAC and the exact `findings.json` bytes it grouped.
+Verify reads those trees and writes only its posting claims and markers into the review's record
 (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no

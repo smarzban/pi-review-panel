@@ -39,7 +39,7 @@ import {
 	interruptedReviewRecord,
 	plannedSeats,
 } from "./fixtures/interrupted-run.js";
-import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 /**
@@ -190,8 +190,14 @@ function writeReviewRecord(
 		JSON.stringify({
 			runId,
 			baseRef: "main",
-			baseOid: "a".repeat(40),
-			headOid: "b".repeat(40),
+			baseOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
+			headOid: execFileSync("git", ["rev-parse", "HEAD"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
 		}),
 	);
 	writeFileSync(
@@ -215,6 +221,7 @@ function writeReviewRecord(
 		JSON.stringify({ cancelled: false, lostCoverage: [], outcomes: [] }),
 	);
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	signReviewRecord(recordPath);
 }
 
 /** A `postComment` seam that records each body it was asked to post. */
@@ -434,6 +441,7 @@ describe("review_panel actions without Pi", () => {
 
 	it("verify runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
+			writeReviewRecord(repo, "run-1", [{ id: "F-1", severity: "high" }]);
 			const result = await verifyAction(
 				{
 					repoDir: repo,
@@ -469,6 +477,7 @@ describe("review_panel actions without Pi", () => {
 
 	it("verify runs the owner's defaults.verifySeats when the caller names no seats", async () => {
 		await withRepository(async (repo) => {
+			writeReviewRecord(repo, "run-1", [{ id: "F-1", severity: "high" }]);
 			let runSeats: string[] | undefined = ["unset"];
 			let runVerifySeats: string[] | undefined;
 			const result = await verifyAction(

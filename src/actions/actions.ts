@@ -53,7 +53,11 @@ import {
 	readSignedGroups,
 } from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
-import { loadPriorRun, resolvePriorRunId } from "../run/prior-run.js";
+import {
+	loadPriorRun,
+	type PriorRun,
+	resolvePriorRunId,
+} from "../run/prior-run.js";
 import {
 	checkRecordKey,
 	loadRecordKey,
@@ -157,7 +161,7 @@ export type ActionDependencies = {
 	suggestLenses?: typeof suggestLenses;
 	runVerify?: (
 		input: RunVerifyInput,
-		options?: RunVerifyOptions,
+		options: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
 	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
 	/**
@@ -750,17 +754,6 @@ function textResult(text: string): ActionResult {
 	return { content: [{ type: "text", text }] };
 }
 
-function readStampedFindings(recordPath: string): StampedFinding[] | undefined {
-	try {
-		const parsed: unknown = JSON.parse(
-			readFileSync(path.join(recordPath, "findings.json"), "utf8"),
-		);
-		return Array.isArray(parsed) ? (parsed as StampedFinding[]) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 /** The ids a verify or comment call names, as F-ids only. */
 type JudgedIds = {
 	kept: string[];
@@ -770,19 +763,17 @@ type JudgedIds = {
 
 /**
  * Expands every G-id to its member F-ids, from the review's signed
- * grouping. Calls with F-ids only are returned as they are, without
- * reading the record key. A G-id needs `groups.json` with a valid
- * `groups.mac` from the owner's record key that places every F-id of
- * `findings.json` exactly once; otherwise G-ids are refused and the caller
- * is asked for F-ids. A dismissed G-id gives its reason to each member. An
- * F-id named in one list both by itself and through its group, or through
- * two groups, is refused.
+ * grouping. Calls with F-ids only are returned as they are. A G-id needs
+ * `groups.json` with a valid `groups.mac` from the owner's record key that
+ * places every F-id of `findings.json` exactly once; otherwise G-ids are
+ * refused and the caller is asked for F-ids. A dismissed G-id gives its
+ * reason to each member. An F-id named in one list both by itself and
+ * through its group, or through two groups, is refused.
  */
 function expandGroupIds(
-	resolved: Resolved,
-	repoDir: string,
-	/** The review record; read only when a G-id is named. */
-	recordPathOf: () => string,
+	/** The review record, already loaded and checked as signed by `key`. */
+	review: PriorRun,
+	key: Buffer,
 	ids: JudgedIds,
 	refusal: string,
 ): JudgedIds {
@@ -794,21 +785,13 @@ function expandGroupIds(
 	if (!named.some(isGroupId)) {
 		return ids;
 	}
-	const recordPath = recordPathOf();
-	let key: Buffer;
-	try {
-		key = resolved.keyOf({
-			repoDir,
-			env: resolved.env,
-			home: resolved.home,
-			create: false,
-		});
-	} catch (error) {
-		throw new Error(
-			`${refusal}: G-ids need the review's signed grouping, and the record key cannot be read: ${error instanceof Error ? error.message : String(error)}; pass F-ids instead`,
-		);
-	}
-	const groups = readSignedGroups(recordPath, key);
+	const recordPath = review.recordPath;
+	const groups = readSignedGroups(
+		recordPath,
+		key,
+		review.planMac,
+		review.findingsText,
+	);
 	if (groups === undefined) {
 		throw new Error(
 			`${refusal}: G-ids need the review's signed grouping (groups.json with a valid groups.mac from this owner's record key, grouping every finding once), and run "${path.basename(recordPath)}" has none; pass F-ids instead`,
@@ -966,12 +949,16 @@ export async function verifyAction(
 	const { priorRunId, head, seats, scopingNote } = valid;
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
+	// The review record lives in the reviewed repository: it is taken only
+	// when it is signed with the owner's record key, checked here before any
+	// seat runs. Verify never creates the key.
+	const verifyKey = ownerKey(resolved, repoDir, false, "Verify refused");
+	const prior = loadPriorRun(repoDir, priorRunId, verifyKey);
 	// G-ids become F-ids here, before anything else reads them: verify
 	// itself checks F-ids only.
 	const judged = expandGroupIds(
-		resolved,
-		repoDir,
-		() => loadPriorRun(repoDir, priorRunId).recordPath,
+		prior,
+		verifyKey,
 		{
 			kept: valid.keptFindingIds,
 			dismissed: valid.dismissed ?? [],
@@ -988,7 +975,7 @@ export async function verifyAction(
 	const reviewFindings =
 		dismissed.length === 0 && lowAdvisory.length === 0
 			? undefined
-			: loadPriorRun(repoDir, priorRunId).findings;
+			: prior.findings;
 	if (reviewFindings !== undefined) {
 		assertVerifyJudgment(
 			reviewFindings,
@@ -1021,6 +1008,7 @@ export async function verifyAction(
 				: { seatBudgetMs: config.defaults.seatBudgetMs }),
 		},
 		{
+			recordKey: verifyKey,
 			...(context.signal === undefined ? {} : { abortSignal: context.signal }),
 			onProgress: (event) =>
 				emit({ ...progressFromVerifyEvent(event, elapsed()), roster }),
@@ -1043,6 +1031,7 @@ export async function verifyAction(
 			dismissed,
 			lowAdvisory,
 			...(reviewFindings === undefined ? {} : { reviewFindings }),
+			review: prior,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));
@@ -1075,11 +1064,13 @@ export async function commentAction(
 	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateCommentInput(input);
 	const { priorRunId } = valid;
-	const facts = loadCloseoutRun(repoDir, priorRunId);
+	// Comment never creates the key, and takes the review (and any verify)
+	// record only when it is signed with it.
+	const commentKey = ownerKey(resolved, repoDir, false, "comment refused");
+	const facts = loadCloseoutRun(repoDir, priorRunId, commentKey);
 	const { dismissed, lowAdvisory } = expandGroupIds(
-		resolved,
-		repoDir,
-		() => facts.run.recordPath,
+		facts.run,
+		commentKey,
 		{ kept: [], dismissed: valid.dismissed, lowAdvisory: valid.lowAdvisory },
 		"comment refused",
 	);
@@ -1099,6 +1090,7 @@ export async function commentAction(
 			valid.verifyRunId,
 			accounted.fixed.map((row) => row.id),
 			facts.run.runId,
+			commentKey,
 		);
 	}
 	const verifyRunId = markerVerifyId(repoDir, valid.verifyRunId);
@@ -1198,13 +1190,14 @@ export async function resumeAction(
 			run.plan.baseOid,
 			run.plan.headOid,
 		);
-		const findings = readStampedFindings(result.recordPath);
+		// The findings this resume stamped, never findings.json read back.
 		body = renderReviewResult({
 			recordPath: result.recordPath,
 			panel,
 			result,
 			suggestions,
-			...(findings === undefined ? {} : { findings }),
+			// A review resume always returns them; an audit has none.
+			findings: "findings" in result ? result.findings : [],
 		});
 	}
 	return textResult(`${headline}\n\n${body}`);
@@ -1275,7 +1268,9 @@ export async function reviewAction(
 		},
 	);
 	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
-	const findings = readStampedFindings(result.recordPath);
+	// The findings this run stamped, never findings.json read back: a writer
+	// in the repository could replace it after the record was sealed.
+	const { findings } = result;
 
 	const report = renderReviewResult({
 		recordPath: result.recordPath,
@@ -1283,7 +1278,7 @@ export async function reviewAction(
 		result,
 		suggestions,
 		...(scopingNote === undefined ? {} : { scopingNote }),
-		...(findings === undefined ? {} : { findings }),
+		findings,
 		reserveBytes: ROUND_REPLY_RESERVE,
 	});
 	const roundLines = await postReviewRound(
@@ -1303,7 +1298,7 @@ export async function reviewAction(
 			panel,
 			result,
 			suggestions,
-			...(findings === undefined ? {} : { findings }),
+			findings,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));

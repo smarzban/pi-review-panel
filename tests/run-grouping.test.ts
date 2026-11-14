@@ -25,7 +25,11 @@ import { RunReviewError, runReview } from "../src/run/run-review.js";
 import { RunCancelledError } from "../src/run/scheduler.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import type { runGroupingSeat } from "../src/seat/run-seat.js";
-import { TEST_RECORD_KEY, testGroupsMac } from "./fixtures/record-key.js";
+import {
+	TEST_RECORD_KEY,
+	testGroupsMac,
+	testPlanMac,
+} from "./fixtures/record-key.js";
 import {
 	createSdkSeatFake,
 	type FakeResponse,
@@ -268,14 +272,40 @@ describe("the grouping step", () => {
 				{ id: "G-3", findingIds: ["F-2"] },
 			],
 		});
+		const findingsText = readFileSync(
+			path.join(result.recordPath, "findings.json"),
+			"utf8",
+		);
+		const planMac = testPlanMac(
+			runId,
+			readFileSync(path.join(result.recordPath, "plan.json"), "utf8"),
+		);
 		expect(
 			readFileSync(path.join(result.recordPath, GROUPS_MAC_FILE), "utf8"),
-		).toBe(testGroupsMac(runId, bytes));
+		).toBe(testGroupsMac(runId, planMac, findingsText, bytes));
 		expect(
-			readSignedGroups(result.recordPath, TEST_RECORD_KEY)?.map(
-				(group) => group.id,
-			),
+			readSignedGroups(
+				result.recordPath,
+				TEST_RECORD_KEY,
+				planMac,
+				findingsText,
+			)?.map((group) => group.id),
 		).toEqual(["G-1", "G-2", "G-3"]);
+		// The groups are checked against the signed findings bytes the caller
+		// passes, never findings.json read again from disk (review R-2).
+		writeFileSync(path.join(result.recordPath, "findings.json"), "[]");
+		expect(
+			readSignedGroups(
+				result.recordPath,
+				TEST_RECORD_KEY,
+				planMac,
+				findingsText,
+			)?.map((group) => group.id),
+		).toEqual(["G-1", "G-2", "G-3"]);
+		expect(
+			readSignedGroups(result.recordPath, TEST_RECORD_KEY, planMac, "[]"),
+		).toBeUndefined();
+		writeFileSync(path.join(result.recordPath, "findings.json"), findingsText);
 
 		// findings.json stays the flat stamped list, untouched.
 		const findings = JSON.parse(

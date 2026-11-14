@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import path from "node:path";
 
@@ -14,6 +13,7 @@ import {
 } from "../config/lenses.js";
 import { MAX_REVIEW_SEATS } from "../config/panel.js";
 import type { Config } from "../config/schema.js";
+import { commitResolves, isOid } from "./commits.js";
 import { planConsolidator } from "./grouping.js";
 import { isProcessAlive } from "./liveness.js";
 import { discoverPriorRecords } from "./prior-records.js";
@@ -56,6 +56,8 @@ export type ResumableRun = {
 	plan: RunPlan;
 	/** The owner's MAC of the record's plan, which the seat files are bound to. */
 	planMac: string;
+	/** The exact `plan.json` bytes that MAC was checked over; the seal signs them. */
+	planText: string;
 	/**
 	 * Settled seats by planned index, with a valid MAC and a checked outcome;
 	 * undefined where a seat must run again.
@@ -171,7 +173,7 @@ export function loadResumable(
 			`run "${runId}" is a verify run; start a new verify instead (verify runs one or two seats in sequence, so a fresh run costs the same as a resume)`,
 		);
 	}
-	const { plan, mac } = readPlan(recordPath, runId, recordKey);
+	const { plan, mac, text: planText } = readPlan(recordPath, runId, recordKey);
 	checkPanelCaps(plan, runId);
 	checkWritable(recordPath, plan);
 	const lock = runLockState(recordPath);
@@ -197,7 +199,16 @@ export function loadResumable(
 		planMac: mac,
 	});
 	const missing = plan.seats.filter((_, index) => settled[index] === undefined);
-	return { repoDir, runId, recordPath, plan, planMac: mac, settled, missing };
+	return {
+		repoDir,
+		runId,
+		recordPath,
+		plan,
+		planMac: mac,
+		planText,
+		settled,
+		missing,
+	};
 }
 
 /**
@@ -213,6 +224,9 @@ export async function resumeRun(
 	options: ResumeOptions,
 ): Promise<ResumeResult> {
 	const record = recordAt(run.recordPath);
+	// Resume never rewrites plan.json: the seal signs the bytes whose MAC
+	// was checked when the record was loaded, not what is in the folder now.
+	record.written.set(PLAN_FILE, run.planText);
 	const { plan } = run;
 	const { config, lensTable, passTable, onStart, ...runOptions } = options;
 	const seal: RecordSeal = {
@@ -294,6 +308,15 @@ export async function resumeRun(
 			heldLock: releaseLock,
 			scopingNoteDropped,
 			seal,
+			// panel.json as the first run wrote it, from the signed plan.
+			panel: {
+				runId: run.runId,
+				baseRef: plan.baseRef,
+				...(plan.scopingNote === undefined
+					? {}
+					: { scopingNote: plan.scopingNote }),
+				seats: plan.seats.map((seat) => ({ ...seat, lensPrompt: "" })),
+			},
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
 		const consolidator =
@@ -459,7 +482,7 @@ function readPlan(
 	recordPath: string,
 	runId: string,
 	key: Buffer,
-): { plan: RunPlan; mac: string } {
+): { plan: RunPlan; mac: string; text: string } {
 	const text = readRegularFile(path.join(recordPath, PLAN_FILE));
 	if (text === undefined) {
 		refuse(
@@ -489,7 +512,7 @@ function readPlan(
 	if (!isRunPlan(parsed)) {
 		refuse(`run "${runId}" has an invalid resume plan`);
 	}
-	return { plan: parsed, mac };
+	return { plan: parsed, mac, text };
 }
 
 function isRunPlan(value: unknown): value is RunPlan {
@@ -533,25 +556,6 @@ function isLineText(value: unknown): value is string {
 		}
 	}
 	return true;
-}
-
-/** Only a full hex object id; never something git could read as an option. */
-function isOid(value: unknown): value is string {
-	return (
-		typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)
-	);
-}
-
-function commitResolves(repoDir: string, oid: string): boolean {
-	try {
-		execFileSync("git", ["cat-file", "-e", `${oid}^{commit}`], {
-			cwd: repoDir,
-			stdio: "ignore",
-		});
-		return true;
-	} catch {
-		return false;
-	}
 }
 
 function isRealDirectory(target: string): boolean {

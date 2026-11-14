@@ -19,6 +19,7 @@ import {
 	runVerify,
 } from "../src/run/run-verify.js";
 import type { StampedFinding } from "../src/run/types.js";
+import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -58,6 +59,7 @@ function writePriorRun(
 		path.join(recordPath, "findings.json"),
 		`${JSON.stringify(findings, null, 2)}\n`,
 	);
+	signReviewRecord(recordPath);
 }
 
 const finding: StampedFinding = {
@@ -161,6 +163,7 @@ describe("runVerify", () => {
 					keptFindingIds: ["F-1"],
 				},
 				{
+					recordKey: TEST_RECORD_KEY,
 					pinSnapshot: () => ({
 						worktreePath: repo,
 						release: () => ({ ok: true }),
@@ -194,13 +197,16 @@ describe("runVerify", () => {
 		try {
 			const { repo, head } = makeRepo(root);
 			await expect(
-				runVerify({
-					repoDir: repo,
-					config,
-					priorRunId: root,
-					headRevision: head,
-					keptFindingIds: ["F-1"],
-				}),
+				runVerify(
+					{
+						repoDir: repo,
+						config,
+						priorRunId: root,
+						headRevision: head,
+						keptFindingIds: ["F-1"],
+					},
+					{ recordKey: TEST_RECORD_KEY },
+				),
 			).rejects.toThrow(/under this repository/);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -212,13 +218,16 @@ describe("runVerify", () => {
 		try {
 			const { repo, head } = makeRepo(root);
 			await expect(
-				runVerify({
-					repoDir: repo,
-					config,
-					priorRunId: "no-such-run",
-					headRevision: head,
-					keptFindingIds: ["F-1"],
-				}),
+				runVerify(
+					{
+						repoDir: repo,
+						config,
+						priorRunId: "no-such-run",
+						headRevision: head,
+						keptFindingIds: ["F-1"],
+					},
+					{ recordKey: TEST_RECORD_KEY },
+				),
 			).rejects.toThrow(/not found/);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -231,13 +240,16 @@ describe("runVerify", () => {
 			const { repo, base, head } = makeRepo(root);
 			writePriorRun(repo, "run-1", { baseOid: base, headOid: base }, [finding]);
 			await expect(
-				runVerify({
-					repoDir: repo,
-					config,
-					priorRunId: "run-1",
-					headRevision: head,
-					keptFindingIds: ["F-99"],
-				}),
+				runVerify(
+					{
+						repoDir: repo,
+						config,
+						priorRunId: "run-1",
+						headRevision: head,
+						keptFindingIds: ["F-99"],
+					},
+					{ recordKey: TEST_RECORD_KEY },
+				),
 			).rejects.toThrow(/F-99/);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -250,13 +262,16 @@ describe("runVerify", () => {
 			const { repo, base } = makeRepo(root);
 			writePriorRun(repo, "run-1", { baseOid: base, headOid: base }, [finding]);
 			await expect(
-				runVerify({
-					repoDir: repo,
-					config,
-					priorRunId: "run-1",
-					headRevision: base,
-					keptFindingIds: ["F-1"],
-				}),
+				runVerify(
+					{
+						repoDir: repo,
+						config,
+						priorRunId: "run-1",
+						headRevision: base,
+						keptFindingIds: ["F-1"],
+					},
+					{ recordKey: TEST_RECORD_KEY },
+				),
 			).rejects.toThrow(/same commit/);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -277,6 +292,7 @@ describe("runVerify", () => {
 					keptFindingIds: ["F-1"],
 				},
 				{
+					recordKey: TEST_RECORD_KEY,
 					pinSnapshot: () => ({
 						worktreePath: repo,
 						release: () => ({ ok: true }),
@@ -341,6 +357,7 @@ describe("runVerify", () => {
 					keptFindingIds: ["F-1"],
 				},
 				{
+					recordKey: TEST_RECORD_KEY,
 					pinSnapshot: () => ({
 						worktreePath: repo,
 						release: () => ({ ok: true }),
@@ -391,6 +408,7 @@ describe("runVerify", () => {
 					seatBudgetMs: 20,
 				},
 				{
+					recordKey: TEST_RECORD_KEY,
 					pinSnapshot: () => ({
 						worktreePath: repo,
 						release: () => ({ ok: true }),
@@ -437,6 +455,7 @@ describe("runVerify", () => {
 						keptFindingIds: ["F-1"],
 					},
 					{
+						recordKey: TEST_RECORD_KEY,
 						abortSignal: controller.signal,
 						pinSnapshot: () => ({
 							worktreePath: repo,
