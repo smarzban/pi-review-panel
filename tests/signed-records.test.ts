@@ -8,6 +8,7 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -780,4 +781,73 @@ describe("the seal signs the bytes the run wrote, not what is on disk at the end
 			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
 		});
 	});
+});
+
+/** A second repository with its own, different history. */
+function otherRepository(root: string): string {
+	const other = path.join(root, "other");
+	mkdirSync(other);
+	git(other, ["init", "-b", "main", "--quiet"]);
+	git(other, ["config", "user.email", "other@example.test"]);
+	git(other, ["config", "user.name", "Other"]);
+	commit(other, "other-base.txt");
+	commit(other, "other-head.txt");
+	return realpathSync(other);
+}
+
+describe("a signed record from another repository is refused (review R-1)", () => {
+	it("refuses a record copied in from another repository, whose commits are not here", async () => {
+		await withRepository(async (repo, root) => {
+			const other = otherRepository(root);
+			signReviewRecord(plantReview(other, "real-1"));
+			cpSync(recordOf(other, "real-1"), recordOf(repo, "real-1"), {
+				recursive: true,
+			});
+			await expect(
+				verifyAction(verifyCall(repo, "real-1"), { deps: deps() }),
+			).rejects.toThrow(
+				/^Verify refused: prior run "real-1" names commit [0-9a-f]{40}, which is not a commit in this repository/,
+			);
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						...commentCall("real-1"),
+						dismissed: [{ id: "F-1", reason: "out of scope" }],
+					},
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(/^comment refused: .*not a commit in this repository/);
+			expect(bodies).toEqual([]);
+		});
+	});
+
+	for (const linked of [".review-panel", "runs"]) {
+		it(`refuses a symlinked ${linked} folder, by run name and by record path`, async () => {
+			await withRepository(async (repo, root) => {
+				const other = otherRepository(root);
+				signReviewRecord(plantReview(other, "real-1"));
+				if (linked === ".review-panel") {
+					symlinkSync(
+						path.join(other, ".review-panel"),
+						path.join(repo, ".review-panel"),
+					);
+				} else {
+					mkdirSync(path.join(repo, ".review-panel"));
+					symlinkSync(
+						path.join(other, ".review-panel", "runs"),
+						path.join(repo, ".review-panel", "runs"),
+					);
+				}
+				for (const priorRunId of ["real-1", recordOf(repo, "real-1")]) {
+					await expect(
+						verifyAction(verifyCall(repo, priorRunId), { deps: deps() }),
+					).rejects.toThrow(
+						/^Verify refused: .* is a symlink; run records must stay inside the repository/,
+					);
+				}
+			});
+		});
+	}
 });

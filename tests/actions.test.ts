@@ -190,8 +190,14 @@ function writeReviewRecord(
 		JSON.stringify({
 			runId,
 			baseRef: "main",
-			baseOid: "a".repeat(40),
-			headOid: "b".repeat(40),
+			baseOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
+			headOid: execFileSync("git", ["rev-parse", "HEAD"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
 		}),
 	);
 	writeFileSync(

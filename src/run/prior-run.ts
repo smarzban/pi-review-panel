@@ -1,6 +1,7 @@
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
+import { commitResolves, isOid } from "./commits.js";
 import {
 	COMPLETE_MARKER,
 	EXECUTION_FILE,
@@ -64,6 +65,7 @@ export function assertSafeRunId(runId: string): string {
  * inside it). Paths are confined to `<repo>/.review-panel/runs/<runId>`.
  */
 export function resolvePriorRunId(repoDir: string, priorRunId: string): string {
+	assertRealRecordFolders(repoDir);
 	const trimmed = priorRunId.trim();
 	if (!trimmed.includes("/") && !trimmed.includes("\\")) {
 		return assertSafeRunId(trimmed);
@@ -111,6 +113,35 @@ export function resolvePriorRunId(repoDir: string, priorRunId: string): string {
  * bound to this run id. Everything returned is parsed from those signed
  * bytes. Anything else is refused with the fix: run a new review.
  */
+/**
+ * Refuses a `.review-panel` or `runs` folder that is a symlink (or not a
+ * folder), the rule `reserve` applies when it creates them: a linked folder
+ * would let another repository's records, signed with the same owner key,
+ * pass as this repository's. Only those two are checked with `lstat`, not
+ * their ancestors. A missing folder is left to the "not found" refusal.
+ */
+function assertRealRecordFolders(repoDir: string): void {
+	for (const dir of [
+		path.join(repoDir, ".review-panel"),
+		path.join(repoDir, ".review-panel", "runs"),
+	]) {
+		let stats: ReturnType<typeof lstatSync>;
+		try {
+			stats = lstatSync(dir);
+		} catch {
+			return;
+		}
+		if (stats.isSymbolicLink()) {
+			throw new Error(
+				`Verify refused: ${dir} is a symlink; run records must stay inside the repository`,
+			);
+		}
+		if (!stats.isDirectory()) {
+			throw new Error(`Verify refused: ${dir} is not a directory`);
+		}
+	}
+}
+
 export function loadPriorRun(
 	repoDir: string,
 	priorRunId: string,
@@ -149,6 +180,15 @@ export function loadPriorRun(
 		throw new Error(
 			`Verify refused: prior run "${runId}" meta.json is invalid`,
 		);
+	}
+	// The key is per owner, not per repository: a record signed in another
+	// repository must name commits this one holds.
+	for (const oid of [meta.baseOid, meta.headOid]) {
+		if (!isOid(oid) || !commitResolves(repoDir, oid)) {
+			throw new Error(
+				`Verify refused: prior run "${runId}" names commit ${isOid(oid) ? oid : "(not a commit id)"}, which is not a commit in this repository; run a new review here`,
+			);
+		}
 	}
 	const findings = parseSigned(signed, "findings.json", runId);
 	if (!Array.isArray(findings)) {

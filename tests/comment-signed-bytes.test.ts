@@ -60,8 +60,14 @@ function writeRecords(repo: string): string {
 		JSON.stringify({
 			runId: "review-1",
 			baseRef: "main",
-			baseOid: "a".repeat(40),
-			headOid: "b".repeat(40),
+			baseOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
+			headOid: execFileSync("git", ["rev-parse", "HEAD"], {
+				cwd: repo,
+				encoding: "utf8",
+			}).trim(),
 		}),
 	);
 	writeFileSync(
@@ -109,7 +115,13 @@ describe("comment builds its card from the authenticated review bytes (panel P-3
 		const repo = realpathSync(
 			mkdtempSync(path.join(tmpdir(), "comment-signed-bytes-")),
 		);
-		execFileSync("git", ["init", "-b", "main", "--quiet"], { cwd: repo });
+		const run = (args: string[]) =>
+			execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+		run(["init", "-b", "main", "--quiet"]);
+		run(["config", "user.email", "comment@example.test"]);
+		run(["config", "user.name", "Comment Test"]);
+		run(["commit", "--allow-empty", "-m", "base", "--quiet"]);
+		run(["commit", "--allow-empty", "-m", "head", "--quiet"]);
 		try {
 			const review = writeRecords(repo);
 			swap.run = () => {

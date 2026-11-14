@@ -976,8 +976,14 @@ function writeReviewRecord(
 			{
 				runId,
 				baseRef: "origin/main",
-				baseOid: "a1b2c3dffffffffeeeeeeeeeeeeeeeeeeeeeee",
-				headOid: "e4f5a6bffffffffeeeeeeeeeeeeeeeeeeeeeee",
+				baseOid: execFileSync("git", ["rev-parse", "HEAD~1"], {
+					cwd: repository,
+					encoding: "utf8",
+				}).trim(),
+				headOid: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repository,
+					encoding: "utf8",
+				}).trim(),
 			},
 			null,
 			2,

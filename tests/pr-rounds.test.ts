@@ -292,8 +292,10 @@ function writeReviewRecord(repo: string, runId: string, rows: Row[]): void {
 		JSON.stringify({
 			runId,
 			baseRef: "main",
-			baseOid: "a".repeat(40),
-			headOid: "b".repeat(40),
+			// Real commits of the test repository: a record naming commits
+			// this repository does not hold is refused (review R-1).
+			baseOid: git(repo, ["rev-parse", "HEAD~1"]),
+			headOid: git(repo, ["rev-parse", "HEAD"]),
 		}),
 	);
 	writeFileSync(
@@ -1707,7 +1709,11 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			expect(lines).toContain("**Seats:** holistic (terra)");
 			expect(lines).toContain("**Lost:** none");
 			expect(
-				lines.some((line) => /^`main` \(`aaaaaaa`\) → `HEAD` \(`/.test(line)),
+				lines.some((line) =>
+					line.startsWith(
+						`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`HEAD\` (\``,
+					),
+				),
 			).toBe(true);
 		});
 	});
@@ -3437,7 +3443,7 @@ describe("T498: readable PR comments", () => {
 					"2 findings submitted · 1 fixed · 1 dismissed · 0 left as low/advisory",
 					"**Seats:** holistic (terra)",
 					"**Lost:** none",
-					`\`main\` (\`aaaaaaa\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
+					`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
 					"",
 					"### Dismissed",
 					"- **F-2** F-2 title — by design (ADR 4)",

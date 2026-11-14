@@ -14,6 +14,7 @@ import {
 } from "../config/lenses.js";
 import { MAX_REVIEW_SEATS } from "../config/panel.js";
 import type { Config } from "../config/schema.js";
+import { commitResolves, isOid } from "./commits.js";
 import { planConsolidator } from "./grouping.js";
 import { isProcessAlive } from "./liveness.js";
 import { discoverPriorRecords } from "./prior-records.js";
@@ -556,25 +557,6 @@ function isLineText(value: unknown): value is string {
 		}
 	}
 	return true;
-}
-
-/** Only a full hex object id; never something git could read as an option. */
-function isOid(value: unknown): value is string {
-	return (
-		typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)
-	);
-}
-
-function commitResolves(repoDir: string, oid: string): boolean {
-	try {
-		execFileSync("git", ["cat-file", "-e", `${oid}^{commit}`], {
-			cwd: repoDir,
-			stdio: "ignore",
-		});
-		return true;
-	} catch {
-		return false;
-	}
 }
 
 function isRealDirectory(target: string): boolean {
