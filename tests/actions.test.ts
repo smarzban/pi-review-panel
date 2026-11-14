@@ -467,6 +467,44 @@ describe("review_panel actions without Pi", () => {
 		});
 	});
 
+	it("verify runs the owner's defaults.verifySeats when the caller names no seats", async () => {
+		await withRepository(async (repo) => {
+			let runSeats: string[] | undefined = ["unset"];
+			let runVerifySeats: string[] | undefined;
+			const result = await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: "run-1",
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+				},
+				{
+					deps: deps({
+						loadConfig: () => ({
+							...config,
+							defaults: { ...config.defaults, verifySeats: ["claude"] },
+						}),
+						runVerify: async (input) => {
+							runSeats = input.seats;
+							runVerifySeats = input.config.defaults.verifySeats;
+							return {
+								recordPath: path.join(repo, ".review-panel", "runs", "v-2"),
+								priorRunId: "run-1",
+								priorHeadOid: "a".repeat(40),
+								headOid: "b".repeat(40),
+								kept: [],
+								outcomes: [],
+							};
+						},
+					}),
+				},
+			);
+			expect(runSeats).toBeUndefined();
+			expect(runVerifySeats).toEqual(["claude"]);
+			expect(textOf(result)).toContain("Seats: fix-verification (claude)");
+		});
+	});
+
 	it("resume runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
 			const seats = plannedSeats(["correctness", "security"]);
