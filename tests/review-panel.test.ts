@@ -1138,6 +1138,13 @@ describe("review_panel comment", () => {
 			expect(posted?.body).toContain(
 				"- **F-1** auth bypass — checked, not real",
 			);
+			// The run id is in the hidden marker only.
+			expect(posted?.body.split("\n").at(-1)).toBe(
+				"<!-- review-panel review=review-1 -->",
+			);
+			expect(posted?.body.split("\n").slice(0, -1).join("\n")).not.toContain(
+				"review-1",
+			);
 			expect(posted?.body).not.toContain("### Fixed");
 			expect(posted?.body).not.toMatch(/ready to merge/i);
 			expect(response.content[0]?.text).toContain("Posted comment on PR #29");
@@ -1205,7 +1212,12 @@ describe("review_panel comment", () => {
 					action: "comment",
 					repository,
 					priorRunId: "review-1",
-					verifyRunId: "verify-1",
+					verifyRunId: path.join(
+						repository,
+						".review-panel",
+						"runs",
+						"verify-1",
+					),
 					ownerApproved: true,
 					pr: 10,
 					lowAdvisory: ["F-2"],
@@ -1220,6 +1232,10 @@ describe("review_panel comment", () => {
 			expect(body).not.toContain("### Dismissed");
 			expect(body).toContain("- **F-2** nit");
 			expect(body).not.toContain("F-1");
+			// A verify run given as its record path is named by its id.
+			expect(body.split("\n").at(-1)).toBe(
+				"<!-- review-panel review=review-1 verify=verify-1 -->",
+			);
 			expect(response.content[0]?.text).toContain("updated");
 		});
 	});

@@ -2823,7 +2823,7 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 		expect(postedText("trail\\")).toBe("trail\\\\");
 	});
 
-	it("leaves $ plain (T498): GitHub math forms no link, mention or hidden text", () => {
+	it("leaves $ plain (T498)", () => {
 		expect(postedText("$x$ and $$y$$")).toBe("$x$ and $$y$$");
 	});
 
