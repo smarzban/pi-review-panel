@@ -71,27 +71,47 @@ export function signSeat(
 	);
 }
 
-/** The MAC of a review's `groups.json` bytes, bound to its run id. */
+/**
+ * The MAC of a review's `groups.json` bytes, bound to its run id, the plan's
+ * MAC and the SHA-256 of the exact `findings.json` bytes it grouped.
+ */
 export function testGroupsMac(
 	runId: string,
+	planMac: string,
+	findingsBytes: string,
 	groupsBytes: string,
 	key: Buffer = TEST_RECORD_KEY,
 ): string {
+	const findingsHash = createHash("sha256").update(findingsBytes).digest("hex");
 	return createHmac("sha256", key)
-		.update(`pi-review-panel/groups/v1\0${runId}\0`)
+		.update(
+			`pi-review-panel/groups/v2\0${runId}\0${planMac}\0${findingsHash}\0`,
+		)
 		.update(groupsBytes)
 		.digest("hex");
 }
 
-/** Signs the record's current `groups.json` bytes, as the package would. */
+/**
+ * Signs the record's current `groups.json` bytes, as the package would, over
+ * its current `plan.json` and `findings.json` (empty when there is none yet,
+ * as in an interrupted record).
+ */
 export function signGroups(
 	recordPath: string,
 	key: Buffer = TEST_RECORD_KEY,
 ): void {
+	const runId = path.basename(recordPath);
+	const findingsPath = path.join(recordPath, "findings.json");
 	writeFileSync(
 		path.join(recordPath, "groups.mac"),
 		testGroupsMac(
-			path.basename(recordPath),
+			runId,
+			testPlanMac(
+				runId,
+				readFileSync(path.join(recordPath, "plan.json"), "utf8"),
+				key,
+			),
+			existsSync(findingsPath) ? readFileSync(findingsPath, "utf8") : "",
 			readFileSync(path.join(recordPath, "groups.json"), "utf8"),
 			key,
 		),

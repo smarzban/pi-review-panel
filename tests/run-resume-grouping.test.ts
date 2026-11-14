@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-
+import { verifyAction } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
 import {
 	GROUPS_FILE,
@@ -22,11 +22,16 @@ import {
 import { COMPLETE_MARKER } from "../src/run/record.js";
 import { loadResumable, resumeRun } from "../src/run/resume.js";
 import { type RunReviewResult, runReview } from "../src/run/run-review.js";
+import { pinSnapshot } from "../src/run/snapshot.js";
 import {
 	interruptedReviewRecord,
 	plannedSeats,
 } from "./fixtures/interrupted-run.js";
-import { signGroups, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import {
+	signGroups,
+	TEST_RECORD_KEY,
+	testPlanMac,
+} from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 function git(cwd: string, args: string[]): string {
@@ -100,6 +105,10 @@ describe("resume and the grouping step", () => {
 			readSignedGroups(
 				result.recordPath,
 				TEST_RECORD_KEY,
+				testPlanMac(
+					path.basename(result.recordPath),
+					readFileSync(path.join(result.recordPath, "plan.json"), "utf8"),
+				),
 				readFileSync(path.join(result.recordPath, "findings.json"), "utf8"),
 			)?.flatMap((group) => group.findingIds),
 		).toEqual(["F-1", "F-2"]);
@@ -227,6 +236,10 @@ describe("resume and the grouping step", () => {
 			readSignedGroups(
 				recordPath,
 				TEST_RECORD_KEY,
+				testPlanMac(
+					path.basename(recordPath),
+					readFileSync(path.join(recordPath, "plan.json"), "utf8"),
+				),
 				readFileSync(path.join(recordPath, "findings.json"), "utf8"),
 			),
 		).toBeUndefined();
@@ -238,5 +251,103 @@ describe("resume and the grouping step", () => {
 		expect(report).toMatch(/^### F-1 \[/m);
 		expect(report).toMatch(/^### F-2 \[/m);
 		expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(true);
+	});
+});
+
+describe("a stale signed grouping restored after a resume regroups (fix round 2, item 2)", () => {
+	it("is refused: groups.mac is bound to the plan and the findings it grouped", async () => {
+		const repo = createHostRepo();
+		const finding = (title: string) => ({
+			file: "change.txt",
+			line: 1,
+			severity: "high" as const,
+			title,
+			evidence: `${title} evidence`,
+		});
+		// A first run groups findings A as one group, then dies before COMPLETE.
+		await runReview(
+			{
+				repoDir: repo,
+				baseRef: "HEAD~1",
+				seats: SEATS,
+				consolidator: planConsolidator(ownerConfig("opus")),
+			},
+			{
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake(
+					[
+						{ kind: "findings", findings: [finding("A0")] },
+						{ kind: "findings", findings: [finding("A1")] },
+					],
+					[
+						{
+							kind: "grouping",
+							attempts: [{ groups: [{ findingIds: ["F-1", "F-2"] }] }],
+						},
+					],
+				).factory,
+				pinSnapshot: (dir, commit) => {
+					const snapshot = pinSnapshot(dir, commit);
+					return {
+						worktreePath: snapshot.worktreePath,
+						release: () => {
+							snapshot.release();
+							throw new Error("killed after grouping");
+						},
+					};
+				},
+			},
+		).catch(() => undefined);
+		const recordPath = onlyRecord(repo);
+		const runId = path.basename(recordPath);
+		expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(false);
+		const staleGroups = readFileSync(
+			path.join(recordPath, GROUPS_FILE),
+			"utf8",
+		);
+		const staleMac = readFileSync(
+			path.join(recordPath, GROUPS_MAC_FILE),
+			"utf8",
+		);
+		expect(JSON.parse(staleGroups).groups).toEqual([
+			{ id: "G-1", findingIds: ["F-1", "F-2"] },
+		]);
+		// Seat 1 runs again with different findings; the grouping step regroups.
+		rmSync(path.join(recordPath, "seats", "1.mac"));
+		await resumeRun(loadResumable(repo, runId, TEST_RECORD_KEY), {
+			recordKey: TEST_RECORD_KEY,
+			config: ownerConfig("opus"),
+			sessionFactory: createSdkSeatFake([
+				{ kind: "findings", findings: [finding("B1")] },
+			]).factory,
+		});
+		expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(true);
+		// The stale pair is put back over the new one.
+		writeFileSync(path.join(recordPath, GROUPS_FILE), staleGroups);
+		writeFileSync(path.join(recordPath, GROUPS_MAC_FILE), staleMac);
+		git(repo, ["commit", "--allow-empty", "-m", "fix", "--quiet"]);
+		await expect(
+			verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: runId,
+					head: "HEAD",
+					keptFindingIds: ["G-1"],
+				},
+				{
+					deps: {
+						env: {},
+						home: "/tmp/resume-grouping-home",
+						diagnose: async () => ({ ready: true, rows: [] }),
+						loadConfig: () => ownerConfig("opus"),
+						recordKey: () => TEST_RECORD_KEY,
+						checkRecordKey: () => undefined,
+						runVerify: () => {
+							throw new Error("a stale grouping must not reach the seats");
+						},
+					},
+				},
+			),
+		).rejects.toThrow(/Verify refused: .*signed grouping.*pass F-ids/);
 	});
 });

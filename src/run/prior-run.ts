@@ -6,8 +6,10 @@ import {
 	COMPLETE_MARKER,
 	EXECUTION_FILE,
 	PANEL_FILE,
+	PLAN_FILE,
 	readSignedRecord,
 } from "./record.js";
+import { planMac } from "./record-key.js";
 import type { StampedFinding } from "./types.js";
 
 export type PriorRunMeta = {
@@ -22,6 +24,8 @@ export type PriorRun = {
 	recordPath: string;
 	meta: PriorRunMeta;
 	findings: StampedFinding[];
+	/** The owner's MAC of the record's `plan.json`, checked on load. */
+	planMac: string;
 	/** The exact signed bytes of the record's `findings.json`. */
 	findingsText: string;
 	/** The exact signed bytes of the record's `panel.json`. */
@@ -201,6 +205,7 @@ export function loadPriorRun(
 		recordPath,
 		meta,
 		findings: findings as StampedFinding[],
+		planMac: planMac(recordKey, runId, signed.get(PLAN_FILE) as string),
 		findingsText: signed.get("findings.json") as string,
 		panelText: signed.get(PANEL_FILE) as string,
 		executionText: signed.get(EXECUTION_FILE) as string,

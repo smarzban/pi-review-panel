@@ -786,7 +786,12 @@ function expandGroupIds(
 		return ids;
 	}
 	const recordPath = review.recordPath;
-	const groups = readSignedGroups(recordPath, key, review.findingsText);
+	const groups = readSignedGroups(
+		recordPath,
+		key,
+		review.planMac,
+		review.findingsText,
+	);
 	if (groups === undefined) {
 		throw new Error(
 			`${refusal}: G-ids need the review's signed grouping (groups.json with a valid groups.mac from this owner's record key, grouping every finding once), and run "${path.basename(recordPath)}" has none; pass F-ids instead`,

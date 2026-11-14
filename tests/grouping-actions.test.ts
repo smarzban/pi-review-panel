@@ -172,13 +172,14 @@ function writeReviewRecord(
 				2,
 			)}\n`,
 		);
-		if (options.sign !== false) {
-			signGroups(recordPath);
-		}
 	}
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
-	// The review record itself is the owner's; `sign` is about the grouping.
+	// The review record itself is the owner's; `sign` is about the grouping,
+	// which is signed over the record's plan and findings.
 	signReviewRecord(recordPath);
+	if (options.groups !== null && options.sign !== false) {
+		signGroups(recordPath);
+	}
 	return recordPath;
 }
 

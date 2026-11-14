@@ -304,7 +304,11 @@ export function writeGroups(
 	recordPath: string,
 	seat: PlannedSeat,
 	groups: readonly FindingGroup[],
-	key?: Buffer,
+	/**
+	 * Signs the grouping: the owner's key and plan MAC, and the exact
+	 * `findings.json` bytes the run writes for the list it grouped.
+	 */
+	seal?: { key: Buffer; planMac: string; findingsText: string },
 ): void {
 	const runId = path.basename(recordPath);
 	const bytes = `${JSON.stringify(
@@ -322,10 +326,10 @@ export function writeGroups(
 		2,
 	)}\n`;
 	writeRecordFile(path.join(recordPath, GROUPS_FILE), bytes);
-	if (key !== undefined) {
+	if (seal !== undefined) {
 		writeRecordFile(
 			path.join(recordPath, GROUPS_MAC_FILE),
-			groupsMac(key, runId, bytes),
+			groupsMac(seal.key, runId, seal.planMac, seal.findingsText, bytes),
 		);
 	}
 }
@@ -345,7 +349,7 @@ export function removeGroups(recordPath: string): void {
 
 /**
  * The record's grouping, only when `groups.mac` is the owner's MAC of the
- * exact `groups.json` bytes for this run, and the groups place every F-id of
+ * exact `groups.json` bytes for this run, this plan and these findings bytes, and the groups place every F-id of
  * `findingsText` in exactly one group. `findingsText` is the record's
  * `findings.json` bytes as the caller already authenticated them; the file
  * is never read again here. Anything else is undefined: the
@@ -355,6 +359,8 @@ export function removeGroups(recordPath: string): void {
 export function readSignedGroups(
 	recordPath: string,
 	key: Buffer,
+	/** The record's plan MAC, as the caller checked it. */
+	planMacHex: string,
 	findingsText: string,
 ): FindingGroup[] | undefined {
 	const runId = path.basename(recordPath);
@@ -364,7 +370,7 @@ export function readSignedGroups(
 	}
 	if (
 		!macMatches(
-			groupsMac(key, runId, bytes),
+			groupsMac(key, runId, planMacHex, findingsText, bytes),
 			readRegularFile(path.join(recordPath, GROUPS_MAC_FILE)),
 		)
 	) {

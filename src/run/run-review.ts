@@ -315,6 +315,9 @@ export async function executeReview(
 		});
 		stage = "collect";
 		const stamped = collectFindings(outcomes);
+		// The exact findings.json text, fixed now: the grouping is signed over
+		// it, and the same bytes are written below.
+		const findingsText = renderFindingsJson(stamped);
 		stage = "flag";
 		const annotations = flagPersistence(stamped, config.priorRecordPaths ?? []);
 		stage = "group";
@@ -355,7 +358,9 @@ export async function executeReview(
 					record.recordPath,
 					grouping.seat,
 					grouping.outcome.groups,
-					seal?.key,
+					seal === undefined
+						? undefined
+						: { key: seal.key, planMac: seal.planMac, findingsText },
 				);
 			}
 		}
@@ -394,7 +399,7 @@ export async function executeReview(
 						}),
 			}),
 		);
-		writeOwnRecordFile(record, "findings.json", renderFindingsJson(stamped));
+		writeOwnRecordFile(record, "findings.json", findingsText);
 		writeOwnRecordFile(
 			record,
 			"meta.json",
