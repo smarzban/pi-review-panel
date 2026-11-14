@@ -396,6 +396,81 @@ const invalidCases: InvalidCase[] = [
 		},
 		errors: [{ row: 1, field: "defaults.lenses[1]" }],
 	},
+	// defaults.verifySeats
+	{
+		name: "rejects a string defaults.verifySeats (non-array)",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: "terra" },
+		},
+		errors: [{ row: -1, field: "defaults.verifySeats" }],
+	},
+	{
+		name: "rejects empty defaults.verifySeats",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: [] },
+		},
+		errors: [{ row: -1, field: "defaults.verifySeats" }],
+	},
+	{
+		name: "rejects more than two defaults.verifySeats",
+		document: {
+			...validConfig(),
+			roster: [
+				...validConfig().roster,
+				{ id: "glm", provider: "zai", model: "glm-5" },
+			],
+			defaults: {
+				...validConfig().defaults,
+				verifySeats: ["terra", "claude", "glm"],
+			},
+		},
+		errors: [{ row: -1, field: "defaults.verifySeats" }],
+	},
+	{
+		name: "rejects a duplicate defaults.verifySeats id",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["terra", "terra"] },
+		},
+		errors: [{ row: 1, field: "defaults.verifySeats[1]" }],
+	},
+	{
+		name: "names a repeated unknown defaults.verifySeats id as a repeat",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["ghost", "ghost"] },
+		},
+		errors: [
+			{ row: 0, field: "defaults.verifySeats[0]" },
+			{ row: 1, field: "defaults.verifySeats[1]" },
+		],
+	},
+	{
+		name: "rejects a defaults.verifySeats id that is not a roster id",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["ghost"] },
+		},
+		errors: [{ row: 0, field: "defaults.verifySeats[0]" }],
+	},
+	{
+		name: "rejects a non-string defaults.verifySeats entry",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["terra", 42] },
+		},
+		errors: [{ row: 1, field: "defaults.verifySeats[1]" }],
+	},
+	{
+		name: "rejects an empty defaults.verifySeats entry",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: [""] },
+		},
+		errors: [{ row: 0, field: "defaults.verifySeats[0]" }],
+	},
 	// seatBudgetMs
 	{
 		name: "rejects seatBudgetMs 0",
@@ -607,6 +682,52 @@ describe("validateConfig", () => {
 			defaults: { seats: [" terra "], lenses: [" correctness "] },
 		};
 		expect(validateConfig(document)).toEqual({ ok: true, config: document });
+	});
+
+	it("accepts defaults.verifySeats naming one or two roster ids, not only default seats", () => {
+		for (const verifySeats of [["claude"], ["claude", "terra"]]) {
+			const document = {
+				...validConfig(),
+				defaults: { ...validConfig().defaults, seats: ["terra"], verifySeats },
+			};
+			expect(validateConfig(document)).toEqual({ ok: true, config: document });
+		}
+	});
+
+	it("names the unknown id and the limit in defaults.verifySeats refusals", () => {
+		const unknown = validateConfig({
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["ghost"] },
+		});
+		expect(unknown.ok).toBe(false);
+		if (!unknown.ok) {
+			expect(unknown.errors[0]?.message).toContain("roster id");
+		}
+		const tooMany = validateConfig({
+			...validConfig(),
+			defaults: {
+				...validConfig().defaults,
+				verifySeats: ["terra", "claude", "terra"],
+			},
+		});
+		expect(tooMany.ok).toBe(false);
+		if (!tooMany.ok) {
+			expect(tooMany.errors[0]?.message).toMatch(/1 to 2/);
+		}
+	});
+
+	it("calls a repeated unknown defaults.verifySeats id a repeat", () => {
+		const result = validateConfig({
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["ghost", "ghost"] },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errors.map((error) => error.message)).toEqual([
+				expect.stringContaining("roster id"),
+				expect.stringContaining("must not repeat"),
+			]);
+		}
 	});
 
 	it("accepts seatBudgetMs at the inclusive upper bound", () => {

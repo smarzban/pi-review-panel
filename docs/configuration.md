@@ -18,6 +18,7 @@ Save these exact bytes as your config file (the entry below names the file locat
   ],
   "defaults": {
     "seats":["terra","claude","glm"],
+    "verifySeats":["claude"],
     "lenses":["tests"],
     "seatBudgetMs":1200000
   }
@@ -55,6 +56,10 @@ Save these exact bytes as your config file (the entry below names the file locat
   - `lenses`: package-owned lens names (see below), no repeats.
   - `seatBudgetMs` (optional): per-seat wall-clock budget in milliseconds, an integer from 1 through
     2147483647. Omitted uses the built-in default of 1200000 ms (20 minutes).
+  - `verifySeats` (optional): the roster ids that run `verify`, 1 or 2 of them, no repeats. Each
+    must name a roster row; it need not be in `seats`. Omitted runs verify on the first `seats`
+    entry only. A caller's `seats` (CLI `--seats`) still wins over it. An invalid value refuses the
+    config, and `diagnose` names the field and the problem.
   - `prComment` (optional): how review and verify rounds reach the open pull request. `"auto"`,
     the default when the field is absent, posts each round. `"ownerApproved"` posts a round only
     when the call also passes `ownerApproved: true` (CLI `--owner-approved`); without it the reply

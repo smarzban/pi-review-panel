@@ -227,6 +227,32 @@ describe("readiness diagnostic", () => {
 		);
 	});
 
+	it("names defaults.verifySeats when it names an id that is not in the roster", async () => {
+		root = mkdtempSync(
+			path.join(tmpdir(), "review-panel-readiness-verify-seats-"),
+		);
+		const repoDir = path.join(root, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const configPath = path.join(root, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				roster: [{ id: "a", provider: "p", model: "m" }],
+				defaults: { seats: ["a"], verifySeats: ["b"] },
+			}),
+		);
+		const report = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: configPath },
+			home: path.join(root, "home"),
+			inspectModel: async () => ({ model: true, auth: true }),
+		});
+		expect(report.ready).toBe(false);
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.prerequisite).toBe("configuration");
+		expect(report.rows[0]?.remediation).toContain("defaults.verifySeats[0]");
+	});
+
 	it("reports the configuration failure alone and does not inspect a model", async () => {
 		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-config-"));
 		const repoDir = path.join(root, "repo");
