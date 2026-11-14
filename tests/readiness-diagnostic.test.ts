@@ -253,6 +253,66 @@ describe("readiness diagnostic", () => {
 		expect(report.rows[0]?.remediation).toContain("defaults.verifySeats[0]");
 	});
 
+	it("names defaults.consolidator when it names an id that is not in the roster", async () => {
+		root = mkdtempSync(
+			path.join(tmpdir(), "review-panel-readiness-consolidator-"),
+		);
+		const repoDir = path.join(root, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const configPath = path.join(root, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				roster: [{ id: "a", provider: "p", model: "m" }],
+				defaults: { seats: ["a"], consolidator: "b" },
+			}),
+		);
+		const report = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: configPath },
+			home: path.join(root, "home"),
+			inspectModel: async () => ({ model: true, auth: true }),
+		});
+		expect(report.ready).toBe(false);
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.prerequisite).toBe("configuration");
+		expect(report.rows[0]?.remediation).toContain(
+			"defaults.consolidator must name a roster id",
+		);
+	});
+
+	it("inspects the consolidator's model like every roster row", async () => {
+		root = mkdtempSync(
+			path.join(tmpdir(), "review-panel-readiness-consolidator-model-"),
+		);
+		const repoDir = path.join(root, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const configPath = path.join(root, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				roster: [
+					{ id: "a", provider: "p", model: "m" },
+					{ id: "g", provider: "q", model: "grouper" },
+				],
+				defaults: { seats: ["a"], consolidator: "g" },
+			}),
+		);
+		const report = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: configPath },
+			home: path.join(root, "home"),
+			inspectModel: async (provider) => ({
+				model: true,
+				auth: provider !== "q",
+			}),
+		});
+		expect(report.ready).toBe(false);
+		expect(report.rows.map((row) => row.prerequisite)).toEqual([
+			"authentication q",
+		]);
+	});
+
 	it("reports the configuration failure alone and does not inspect a model", async () => {
 		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-config-"));
 		const repoDir = path.join(root, "repo");
