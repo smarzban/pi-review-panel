@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import {
 	createSubmitAuditTool,
@@ -109,26 +108,101 @@ const CONFINEMENT_REFUSAL = "path outside worktree";
 const GUARDED_TOOLS = new Set(["read", "grep", "find", "ls", "git_diff"]);
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-/** Mirrors Pi's resolveToCwd normalization before the confinement check. */
-function resolvePathLikePi(input: string, worktree: string): string {
-	let normalized = input.replace(UNICODE_SPACES, " ");
-	if (normalized.startsWith("@")) {
-		normalized = normalized.slice(1);
+/**
+ * The platform, path rules and filesystem the guard resolves against. Pi reads
+ * `process.platform` at call time and uses the platform's `node:path`; tests
+ * inject `win32` rules to model a Windows host on any CI runner.
+ */
+export type GuardHost = {
+	platform: NodeJS.Platform;
+	path: typeof path.win32;
+	homedir: () => string;
+	existsSync: (value: string) => boolean;
+	realpathSync: (value: string) => string;
+};
+
+const NODE_HOST: GuardHost = {
+	get platform() {
+		return process.platform;
+	},
+	path,
+	homedir,
+	existsSync,
+	realpathSync: (value) => realpathSync(value),
+};
+
+/**
+ * Mirrors Pi's normalizeWindowsShellPath (pi-coding-agent 1.5.2,
+ * dist/utils/paths.js lines 90-99): a Git Bash / MSYS `/c/...`, WSL
+ * `/mnt/c/...` or Cygwin `/cygdrive/c/...` drive path becomes `C:\...`.
+ * A path not starting with one `/`, or holding any backslash, is left alone.
+ */
+function normalizeWindowsShellPath(filePath: string): string {
+	if (
+		!filePath.startsWith("/") ||
+		filePath.startsWith("//") ||
+		filePath.includes("\\")
+	) {
+		return filePath;
+	}
+	const match = filePath.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+	if (!match) {
+		return filePath;
+	}
+	const suffix = match[2]?.replaceAll("/", "\\");
+	return `${match[1]?.toUpperCase()}:\\${suffix ?? ""}`;
+}
+
+/**
+ * Mirrors Pi's normalizePath (pi-coding-agent 1.5.2, dist/utils/paths.js
+ * lines 100-123) in its order: Unicode-space fold and `@` strip (tool paths
+ * only), then the Windows shell-path rewrite on win32 only, then `~`
+ * expansion, then `file://` decode.
+ */
+function normalizePathLikePi(
+	input: string,
+	toolPath: boolean,
+	host: GuardHost,
+): string {
+	let normalized = input;
+	if (toolPath) {
+		normalized = normalized.replace(UNICODE_SPACES, " ");
+		if (normalized.startsWith("@")) {
+			normalized = normalized.slice(1);
+		}
+	}
+	if (host.platform === "win32") {
+		normalized = normalizeWindowsShellPath(normalized);
 	}
 	if (normalized === "~") {
-		normalized = homedir();
-	} else if (
+		return host.homedir();
+	}
+	if (
 		normalized.startsWith("~/") ||
-		(platform === "win32" && normalized.startsWith("~\\"))
+		(host.platform === "win32" && normalized.startsWith("~\\"))
 	) {
-		normalized = path.join(homedir(), normalized.slice(2));
+		return host.path.join(host.homedir(), normalized.slice(2));
 	}
 	if (/^file:\/\//.test(normalized)) {
-		normalized = fileURLToPath(normalized);
+		return fileURLToPath(normalized, { windows: host.platform === "win32" });
 	}
-	return path.isAbsolute(normalized)
-		? path.resolve(normalized)
-		: path.resolve(worktree, normalized);
+	return normalized;
+}
+
+/**
+ * Mirrors Pi's resolveToCwd (dist/core/tools/path-utils.js lines 42-44), which
+ * is resolvePath (dist/utils/paths.js lines 124-128): the tool path and the
+ * session cwd (the worktree) are both normalized before resolution.
+ */
+function resolvePathLikePi(
+	input: string,
+	worktree: string,
+	host: GuardHost,
+): string {
+	const normalized = normalizePathLikePi(input, true, host);
+	return host.path.isAbsolute(normalized)
+		? host.path.resolve(normalized)
+		: host.path.resolve(normalizePathLikePi(worktree, false, host), normalized);
 }
 
 /**
@@ -140,8 +214,12 @@ function resolvePathLikePi(input: string, worktree: string): string {
  * the variant rewrites the worktree prefix; the same variant when it DOES exist
  * is a real read pi can perform outside the worktree, so it must be confined.
  */
-function resolveReadPathCandidates(input: string, worktree: string): string[] {
-	const resolved = resolvePathLikePi(input, worktree);
+function resolveReadPathCandidates(
+	input: string,
+	worktree: string,
+	host: GuardHost,
+): string[] {
+	const resolved = resolvePathLikePi(input, worktree, host);
 
 	// Pi's resolveReadPath (dist/core/tools/path-utils.js) returns the FIRST
 	// candidate that exists on disk, short-circuiting through: resolved,
@@ -149,66 +227,72 @@ function resolveReadPathCandidates(input: string, worktree: string): string[] {
 	// falling back to resolved when none exist. The guard must confine only
 	// the single path pi will actually read, not every variant that happens
 	// to exist alongside it.
-	if (existsSync(resolved)) {
+	if (host.existsSync(resolved)) {
 		return [resolved];
 	}
 
 	const amPmVariant = resolved.replace(/ (AM|PM)\./gi, "\u202f$1.");
-	if (amPmVariant !== resolved && existsSync(amPmVariant)) {
+	if (amPmVariant !== resolved && host.existsSync(amPmVariant)) {
 		return [amPmVariant];
 	}
 
 	const nfdVariant = resolved.normalize("NFD");
-	if (nfdVariant !== resolved && existsSync(nfdVariant)) {
+	if (nfdVariant !== resolved && host.existsSync(nfdVariant)) {
 		return [nfdVariant];
 	}
 
 	const curlyVariant = resolved.replace(/'/g, "\u2019");
-	if (curlyVariant !== resolved && existsSync(curlyVariant)) {
+	if (curlyVariant !== resolved && host.existsSync(curlyVariant)) {
 		return [curlyVariant];
 	}
 
 	const nfdCurlyVariant = nfdVariant.replace(/'/g, "\u2019");
-	if (nfdCurlyVariant !== resolved && existsSync(nfdCurlyVariant)) {
+	if (nfdCurlyVariant !== resolved && host.existsSync(nfdCurlyVariant)) {
 		return [nfdCurlyVariant];
 	}
 
 	return [resolved];
 }
 
-function canonicalPath(value: string): string {
-	const resolved = path.resolve(value);
+function canonicalPath(value: string, host: GuardHost): string {
+	const resolved = host.path.resolve(value);
 	let ancestor = resolved;
 
-	while (!existsSync(ancestor)) {
-		const parent = path.dirname(ancestor);
+	while (!host.existsSync(ancestor)) {
+		const parent = host.path.dirname(ancestor);
 		if (parent === ancestor) {
 			break;
 		}
 		ancestor = parent;
 	}
 
-	return path.resolve(
-		realpathSync(ancestor),
-		path.relative(ancestor, resolved),
+	return host.path.resolve(
+		host.realpathSync(ancestor),
+		host.path.relative(ancestor, resolved),
 	);
 }
 
-function isContainedBy(parent: string, candidate: string): boolean {
-	const relative = path.relative(parent, candidate);
+function isContainedBy(
+	parent: string,
+	candidate: string,
+	host: GuardHost,
+): boolean {
+	const relative = host.path.relative(parent, candidate);
 	return (
 		relative === "" ||
 		(relative !== ".." &&
-			relative.startsWith(`..${path.sep}`) === false &&
-			path.isAbsolute(relative) === false)
+			relative.startsWith(`..${host.path.sep}`) === false &&
+			host.path.isAbsolute(relative) === false)
 	);
 }
 
 /** Returns a class-only veto for allowlisted calls whose path escapes worktree. */
 export function createConfinementGuard({
 	worktree,
+	host = NODE_HOST,
 }: {
 	worktree: string;
+	host?: GuardHost;
 }): ConfinementGuard {
 	return (event) => {
 		if (GUARDED_TOOLS.has(event.toolName) === false) {
@@ -219,16 +303,23 @@ export function createConfinementGuard({
 		);
 
 		try {
-			const canonicalWorktree = canonicalPath(worktree);
+			// Pi reads relative to the worktree as it normalizes it, so confine to that.
+			const canonicalWorktree = canonicalPath(
+				normalizePathLikePi(worktree, false, host),
+				host,
+			);
 			for (const candidate of argumentsToInspect) {
 				const pathCandidates =
 					event.toolName === "read"
-						? resolveReadPathCandidates(candidate, worktree)
-						: [resolvePathLikePi(candidate, worktree)];
+						? resolveReadPathCandidates(candidate, worktree, host)
+						: [resolvePathLikePi(candidate, worktree, host)];
 				for (const pathCandidate of pathCandidates) {
 					if (
-						isContainedBy(canonicalWorktree, canonicalPath(pathCandidate)) ===
-						false
+						isContainedBy(
+							canonicalWorktree,
+							canonicalPath(pathCandidate, host),
+							host,
+						) === false
 					) {
 						return { block: true, reason: CONFINEMENT_REFUSAL };
 					}

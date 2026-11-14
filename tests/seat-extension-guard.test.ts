@@ -8,9 +8,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createConfinementGuard } from "../src/seat/seat-extension.js";
+import {
+	createConfinementGuard,
+	type GuardHost,
+} from "../src/seat/seat-extension.js";
 
 type Fixture = { root: string; worktree: string; outside: string };
 
@@ -105,5 +108,156 @@ describe("SDK seat confinement", () => {
 		} finally {
 			removeFixture(value);
 		}
+	});
+});
+
+/**
+ * A Windows host on any CI runner: `path.win32` rules, a fake volume, and a
+ * process cwd on drive D:, so a drive-less absolute path resolves onto D: as it
+ * does for a seat whose worktree is `D:\\a\\repo`.
+ */
+function windowsHost(platform: NodeJS.Platform = "win32"): GuardHost {
+	const existing = new Set(
+		[
+			"A:\\",
+			"A:\\repo",
+			"A:\\repo\\x",
+			"C:\\",
+			"D:\\",
+			"D:\\a",
+			"D:\\a\\repo",
+			"D:\\a\\repo\\x",
+			"D:\\ab",
+			"D:\\ab\\repo",
+			"D:\\d",
+			"D:\\d\\a",
+			"D:\\d\\a\\repo",
+		].map((value) => value.toLowerCase()),
+	);
+	const exists = (value: string) => existing.has(value.toLowerCase());
+	return {
+		platform,
+		path: path.win32,
+		homedir: () => "C:\\Users\\seat",
+		existsSync: exists,
+		realpathSync: (value) => {
+			if (exists(value) === false) {
+				throw new Error(`ENOENT: ${value}`);
+			}
+			return value;
+		},
+	};
+}
+
+describe("SDK seat confinement on a Windows host", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function windowsGuard(worktree = "D:\\a\\repo", platform?: NodeJS.Platform) {
+		vi.spyOn(process, "cwd").mockReturnValue("D:\\a\\repo");
+		return createConfinementGuard({ worktree, host: windowsHost(platform) });
+	}
+
+	it("allows native paths inside the worktree and refuses another drive", () => {
+		const guard = windowsGuard();
+		for (const toolName of ["read", "grep", "find", "ls", "git_diff"]) {
+			for (const value of ["x", "D:\\a\\repo\\x", "d:\\A\\Repo\\x"]) {
+				expect(guard({ toolName, input: { path: value } })).toBeUndefined();
+			}
+			expect(guard({ toolName, input: { path: "A:\\repo\\x" } })).toEqual(
+				refusal(),
+			);
+		}
+	});
+
+	it("refuses MSYS, WSL and Cygwin drive paths that Pi reads from another drive", () => {
+		// The first six pair each input with the worktree where its drive-less
+		// reading would land (D: is the cwd drive), so only Pi's rewrite onto A:
+		// makes it an escape. The last two are the WSL and Cygwin forms against
+		// the D:\a\repo worktree itself.
+		for (const [worktree, value] of [
+			["D:\\a\\repo", "/a/repo/x"],
+			["D:\\a\\repo", "/A/repo/x"],
+			["D:\\a\\repo", "@/a/repo/x"],
+			["D:\\mnt\\a\\repo", "/mnt/a/repo/x"],
+			["D:\\cygdrive\\a\\repo", "/cygdrive/a/repo/x"],
+			["D:\\a", "/a"],
+			["D:\\a\\repo", "/mnt/a/repo/x"],
+			["D:\\a\\repo", "/cygdrive/a/repo/x"],
+		] as const) {
+			const guard = windowsGuard(worktree);
+			for (const toolName of ["read", "grep", "find", "ls", "git_diff"]) {
+				expect(guard({ toolName, input: { path: value } })).toEqual(refusal());
+			}
+		}
+	});
+
+	it("allows MSYS, WSL and Cygwin drive paths that Pi reads inside the worktree", () => {
+		const guard = windowsGuard();
+		for (const toolName of ["read", "grep", "find", "ls", "git_diff"]) {
+			for (const value of [
+				"/d/a/repo/x",
+				"/D/a/repo/x",
+				"/mnt/d/a/repo/x",
+				"/cygdrive/d/a/repo/x",
+				"@/d/a/repo/x",
+			]) {
+				expect(guard({ toolName, input: { path: value } })).toBeUndefined();
+			}
+		}
+	});
+
+	it("resolves against the worktree as Pi normalizes it, shell form included", () => {
+		const guard = windowsGuard("/d/a/repo");
+		expect(
+			guard({ toolName: "read", input: { path: "D:\\a\\repo\\x" } }),
+		).toBeUndefined();
+		expect(guard({ toolName: "read", input: { path: "x" } })).toBeUndefined();
+		expect(guard({ toolName: "read", input: { path: "/a/repo/x" } })).toEqual(
+			refusal(),
+		);
+	});
+
+	it("leaves a shell-looking path with a backslash alone, as Pi does", () => {
+		// Pi skips the rewrite for any path holding a backslash, so it reads
+		// `/d/a/repo\x` as D:\d\a\repo\x, outside the worktree. Rewriting it
+		// would land on D:\a\repo\x and wrongly let the read through.
+		const guard = windowsGuard();
+		for (const toolName of ["read", "grep", "find", "ls", "git_diff"]) {
+			for (const value of [
+				"/d/a/repo\\x",
+				"/mnt/d/a/repo\\x",
+				"\\d\\a\\repo\\x",
+			]) {
+				expect(guard({ toolName, input: { path: value } })).toEqual(refusal());
+			}
+		}
+	});
+
+	it("rewrites only a one-letter drive segment, as Pi does", () => {
+		// `/ab/repo/x` has no drive letter, so Pi resolves it on the cwd drive:
+		// inside D:\ab\repo.
+		const guard = windowsGuard("D:\\ab\\repo");
+		expect(
+			guard({ toolName: "read", input: { path: "/ab/repo/x" } }),
+		).toBeUndefined();
+		expect(guard({ toolName: "read", input: { path: "/a/b/repo/x" } })).toEqual(
+			refusal(),
+		);
+		// Pi reads `/xy/z` as D:\xy\z, outside D:\a\repo; a rewrite to `XY:\z`
+		// would resolve as relative, inside the worktree.
+		expect(
+			windowsGuard()({ toolName: "read", input: { path: "/xy/z" } }),
+		).toEqual(refusal());
+	});
+
+	it("rewrites shell paths only on win32, as Pi does", () => {
+		// Same Windows path rules and D: cwd, but a non-win32 platform: Pi leaves
+		// `/a/repo/x` alone, so it resolves onto D: inside the worktree.
+		const guard = windowsGuard("D:\\a\\repo", "linux");
+		expect(
+			guard({ toolName: "read", input: { path: "/a/repo/x" } }),
+		).toBeUndefined();
 	});
 });

@@ -26,7 +26,8 @@
  *   `(empty)`.
  *
  * {@link fitCommentBody} cuts a body by whole rows (a group in part) to stay
- * under GitHub's comment limit; every posted body goes through it.
+ * under GitHub's comment limit; every posted body goes through it. With each
+ * text field capped after escaping, no one finding can take most of the budget.
  *
  * Run ids appear in no visible text: {@link runMarker} carries them in one
  * hidden HTML comment at the end of a body, and {@link isRunMarkerFor}
@@ -37,6 +38,13 @@ import { truncateCodePoints } from "./review-presentation.js";
 
 /** Default length of one posted text field, in code points. */
 export const POSTED_TEXT_CHARS = 300;
+/**
+ * A posted text field of `maxChars` code points is at most this many times
+ * `maxChars` characters long after escaping, the ellipsis included. Every
+ * escape but `<span>$</span>` at most doubles a character, so ordinary text
+ * is cut by code points as before; a field of dollars is cut shorter.
+ */
+export const POSTED_TEXT_GROWTH = 2;
 /** Default length of one posted code span's content, in code points. */
 export const POSTED_CODE_CHARS = 200;
 
@@ -91,13 +99,37 @@ function breakLinks(text: string): string {
 }
 
 /**
- * Text as one inert line of plain text. Truncation happens before escaping,
- * so a cut never leaves a dangling backslash; the joiners go in after
- * {@link inert}, which would otherwise replace them.
+ * Text as one inert line of plain text, at most `maxChars` code points of
+ * the text and at most {@link POSTED_TEXT_GROWTH} × `maxChars` characters
+ * once escaped, so a field's posted size has a fixed cap whatever it holds.
+ * Truncation happens before escaping, so a cut never lands inside an escape
+ * or a `<span>$</span>` and never leaves a dangling backslash; the joiners go
+ * in after {@link inert}, which would otherwise replace them.
  */
 export function postedText(text: string, maxChars = POSTED_TEXT_CHARS): string {
-	const line = inertKeepingEmoji(truncateCodePoints(foldLines(text), maxChars));
-	return breakLinks(escapeMarkdown(line));
+	const source = foldLines(text);
+	const cap = POSTED_TEXT_GROWTH * maxChars;
+	const posted = (points: number) =>
+		breakLinks(
+			escapeMarkdown(inertKeepingEmoji(truncateCodePoints(source, points))),
+		);
+	const first = posted(maxChars);
+	if (first.length <= cap) {
+		return first;
+	}
+	// The longest cut that fits: a longer cut never posts shorter, so the
+	// search is exact. Zero code points posts only the ellipsis.
+	let fits = 0;
+	let fails = Math.min(maxChars, Array.from(source).length);
+	while (fails - fits > 1) {
+		const middle = Math.floor((fits + fails) / 2);
+		if (posted(middle).length <= cap) {
+			fits = middle;
+		} else {
+			fails = middle;
+		}
+	}
+	return posted(fits);
 }
 
 /**
@@ -108,13 +140,18 @@ export function postedText(text: string, maxChars = POSTED_TEXT_CHARS): string {
  * it may follow a list marker, a `#`, `-`, `+` or `=` and the `.` or `)`
  * of an ordered-list number are escaped too. Every `$` is posted as
  * `<span>$</span>`: GitHub runs math (which can colour, hide or resize
- * text) on `\$` and `&#36;` too, and only a dollar inside an element stays
- * a plain dollar. Parentheses, braces, quotes and dots stay plain.
+ * text) on `\$` and `&#36;` too. A dollar inside an element stays a plain
+ * dollar, except that a paragraph of nothing but `<span>$</span><span>$</span>
+ * … <span>$</span><span>$</span>` still renders as display math, so a
+ * zero-width joiner goes between adjacent dollar spans. Parentheses, braces,
+ * quotes and dots stay plain.
  */
 function escapeMarkdown(line: string): string {
 	return line
 		.replace(/[\\`*_[\]<>|~&]|!(?=\[)/gu, "\\$&")
-		.replaceAll("$", () => "<span>$</span>")
+		.replace(/\$+/gu, (run) =>
+			Array.from(run, () => "<span>$</span>").join(ZWJ),
+		)
 		.replace(
 			/^(?:[#\-+=]|(\d{1,9})([.)]))/u,
 			(marker, digits?: string, dot?: string) =>
@@ -166,8 +203,12 @@ export function groupCutLine(count: number): string {
  * Joins the head, the rows that fit, a line counting the rows cut, and the
  * tail, within {@link BODY_BUDGET} characters. Plain rows are whole: the
  * first one that does not fit ends the list. A group that does not fit
- * keeps its header, its first member and its cut line, the rows after it
- * are still tried, and what is left goes to its further members.
+ * whole keeps its header, its first member and its cut line, and the rows
+ * after it are still tried; once every row is placed, what is left goes to
+ * the further members of each group posted in part, in order. A group that
+ * cannot fit even its header and first member ends the list like a plain
+ * row, so the rows cut are always the last ones and no later, lower row
+ * posts in place of an earlier one.
  */
 export function fitCommentBody(
 	head: readonly string[],
@@ -211,6 +252,9 @@ export function fitCommentBody(
 			used += least;
 			plan.push(1);
 		} else {
+			// Like a plain row: rows are in severity order, so nothing posted
+			// may come after a group that is cut whole.
+			stopped = true;
 			plan.push("cut");
 		}
 	}

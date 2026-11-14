@@ -458,9 +458,14 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   emphasis, list or heading forms. `&` stays escaped because GitHub decodes an entity such as
   `&commat;` or `&num;` after the text is parsed, which would bring back the `@` or `#` the joiners
   broke. Every `$` posts as `<span>$</span>`: GitHub renders `$…$` as math, which can colour,
-  hide or resize text, and it does so on `\$` and `&#36;` too (checked with `gh api markdown`);
-  only a dollar inside an element stays a plain dollar. Parentheses, braces, quotes and dots stay
-  plain; a zero-width
+  hide or resize text, and it does so on `\$` and `&#36;` too (checked with `gh api markdown`).
+  A dollar inside an element stays a plain dollar, except that a paragraph of nothing but
+  `<span>$</span><span>$</span>…<span>$</span><span>$</span>` still renders as display math, so
+  a zero-width joiner goes between adjacent dollar spans. Each text field is cut to its length in
+  characters (300 for a title, 1,000 for evidence) before escaping, and to at most twice that
+  once escaped, never inside an escape or a dollar span; so a title of dollars posts 40 of them,
+  and a few such findings cannot crowd the rest of a body out. Parentheses, braces, quotes
+  and dots stay plain; a zero-width
   joiner follows every `@` and `＠`, every `#` (so `#123` and `owner/repo#123` do not link), the
   `-` in `GH-123`, and the `:` of `://`; the dot of every `www.` is backslash-escaped, so neither a
   URL nor a `www.` address becomes a link (checked with cmark-gfm, GitHub's Markdown engine).
@@ -468,8 +473,15 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   presentation selector (U+FE0F) and the joiners inside an emoji sequence, so `⚠️` posts as
   itself. File names and ids are code spans whose fence is longer than any backtick run inside, so
   they cannot be closed early; nothing is escaped or joined inside them, because GitHub forms no
-  mention, reference or link in a code span, and a copied path stays exact. The body is cut by whole rows below
-  GitHub's 65,536-character limit (saying how many were cut) and goes to `gh` on stdin.
+  mention, reference or link in a code span, and a copied path stays exact. The body is cut by
+  rows, in order, below GitHub's 65,536-character limit (saying how many were cut) and goes to
+  `gh` on stdin. A plain row that does not fit ends the list. A group that does not fit whole
+  posts its header, its first member and a line counting the members cut (all are in
+  `report.md`), and the rows after it are still tried in order; once every row is placed, the
+  space left goes to the further members of each group posted in part, in order. So a later
+  group can post whole while an earlier one posts in part. A group that cannot fit even its
+  header and first member ends the list like a plain row: the rows cut are always the last ones,
+  and a lower row never posts in place of a higher one that was cut.
 - `gh` runs asynchronously, so a slow call never blocks Pi; each call has a 30 s limit and one
   round's calls share a 60 s deadline. Interrupting the run (Esc in Pi, Ctrl-C in the CLI) kills a
   running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`. When

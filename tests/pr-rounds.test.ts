@@ -3044,7 +3044,7 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 
 	it("keeps $ out of GitHub math (T498)", () => {
 		expect(postedText("$x$ and $$y$$")).toBe(
-			"<span>$</span>x<span>$</span> and <span>$</span><span>$</span>y<span>$</span><span>$</span>",
+			"<span>$</span>x<span>$</span> and <span>$</span>\u200d<span>$</span>y<span>$</span>\u200d<span>$</span>",
 		);
 	});
 

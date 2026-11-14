@@ -471,6 +471,45 @@ describe("the grouped review PR comment", () => {
 		expect(lines.at(-1)).toBe("<!-- review-panel review=r1 -->");
 	});
 
+	it("all-dollar findings cannot push a later seat's high out of the review comment (T500 N-2)", () => {
+		// Each `$` posts as `<span>$</span>`; a field is capped after
+		// escaping, so a few all-`$` findings cannot fill the body budget.
+		const dollars: StampedFinding[] = Array.from({ length: 4 }, (_, index) =>
+			finding(`F-${index + 1}`, 0, {
+				file: "src/money.ts",
+				line: index + 1,
+				severity: "high",
+				title: "$".repeat(5_000),
+				evidence: "$".repeat(5_000),
+			}),
+		);
+		const real = finding("F-5", 1, {
+			file: "src/cache.ts",
+			line: 7,
+			severity: "high",
+			title: "Tenant data leaks through the shared cache",
+			evidence: "store() writes without the tenant id.",
+		});
+		const body = renderReviewRound({
+			runId: "r1",
+			baseRef: "main",
+			baseOid: "a".repeat(40),
+			headOid: "b".repeat(40),
+			panel: PANEL,
+			result: result(),
+			findings: [...dollars, real],
+			suggestions: [],
+		});
+		expect(body.length).toBeLessThan(GITHUB_COMMENT_LIMIT);
+		for (const id of ["F-1", "F-2", "F-3", "F-4"]) {
+			expect(body).toContain(`- **${id} [high]** <span>$</span>`);
+		}
+		expect(body).toContain(
+			"- **F-5 [high]** Tenant data leaks through the shared cache",
+		);
+		expect(body).not.toContain("cut to fit GitHub's comment limit");
+	});
+
 	it("names lost grouping and posts the flat list", () => {
 		const body = round(LOST);
 		expect(body).toContain("**Lost:** grouping (opus, no-submit)");
