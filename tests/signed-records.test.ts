@@ -19,6 +19,7 @@ import {
 	type ActionDependencies,
 	commentAction,
 	ownerRecordKey,
+	resumeAction,
 	verifyAction,
 } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
@@ -850,4 +851,52 @@ describe("a signed record from another repository is refused (review R-1)", () =
 			});
 		});
 	}
+});
+
+describe("resume replies with the findings it stamped, not findings.json read back (fix round 2)", () => {
+	it("ignores a findings.json swapped in after the seal", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			const findingsPath = path.join(recordOf(repo, runId), "findings.json");
+			const result = await resumeAction(
+				{ repoDir: repo, priorRunId: runId },
+				{
+					deps: deps({
+						loadConfig: () => ({
+							roster: seats.map((seat) => ({
+								id: seat.rosterId,
+								provider: seat.provider,
+								model: seat.model,
+							})),
+							defaults: { seats: seats.map((seat) => seat.rosterId) },
+						}),
+						resumeRun: (run, options) =>
+							resumeRun(run, {
+								...(options as NonNullable<typeof options>),
+								sessionFactory: createSdkSeatFake([{ kind: "default" }])
+									.factory,
+							}),
+						// After the record is sealed and COMPLETE, before the reply.
+						suggestLenses: () => {
+							writeFileSync(
+								findingsPath,
+								JSON.stringify([
+									{
+										id: "F-1",
+										seat: { provider: "evil", model: "evil", lens: "holistic" },
+										finding: { ...SDK_FINDING, title: "PLANTED TITLE" },
+									},
+								]),
+							);
+							return [];
+						},
+					}),
+				},
+			);
+			const reply = result.content[0]?.text ?? "";
+			expect(reply).toContain(SDK_FINDING.title);
+			expect(reply).not.toContain("PLANTED TITLE");
+		});
+	});
 });

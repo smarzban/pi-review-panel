@@ -754,17 +754,6 @@ function textResult(text: string): ActionResult {
 	return { content: [{ type: "text", text }] };
 }
 
-function readStampedFindings(recordPath: string): StampedFinding[] | undefined {
-	try {
-		const parsed: unknown = JSON.parse(
-			readFileSync(path.join(recordPath, "findings.json"), "utf8"),
-		);
-		return Array.isArray(parsed) ? (parsed as StampedFinding[]) : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 /** The ids a verify or comment call names, as F-ids only. */
 type JudgedIds = {
 	kept: string[];
@@ -1196,13 +1185,14 @@ export async function resumeAction(
 			run.plan.baseOid,
 			run.plan.headOid,
 		);
-		const findings = readStampedFindings(result.recordPath);
+		// The findings this resume stamped, never findings.json read back.
 		body = renderReviewResult({
 			recordPath: result.recordPath,
 			panel,
 			result,
 			suggestions,
-			...(findings === undefined ? {} : { findings }),
+			// A review resume always returns them; an audit has none.
+			findings: "findings" in result ? result.findings : [],
 		});
 	}
 	return textResult(`${headline}\n\n${body}`);
@@ -1273,7 +1263,9 @@ export async function reviewAction(
 		},
 	);
 	const suggestions = resolved.suggest(repoDir, baseRevision, headRevision);
-	const findings = readStampedFindings(result.recordPath);
+	// The findings this run stamped, never findings.json read back: a writer
+	// in the repository could replace it after the record was sealed.
+	const { findings } = result;
 
 	const report = renderReviewResult({
 		recordPath: result.recordPath,
@@ -1281,7 +1273,7 @@ export async function reviewAction(
 		result,
 		suggestions,
 		...(scopingNote === undefined ? {} : { scopingNote }),
-		...(findings === undefined ? {} : { findings }),
+		findings,
 		reserveBytes: ROUND_REPLY_RESERVE,
 	});
 	const roundLines = await postReviewRound(
@@ -1301,7 +1293,7 @@ export async function reviewAction(
 			panel,
 			result,
 			suggestions,
-			...(findings === undefined ? {} : { findings }),
+			findings,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));

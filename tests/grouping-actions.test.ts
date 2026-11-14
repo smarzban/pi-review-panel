@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
@@ -212,6 +213,11 @@ describe("review passes the owner's grouping seat to the run", () => {
 				return {
 					recordPath,
 					outcomes: [],
+					// The run hands back what it stamped; the reply never reads
+					// findings.json again.
+					findings: JSON.parse(
+						readFileSync(path.join(recordPath, "findings.json"), "utf8"),
+					),
 					...(input.consolidator === undefined
 						? {}
 						: {

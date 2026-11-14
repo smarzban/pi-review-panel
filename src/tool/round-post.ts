@@ -565,7 +565,8 @@ export type ReviewRoundFacts = {
 	baseOid: string;
 	headOid: string;
 	panel: PlannedSeat[];
-	result: RunReviewResult;
+	/** The stamped findings travel in `findings`, as the run returned them. */
+	result: Omit<RunReviewResult, "findings">;
 	findings?: StampedFinding[];
 	suggestions?: Suggestion[] | SuggestionsUnavailable;
 };

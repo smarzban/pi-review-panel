@@ -44,6 +44,10 @@ import {
 	signReviewRecord,
 	TEST_RECORD_KEY,
 } from "./fixtures/record-key.js";
+import {
+	createSdkReviewRunner,
+	SDK_FINDING,
+} from "./fixtures/sdk-seat-fake.js";
 
 /**
  * Each review and verify round posts to the open PR whose head is the run's
@@ -257,6 +261,7 @@ function reviewRun(repo: string, runId: string, rows: Row[]) {
 		);
 		return {
 			recordPath,
+			findings: rows.map(stamped),
 			outcomes: runConfig.seats.map((seat) => ({
 				seat,
 				outcome: {
@@ -433,6 +438,57 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			expect(reply.split("\n").at(-1)).toBe(
 				`PR comment: posted to #12 (https://github.com/${REPO_SLUG}/pull/12#issuecomment-101)`,
 			);
+		});
+	});
+
+	it("posts and replies with the findings the run stamped, not a findings.json swapped in after the seal (fix round 2)", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: createSdkReviewRunner([
+							{
+								kind: "findings",
+								findings: [{ ...SDK_FINDING, title: "ORIGINAL TITLE" }],
+							},
+						]),
+						// Runs after the record is sealed and COMPLETE, before the
+						// reply and the post are built: a fixed point to swap the file.
+						suggestLenses: () => {
+							const runs = path.join(repo, ".review-panel", "runs");
+							for (const name of readdirSync(runs)) {
+								writeFileSync(
+									path.join(runs, name, "findings.json"),
+									JSON.stringify([
+										{
+											id: "F-1",
+											seat: {
+												provider: "openai-codex",
+												model: "gpt-5.6-terra",
+												lens: "holistic",
+											},
+											finding: {
+												...SDK_FINDING,
+												severity: "high",
+												title: "PLANTED TITLE",
+											},
+										},
+									]),
+								);
+							}
+							return [];
+						},
+					}),
+				},
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			expect(body).toContain("ORIGINAL TITLE");
+			expect(body).not.toContain("PLANTED TITLE");
+			const reply = textOf(result);
+			expect(reply).toContain("ORIGINAL TITLE");
+			expect(reply).not.toContain("PLANTED TITLE");
 		});
 	});
 

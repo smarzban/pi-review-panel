@@ -47,12 +47,19 @@ import type {
 	RunConfig,
 	RunResult,
 	SeatOutcomeFacts,
+	StampedFinding,
 } from "./types.js";
 
 /** Filename for a durable snapshot-cleanup failure notice (AC-19). */
 export const CLEANUP_ERROR_FILE = "cleanup-error.txt";
 
 export type RunReviewResult = RunResult & {
+	/**
+	 * The stamped findings exactly as this run wrote them to `findings.json`.
+	 * The reply and the PR comment use these; the file is never read back,
+	 * since a writer in the repository could replace it after the seal.
+	 */
+	findings: StampedFinding[];
 	cleanupError?: string;
 	/** Seats a resume ran again; absent on a first run. */
 	resumedSeats?: PlannedSeat[];
@@ -409,6 +416,7 @@ export async function executeReview(
 		return {
 			recordPath: record.recordPath,
 			outcomes,
+			findings: stamped,
 			...(cleanupError === undefined ? {} : { cleanupError }),
 			...(resumedSeats === undefined ? {} : { resumedSeats }),
 			...(grouping === undefined ? {} : { grouping }),

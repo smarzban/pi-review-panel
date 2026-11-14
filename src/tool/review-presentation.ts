@@ -396,7 +396,7 @@ export function findingAttribution(
 export function renderReviewResult(input: {
 	recordPath: string;
 	panel: PlannedSeat[];
-	result: RunReviewResult;
+	result: Omit<RunReviewResult, "findings">;
 	suggestions?: Suggestion[] | SuggestionsUnavailable;
 	scopingNote?: string;
 	findings?: StampedFinding[];
@@ -520,7 +520,7 @@ export function reviewHeadLines(
 	heading: string,
 	input: {
 		panel: PlannedSeat[];
-		result: RunReviewResult;
+		result: Omit<RunReviewResult, "findings">;
 		findings?: StampedFinding[];
 	},
 ): string[] {
@@ -562,7 +562,9 @@ export function reviewHeadLines(
 }
 
 /** `Lost: seat/lens (class), …` for the seats that failed. */
-export function reviewLostLine(result: RunReviewResult): string {
+export function reviewLostLine(
+	result: Omit<RunReviewResult, "findings">,
+): string {
 	const lost = result.outcomes
 		.filter((facts) => facts.outcome.kind === "failed")
 		.map((facts) => {
@@ -576,7 +578,7 @@ export function reviewLostLine(result: RunReviewResult): string {
 export function renderAuditResult(input: {
 	recordPath: string;
 	panel: PlannedSeat[];
-	result: RunReviewResult;
+	result: Omit<RunReviewResult, "findings">;
 }): string {
 	const voted = input.result.outcomes.filter(
 		(facts) => facts.outcome.kind === "voted",
