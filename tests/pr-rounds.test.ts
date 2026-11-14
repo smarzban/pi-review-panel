@@ -3046,3 +3046,225 @@ describe("fix round 3: nits", () => {
 		expect(postedCode(" a ")).toBe("`a`");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// T498: readable PR comments
+// ---------------------------------------------------------------------------
+
+describe("T498: readable PR comments", () => {
+	const REVIEW_RUN = "2026-11-14T17-24-42-501Z-main-e52d7adb77ca8882";
+	const VERIFY_RUN = "2026-11-14T18-00-00-000Z-main-e52d7adb77ca8882";
+
+	it("the review comment: no visible run id, bold labels, the marker last", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: reviewRun(repo, REVIEW_RUN, [
+							{
+								id: "F-1",
+								severity: "high",
+								title: "**not bold** (really)",
+								evidence: "calls f(x) for $5",
+							},
+						]),
+					}),
+				},
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			const base = git(repo, ["rev-parse", "--short=7", "main~1"]);
+			expect(body).toBe(
+				[
+					"## Review panel · review",
+					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\``,
+					"2/2 voted · 1 finding",
+					"**Seats:** holistic (terra, claude)",
+					"",
+					"- **F-1 [high]** \\*\\*not bold\\*\\* (really) (`src/a.ts:3`) — terra/holistic, claude/holistic",
+					"  **Evidence:** calls f(x) for $5",
+					"",
+					`<!-- review-panel review=${REVIEW_RUN} -->`,
+				].join("\n"),
+			);
+		});
+	});
+
+	it("the verify comment and the automatic close-out: no visible run id, bold labels, the marker last", async () => {
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = [
+				{ id: "F-1", severity: "high" },
+				{ id: "F-2", severity: "medium" },
+			];
+			writeReviewRecord(repo, REVIEW_RUN, rows);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_RUN,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-2", reason: "by design (ADR 4)" }],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(repo, VERIFY_RUN, REVIEW_RUN, [
+							rows[0] as Row,
+						], [{ rosterId: "terra", items: [resolved("F-1")] }]),
+					}),
+				},
+			);
+			const [verify, card] = posts(gh.calls).map(bodyOf);
+			const marker = `<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN} -->`;
+			expect(verify).toBe(
+				[
+					"## Review panel · verify 1",
+					`\`bbbbbbb\` → \`${head.slice(0, 7)}\``,
+					"1/1 voted · F-1 resolved · no regressions",
+					"**Seats:** fix-verification (terra)",
+					"",
+					"### Kept",
+					"- **F-1 resolved** — F-1 title — `src/a.ts`: fixed",
+					"",
+					"### Dismissed (not fixed)",
+					"- **F-2** — F-2 title — by design (ADR 4)",
+					"",
+					marker,
+				].join("\n"),
+			);
+			expect(card).toBe(
+				[
+					"## Review panel · close-out",
+					"",
+					"2 findings submitted · 1 fixed · 1 dismissed · 0 left as low/advisory",
+					"**Seats:** holistic (terra)",
+					"**Lost:** none",
+					`\`main\` (\`aaaaaaa\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
+					"",
+					"### Dismissed",
+					"- **F-2** F-2 title — by design (ADR 4)",
+					"",
+					marker,
+				].join("\n"),
+			);
+			for (const body of [verify, card]) {
+				expect(
+					(body ?? "").split("\n").slice(0, -1).join("\n"),
+				).not.toContain(REVIEW_RUN);
+				expect(
+					(body ?? "").split("\n").slice(0, -1).join("\n"),
+				).not.toContain(VERIFY_RUN);
+			}
+		});
+	});
+
+	it("the manual card: no visible run id, the marker last", async () => {
+		const { assembleCloseoutComment } = await import(
+			"../src/tool/closeout-comment.js"
+		);
+		const card = assembleCloseoutComment({
+			findings: [stamped({ id: "F-1", severity: "low" })],
+			panel: {
+				runId: REVIEW_RUN,
+				baseRef: "main",
+				seats: [
+					{ rosterId: "terra", lens: "holistic", provider: "p", model: "m" },
+					{ rosterId: "glm", lens: "holistic", provider: "p", model: "m" },
+					{ rosterId: "terra", lens: "tests", provider: "p", model: "m" },
+				],
+			} as never,
+			lost: [],
+			meta: {
+				baseRef: "main",
+				baseOid: "a".repeat(40),
+				headOid: "b".repeat(40),
+			},
+			dismissed: [],
+			lowAdvisory: ["F-1"],
+			runIds: { review: REVIEW_RUN, verify: VERIFY_RUN },
+		});
+		expect(card).toBe(
+			[
+				"## Review panel",
+				"",
+				"1 finding submitted · 0 fixed · 0 dismissed · 1 left as low/advisory",
+				"**Seats:** holistic (terra, glm), tests (terra)",
+				"**Lost:** none",
+				"`main` (`aaaaaaa`) → `HEAD` (`bbbbbbb`)",
+				"",
+				"### Low / advisory (not kept)",
+				"- **F-1** F-1 title",
+				"",
+				`<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN} -->`,
+			].join("\n"),
+		);
+	});
+
+	it("the close-out check finds an earlier card by its hidden marker", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n1 finding\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->\n`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", [
+				{ rosterId: "terra", items: [resolved("F-1")] },
+			]);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("the close-out check ignores the old visible id, a seat-authored lookalike and another author", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const marker = `<!-- review-panel review=${REVIEW_ID} -->`;
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 7,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+					},
+					{
+						id: 8,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n- **F-1** ${postedText(marker)}`,
+					},
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n- **F-1** ${postedCode(marker)}`,
+					},
+					{
+						id: 10,
+						user: { login: "someone-else" },
+						body: `## Review panel · close-out\n\n${marker}`,
+					},
+					{
+						id: 11,
+						user: { login: "saeed" },
+						body: `## Review panel · review\n\n${marker}`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", [
+				{ rosterId: "terra", items: [resolved("F-1")] },
+			]);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			expect(textOf(result).split("\n").at(-1)).toMatch(
+				/^PR close-out: posted to #12/,
+			);
+		});
+	});
+});
