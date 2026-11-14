@@ -471,6 +471,31 @@ const invalidCases: InvalidCase[] = [
 		},
 		errors: [{ row: 0, field: "defaults.verifySeats[0]" }],
 	},
+	// defaults.consolidator
+	{
+		name: "rejects a defaults.consolidator that is not a string",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, consolidator: ["terra"] },
+		},
+		errors: [{ row: -1, field: "defaults.consolidator" }],
+	},
+	{
+		name: "rejects an empty defaults.consolidator",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, consolidator: " " },
+		},
+		errors: [{ row: -1, field: "defaults.consolidator" }],
+	},
+	{
+		name: "rejects a defaults.consolidator that is not a roster id",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, consolidator: "ghost" },
+		},
+		errors: [{ row: -1, field: "defaults.consolidator" }],
+	},
 	// seatBudgetMs
 	{
 		name: "rejects seatBudgetMs 0",
@@ -692,6 +717,31 @@ describe("validateConfig", () => {
 			};
 			expect(validateConfig(document)).toEqual({ ok: true, config: document });
 		}
+	});
+
+	it("accepts defaults.consolidator naming any roster id", () => {
+		const document = {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, consolidator: "claude" },
+		};
+		expect(validateConfig(document)).toEqual({ ok: true, config: document });
+	});
+
+	it("names the unknown id in a defaults.consolidator refusal", () => {
+		const result = validateConfig({
+			...validConfig(),
+			defaults: { ...validConfig().defaults, consolidator: "ghost" },
+		});
+		expect(result).toEqual({
+			ok: false,
+			errors: [
+				{
+					row: -1,
+					field: "defaults.consolidator",
+					message: "must name a roster id",
+				},
+			],
+		});
 	});
 
 	it("names the unknown id and the limit in defaults.verifySeats refusals", () => {

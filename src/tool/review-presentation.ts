@@ -1,4 +1,10 @@
 import type { ReadinessReport } from "../config/readiness.js";
+import {
+	GROUP_SEVERITY_LABEL,
+	type GroupView,
+	groupedView,
+	groupingLostLine,
+} from "../run/grouping.js";
 import { inert, inertLine } from "../run/inert-text.js";
 import { inlineCode, renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
@@ -13,8 +19,16 @@ import type { PlannedSeat, StampedFinding } from "../run/types.js";
 /** The public boundary never sends more than this many UTF-8 bytes. */
 export const MAX_PRESENTATION_BYTES = 16 * 1024;
 
-/** `reserveBytes` keeps room for lines the caller appends after the report. */
-function fitPresentation(lines: string[], reserveBytes = 0): string {
+/**
+ * `reserveBytes` keeps room for lines the caller appends after the report.
+ * `memberOf` maps the index of each line inside a group of two or more to
+ * that group's id: a cut that falls inside a group says so there.
+ */
+function fitPresentation(
+	lines: string[],
+	reserveBytes = 0,
+	memberOf: ReadonlyMap<number, string> = new Map(),
+): string {
 	const encoder = new TextEncoder();
 	const limit = MAX_PRESENTATION_BYTES - reserveBytes;
 	const joined = lines.join("\n");
@@ -25,15 +39,26 @@ function fitPresentation(lines: string[], reserveBytes = 0): string {
 	const keepThrough = recordIndex >= 0 ? recordIndex + 1 : 1;
 	const head = lines.slice(0, keepThrough);
 	const rest = lines.slice(keepThrough);
+	const omitted = "- additional row(s) omitted.";
 	while (rest.length > 0) {
 		rest.pop();
-		const omitted = "- additional row(s) omitted.";
-		const candidate = [...head, ...rest, omitted].join("\n");
+		// The first line cut: when it belongs to a group, that group is cut.
+		const group = memberOf.get(keepThrough + rest.length);
+		const candidate = [
+			...head,
+			...rest,
+			...(group === undefined
+				? []
+				: [
+						`  - more of ${group} omitted; the full group is in the run record's report.md.`,
+					]),
+			omitted,
+		].join("\n");
 		if (encoder.encode(candidate).length <= limit) {
 			return candidate;
 		}
 	}
-	return [...head, "- additional row(s) omitted."].join("\n");
+	return [...head, omitted].join("\n");
 }
 
 /** Cuts by whole code points, so a multibyte character is never split. */
@@ -319,7 +344,11 @@ function formatCost(cost: number): string {
 	return `$${cost.toFixed(4)}`;
 }
 
-function rollupLifecycle(outcomes: RunReviewResult["outcomes"]):
+function rollupLifecycle(
+	outcomes: ReadonlyArray<
+		Pick<RunReviewResult["outcomes"][number], "lifecycle">
+	>,
+):
 	| {
 			durationMs: number;
 			cost: number;
@@ -382,18 +411,29 @@ export function renderReviewResult(input: {
 	if (failed.length > 0) {
 		lines.push(reviewLostLine(input.result));
 	}
+	const groupingLost = groupingLostLine(input.result.grouping);
+	if (groupingLost !== undefined) {
+		lines.push(groupingLost);
+	}
 	lines.push(`Record: \`${input.recordPath}\``, "");
+	const groups = groupedView(findings, input.result.grouping);
+	const memberOf = new Map<number, string>();
 	if (findings.length === 0) {
 		lines.push("None submitted.");
+	} else if (groups !== undefined) {
+		for (const group of groups) {
+			const rows = groupReplyRows(group, input.panel);
+			if (group.members.length > 1) {
+				// Every line after the header is the group's.
+				for (let index = 1; index < rows.length; index += 1) {
+					memberOf.set(lines.length + index, group.id);
+				}
+			}
+			lines.push(...rows);
+		}
 	} else {
 		for (const entry of orderFindings(findings)) {
-			lines.push(
-				`- ${entry.id} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, input.panel)}`,
-			);
-			const evidence = inertLine(entry.finding.evidence.trim());
-			if (evidence.length > 0) {
-				lines.push(`  ${truncateCodePoints(evidence, EVIDENCE_CHARS)}`);
-			}
+			lines.push(...findingReplyRows(entry, input.panel));
 		}
 	}
 	// A lens that ran shows in the seats line; only untaken ones are suggested.
@@ -414,7 +454,53 @@ export function renderReviewResult(input: {
 	if (input.result.cleanupError !== undefined) {
 		lines.push("", input.result.cleanupError);
 	}
-	return fitPresentation(lines, input.reserveBytes);
+	return fitPresentation(lines, input.reserveBytes, memberOf);
+}
+
+function evidenceText(entry: StampedFinding): string {
+	return truncateCodePoints(
+		inertLine(entry.finding.evidence.trim()),
+		EVIDENCE_CHARS,
+	);
+}
+
+/**
+ * One finding: its row, then its evidence. `label` replaces the id, and
+ * `indent` nests it under a group header.
+ */
+function findingReplyRows(
+	entry: StampedFinding,
+	panel: PlannedSeat[],
+	label = entry.id,
+	indent = "",
+): string[] {
+	const rows = [
+		`${indent}- ${label} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, panel)}`,
+	];
+	const evidence = evidenceText(entry);
+	if (evidence.length > 0) {
+		rows.push(`${indent}  ${evidence}`);
+	}
+	return rows;
+}
+
+/**
+ * One group: a group of one is its finding's row with both ids; a larger
+ * group is a header (id, the highest severity a seat stated, the lowest
+ * member's title), then each member's own row: id, severity, title, place,
+ * seat and evidence. The member count is never shown.
+ */
+function groupReplyRows(group: GroupView, panel: PlannedSeat[]): string[] {
+	const [only] = group.members;
+	if (group.members.length === 1 && only !== undefined) {
+		return findingReplyRows(only, panel, `${group.id} / ${only.id}`);
+	}
+	return [
+		`- ${group.id} [${group.severity}, ${GROUP_SEVERITY_LABEL}] ${inertLine(group.lead.finding.title)}`,
+		...group.members.flatMap((entry) =>
+			findingReplyRows(entry, panel, entry.id, "  "),
+		),
+	];
 }
 
 /** Findings by severity, then id, as the review reply lists them. */
@@ -448,15 +534,31 @@ export function reviewHeadLines(
 	}, 0);
 	const findings = input.findings ?? [];
 	const shownCount = findings.length > 0 ? findings.length : findingCount;
+	const groups = groupedView(findings, input.result.grouping);
 	const summary = [
 		`${voted.length}/${input.result.outcomes.length} voted`,
-		`${shownCount} finding${shownCount === 1 ? "" : "s"}`,
+		`${shownCount} finding${shownCount === 1 ? "" : "s"}${
+			groups === undefined
+				? ""
+				: ` in ${groups.length} group${groups.length === 1 ? "" : "s"}`
+		}`,
 	];
-	const totals = rollupLifecycle(input.result.outcomes);
+	// The grouping seat's time and cost count too; it is never a vote.
+	const totals = rollupLifecycle([
+		...input.result.outcomes,
+		...(input.result.grouping === undefined ? [] : [input.result.grouping]),
+	]);
 	if (totals !== undefined) {
 		summary.push(formatDuration(totals.durationMs), formatCost(totals.cost));
 	}
-	return [heading, summary.join(" · "), renderSeatsLine(input.panel)];
+	const grouping = input.result.grouping;
+	return [
+		heading,
+		summary.join(" · "),
+		renderSeatsLine(
+			grouping === undefined ? input.panel : [...input.panel, grouping.seat],
+		),
+	];
 }
 
 /** `Lost: seat/lens (class), …` for the seats that failed. */

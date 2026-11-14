@@ -40,7 +40,9 @@ export type ChannelOutcome<P extends SeatProfile> = P extends { kind: "audit" }
 	? { kind: "audit"; rows: AuditRow[] }
 	: P extends { kind: "verification" }
 		? { kind: "verification"; result: VerificationResult }
-		: { kind: "findings"; findings: Finding[] };
+		: P extends { kind: "grouping" }
+			? { kind: "grouping"; groups: string[][] }
+			: { kind: "findings"; findings: Finding[] };
 
 export type SeatResult<P extends SeatProfile = FindingsProfile> = {
 	identity: SeatIdentity;
@@ -127,7 +129,9 @@ export function classifyOutcome<P extends SeatProfile = FindingsProfile>(
 				? "audit results"
 				: profile.kind === "verification"
 					? "verification results"
-					: "findings";
+					: profile.kind === "grouping"
+						? "groups"
+						: "findings";
 		return failure(
 			input,
 			"no-submit",
@@ -152,6 +156,15 @@ export function classifyOutcome<P extends SeatProfile = FindingsProfile>(
 			lifecycle: input.lifecycle,
 			...(input.nudgeFired ? { recovered: true as const } : {}),
 			outcome: { kind: "verification", result: value as VerificationResult },
+		} as SeatResult<P>;
+	}
+	if (profile.kind === "grouping") {
+		return {
+			identity: { ...input.identity },
+			replay: input.replay,
+			lifecycle: input.lifecycle,
+			...(input.nudgeFired ? { recovered: true as const } : {}),
+			outcome: { kind: "grouping", groups: value as string[][] },
 		} as SeatResult<P>;
 	}
 	return {

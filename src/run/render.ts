@@ -1,5 +1,11 @@
 import type { SeatIdentity } from "../seat/classify.js";
 import type { Finding } from "../seat/schema.js";
+import {
+	GROUP_SEVERITY_LABEL,
+	type GroupingFacts,
+	groupedView,
+	groupingLostLine,
+} from "./grouping.js";
 import { inertLine } from "./inert-text.js";
 import type { PlannedSeat, SeatOutcomeFacts, StampedFinding } from "./types.js";
 
@@ -58,6 +64,8 @@ export type RenderInput = {
 	cleanupError?: string;
 	/** Present only when a resume finished this record. */
 	resume?: ResumeFacts;
+	/** The grouping step, when it ran. */
+	grouping?: GroupingFacts;
 };
 
 /**
@@ -160,8 +168,9 @@ export function renderReport(input: RenderInput): string {
 		...renderResumeSection(input.resume),
 		...renderCleanupSection(input.cleanupError),
 		...renderLedgerNoticesSection(annotations.notices),
-		...renderFindingsSection(input.stamped, annotations.flags),
+		...renderFindingsSection(input.stamped, annotations.flags, input.grouping),
 		...renderSeatsSection(input.outcomes),
+		...renderGroupingSection(input.grouping, input.stamped.length),
 	];
 	return `${lines.join("\n")}\n`;
 }
@@ -222,10 +231,63 @@ function renderLedgerNoticesSection(notices: LedgerNotice[]): string[] {
 function renderFindingsSection(
 	stamped: StampedFinding[],
 	flags: FindingFlag[],
+	grouping?: GroupingFacts,
 ): string[] {
 	const lines = ["## Findings", ""];
 	if (stamped.length === 0) {
 		lines.push("No findings were submitted.", "");
+		return lines;
+	}
+
+	// The flagger emits at most one flag per finding; the map mirrors that.
+	const reasonByFinding = new Map<string, string>();
+	for (const flag of flags) {
+		reasonByFinding.set(flag.findingId, flag.reason);
+	}
+
+	const lost = groupingLostLine(grouping);
+	if (lost !== undefined) {
+		lines.push(`${lost}. The list below is not grouped.`, "");
+	}
+	const groups = groupedView(stamped, grouping);
+	if (groups !== undefined) {
+		lines.push(
+			"Findings that describe the same defect share a group. Groups are ordered by",
+			"the highest severity a seat stated in them (high, medium, low), then by",
+			"their lowest finding id; severity is each seat's stated opinion, not a",
+			"computed ranking. Every finding keeps its own id, seat, severity and evidence.",
+			"",
+		);
+		for (const group of groups) {
+			const [only] = group.members;
+			if (group.members.length === 1 && only !== undefined) {
+				lines.push(
+					...renderFinding(
+						only,
+						reasonByFinding.get(only.id),
+						`${group.id} / ${only.id}`,
+						"###",
+					),
+					"",
+				);
+				continue;
+			}
+			lines.push(
+				`### ${group.id} [${group.severity}, ${GROUP_SEVERITY_LABEL}] ${inertLine(group.lead.finding.title)}`,
+				"",
+			);
+			for (const entry of group.members) {
+				lines.push(
+					...renderFinding(
+						entry,
+						reasonByFinding.get(entry.id),
+						entry.id,
+						"####",
+					),
+					"",
+				);
+			}
+		}
 		return lines;
 	}
 	lines.push(
@@ -233,12 +295,6 @@ function renderFindingsSection(
 		"severity is each seat's stated opinion, not a computed ranking.",
 		"",
 	);
-
-	// The flagger emits at most one flag per finding; the map mirrors that.
-	const reasonByFinding = new Map<string, string>();
-	for (const flag of flags) {
-		reasonByFinding.set(flag.findingId, flag.reason);
-	}
 
 	// Array.prototype.sort is stable: within one stated severity, findings
 	// keep their collection (id) order.
@@ -255,9 +311,11 @@ function renderFindingsSection(
 function renderFinding(
 	entry: StampedFinding,
 	priorReason: string | undefined,
+	label = entry.id,
+	heading = "###",
 ): string[] {
 	const lines = [
-		`### ${entry.id} [${entry.finding.severity}] ${inertLine(entry.finding.title)}`,
+		`${heading} ${label} [${entry.finding.severity}] ${inertLine(entry.finding.title)}`,
 		"",
 		`- Seat: ${seatLabel(entry.seat)}`,
 		`- Location: ${inertLine(location(entry.finding))}`,
@@ -289,6 +347,45 @@ function renderSeatsSection(outcomes: SeatOutcomeFacts[]): string[] {
 	for (const facts of outcomes) {
 		lines.push(...renderSeat(facts), "");
 	}
+	return lines;
+}
+
+/** The grouping seat, when it ran: its identity, outcome and timing. */
+function renderGroupingSection(
+	grouping: GroupingFacts | undefined,
+	findingCount: number,
+): string[] {
+	if (grouping === undefined) {
+		return [];
+	}
+	const lines = [
+		"## Grouping",
+		"",
+		`### ${seatLabel(grouping.seat)}`,
+		"",
+		`- Roster id: ${grouping.seat.rosterId}`,
+	];
+	if (grouping.outcome.kind === "grouped") {
+		const count = grouping.outcome.groups.length;
+		lines.push(
+			`- Outcome: grouped ${findingCount} ${findingCount === 1 ? "finding" : "findings"} in ${count} ${count === 1 ? "group" : "groups"}`,
+		);
+	} else {
+		lines.push(
+			"- Outcome: lost",
+			`- Failure class: ${grouping.outcome.class}`,
+			`- Reason: ${inertLine(grouping.outcome.reason)}`,
+		);
+	}
+	lines.push(
+		"- SDK lifecycle:",
+		`  - Duration: ${grouping.lifecycle.durationMs}ms`,
+		`  - Attempts: ${grouping.lifecycle.attempts}`,
+		`  - Aborted: ${grouping.lifecycle.aborted}`,
+		`  - Tokens: ${grouping.lifecycle.tokens.total}`,
+		`  - Cost: ${grouping.lifecycle.cost}`,
+		"",
+	);
 	return lines;
 }
 

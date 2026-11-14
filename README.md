@@ -124,6 +124,13 @@ Suggest:
 - security: added line(s) touch auth/crypto/subprocess/deserialization (`src/run/record-key.ts:42`, +2 more)
 ```
 
+When the owner names a grouping seat in `defaults.consolidator`, findings that
+describe the same defect are shown once, as a group (`G-1`, …), with every
+member's own id, seat, severity and evidence. Grouping never drops, rewrites or
+re-rates a finding, and group size is never shown as agreement. Verify and
+comment take G-ids as well as F-ids (see
+[Grouped findings](docs/configuration.md#grouped-findings)).
+
 ```json
 {"action":"audit","repository":"/Users/you/the-repo"}
 ```

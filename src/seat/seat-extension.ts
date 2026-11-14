@@ -15,6 +15,10 @@ import {
 	type ToolResult,
 } from "./channel-file.js";
 import { DEFAULT_SEAT_PROFILE, type SeatProfile } from "./channel-profile.js";
+import {
+	createSubmitGroupsTool,
+	type SubmitGroupsTool,
+} from "./grouping-channel.js";
 import type { Finding } from "./schema.js";
 import { validateFindings } from "./schema.js";
 import {
@@ -449,14 +453,16 @@ export type SeatTool =
 	| GitDiffTool
 	| SubmitFindingsTool
 	| SubmitAuditTool
-	| SubmitVerificationTool;
+	| SubmitVerificationTool
+	| SubmitGroupsTool;
 
 export type SeatToolset = {
 	tools: SeatTool[];
 	channel:
 		| SubmissionChannel<Finding[]>
 		| SubmissionChannel<AuditRow[]>
-		| SubmissionChannel<VerificationResult>;
+		| SubmissionChannel<VerificationResult>
+		| SubmissionChannel<string[][]>;
 };
 
 /**
@@ -488,6 +494,10 @@ export function createSeatTools({
 			expectedIds,
 			cycle,
 		});
+		return { tools: [readOnly, tool], channel };
+	}
+	if (profile.kind === "grouping") {
+		const { tool, channel } = createSubmitGroupsTool({ expectedIds });
 		return { tools: [readOnly, tool], channel };
 	}
 	const { tool, channel } = createSubmitFindingsTool({});

@@ -4,6 +4,12 @@ import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";
 import { flagPersistence } from "./flag.js";
 import {
+	type GroupingFacts,
+	removeGroups,
+	runGroupingStep,
+	writeGroups,
+} from "./grouping.js";
+import {
 	acquireRunLock,
 	complete,
 	projectSeat,
@@ -21,6 +27,7 @@ import {
 	renderReport,
 } from "./render.js";
 import {
+	DEFAULT_SEAT_BUDGET_MS,
 	type ReviewProgressEvent,
 	RunCancelledError,
 	type SeatConcurrencyGate,
@@ -46,6 +53,11 @@ export type RunReviewResult = RunResult & {
 	cleanupError?: string;
 	/** Seats a resume ran again; absent on a first run. */
 	resumedSeats?: PlannedSeat[];
+	/**
+	 * The grouping step, when a consolidator is set and the review had two
+	 * or more findings; absent otherwise.
+	 */
+	grouping?: GroupingFacts;
 };
 
 /** A frozen review the record already describes: what runs and against what. */
@@ -58,6 +70,8 @@ export type ReviewExecution = {
 	scopingNote?: string;
 	seatBudgetMs?: number;
 	priorRecordPaths?: string[];
+	/** The owner's grouping seat; absent means no grouping step. */
+	consolidator?: PlannedSeat;
 };
 
 /** What a resume starts from, by planned index. */
@@ -86,6 +100,8 @@ export type RunReviewOptions = {
 	scheduleSeats?: typeof scheduleSeats;
 	writePanel?: typeof writePanel;
 	sessionFactory?: SdkSessionFactory;
+	/** Runs the grouping step; the real one by default. */
+	runGroupingStep?: typeof runGroupingStep;
 	/** Shared scheduler-owned cap for concurrently executing role panels. */
 	concurrencyGate?: SeatConcurrencyGate;
 	onProgress?: (event: ReviewProgressEvent) => void;
@@ -157,6 +173,9 @@ export async function runReview(
 			...(config.priorRecordPaths === undefined
 				? {}
 				: { priorRecordPaths: config.priorRecordPaths }),
+			...(config.consolidator === undefined
+				? {}
+				: { consolidator: config.consolidator }),
 		},
 		options,
 	);
@@ -276,6 +295,48 @@ export async function executeReview(
 		const stamped = collectFindings(outcomes);
 		stage = "flag";
 		const annotations = flagPersistence(stamped, config.priorRecordPaths ?? []);
+		stage = "group";
+		// A resumed record may hold groups made for other F-ids.
+		removeGroups(record.recordPath);
+		let grouping: GroupingFacts | undefined;
+		if (config.consolidator !== undefined && stamped.length >= 2) {
+			grouping = await (options.runGroupingStep ?? runGroupingStep)(
+				{
+					seat: config.consolidator,
+					stamped,
+					worktree: snapshot.worktreePath,
+					baseOid,
+					seatBudgetMs: config.seatBudgetMs ?? DEFAULT_SEAT_BUDGET_MS,
+				},
+				{
+					...(options.abortSignal === undefined
+						? {}
+						: { abortSignal: options.abortSignal }),
+					...(options.sessionFactory === undefined
+						? {}
+						: { sessionFactory: options.sessionFactory }),
+				},
+			);
+			// A host cancel is a cancelled run, not lost grouping: the record
+			// stays incomplete, and resume runs the grouping step again.
+			if (options.abortSignal?.aborted) {
+				throw new RunCancelledError("run cancelled", fresh);
+			}
+			writeExecution(record, {
+				cancelled: false,
+				outcomes,
+				...(resumedSeats === undefined ? {} : { resumedSeats }),
+				grouping,
+			});
+			if (grouping.outcome.kind === "grouped") {
+				writeGroups(
+					record.recordPath,
+					grouping.seat,
+					grouping.outcome.groups,
+					seal?.key,
+				);
+			}
+		}
 		stage = "release";
 		const release = releaseOnce();
 		const cleanupError =
@@ -297,6 +358,7 @@ export async function executeReview(
 				stamped,
 				outcomes,
 				annotations,
+				...(grouping === undefined ? {} : { grouping }),
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined
 					? {}
@@ -328,6 +390,7 @@ export async function executeReview(
 			outcomes,
 			...(cleanupError === undefined ? {} : { cleanupError }),
 			...(resumedSeats === undefined ? {} : { resumedSeats }),
+			...(grouping === undefined ? {} : { grouping }),
 		};
 	} catch (cause) {
 		const release = releaseOnce();

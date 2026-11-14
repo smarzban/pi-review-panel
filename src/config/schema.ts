@@ -23,6 +23,13 @@ export type ConfigDefaults = {
 	 * the call also passes `ownerApproved: true`.
 	 */
 	prComment?: PrCommentMode;
+	/**
+	 * Optional roster id of the grouping seat. When set, a review with two or
+	 * more findings runs one more seat after the reviewers that only puts
+	 * findings describing the same defect in one group. Omitted means no
+	 * grouping step and the flat list.
+	 */
+	consolidator?: string;
 };
 
 /** Verify runs at most this many seats, from the caller or the owner config. */
@@ -63,6 +70,7 @@ const defaultsFields = new Set([
 	"seatBudgetMs",
 	"verifySeats",
 	"prComment",
+	"consolidator",
 ]);
 
 const MAX_SEAT_BUDGET_MS = 2147483647;
@@ -319,6 +327,22 @@ export function validateConfig(document: unknown): ConfigResult {
 			validateVerifySeats(defaults.verifySeats, seenIds, errors);
 		}
 
+		if (Object.hasOwn(defaults, "consolidator")) {
+			if (!isNonEmptyString(defaults.consolidator)) {
+				errors.push({
+					row: -1,
+					field: "defaults.consolidator",
+					message: "must be a non-empty string",
+				});
+			} else if (!seenIds.has(defaults.consolidator)) {
+				errors.push({
+					row: -1,
+					field: "defaults.consolidator",
+					message: "must name a roster id",
+				});
+			}
+		}
+
 		if (
 			Object.hasOwn(defaults, "prComment") &&
 			!PR_COMMENT_MODES.includes(defaults.prComment as PrCommentMode)
@@ -350,6 +374,9 @@ export function validateConfig(document: unknown): ConfigResult {
 	}
 	if (Object.hasOwn(defaultsRecord, "prComment")) {
 		configDefaults.prComment = defaultsRecord.prComment as PrCommentMode;
+	}
+	if (Object.hasOwn(defaultsRecord, "consolidator")) {
+		configDefaults.consolidator = defaultsRecord.consolidator as string;
 	}
 
 	const config: Config = {

@@ -15,6 +15,7 @@ export const EXAMPLE_CONFIG = `{
   "defaults": {
     "seats":["terra","claude","glm"],
     "verifySeats":["claude"],
+    "consolidator":"claude",
     "lenses":["tests"],
     "seatBudgetMs":1200000
   }

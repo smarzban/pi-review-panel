@@ -372,6 +372,21 @@ export function seatMac(
 		.digest("hex");
 }
 
+/**
+ * The MAC of a review's `groups.json` bytes, bound to its run id. Its own
+ * domain tag keeps a groups MAC from ever matching a plan or seat MAC.
+ */
+export function groupsMac(
+	key: Buffer,
+	runId: string,
+	groupsBytes: string,
+): string {
+	return createHmac("sha256", key)
+		.update(`pi-review-panel/groups/v1\0${runId}\0`)
+		.update(groupsBytes)
+		.digest("hex");
+}
+
 /** True only when `given` is a well-formed MAC equal to `expected`. */
 export function macMatches(
 	expected: string,

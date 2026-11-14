@@ -4,6 +4,7 @@ import {
 	DEFAULT_SEAT_PROFILE,
 	type FindingsProfile,
 	type FindingsSeatProfile,
+	type GroupingProfile,
 	type SeatProfile,
 	type VerificationProfile,
 } from "./channel-profile.js";
@@ -355,4 +356,15 @@ export async function runAdvisorySeat(
 		spec as SeatSpec<SeatProfile>,
 		options,
 	)) as SeatRunResult<AuditProfile | VerificationProfile>;
+}
+
+/** Runs the grouping seat through the same SDK lifecycle. */
+export async function runGroupingSeat(
+	spec: SeatSpec<GroupingProfile>,
+	options: RunSeatOptions = {},
+): Promise<SeatRunResult<GroupingProfile>> {
+	return (await runSeatInternal(
+		spec as SeatSpec<SeatProfile>,
+		options,
+	)) as SeatRunResult<GroupingProfile>;
 }

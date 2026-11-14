@@ -395,7 +395,7 @@ Actions (the same as the review_panel tool's):
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]
   audit                        Advisory whole-repository sweep of HEAD: [--seats a,b] [--passes p,q] [--scoping-note <text>]
-  verify                       Check fixes against a prior run: --prior-run-id <run> --head <ref> --kept-finding-ids F-1,F-2 [--seats a,b] [--scoping-note <text>]
+  verify                       Check fixes against a prior run: --prior-run-id <run> --head <ref> --kept-finding-ids F-1,G-2 [--seats a,b] [--scoping-note <text>]
                                [--low-advisory F-3,F-4] [--dismissed <json> | --dismissed @<file> | --dismissed -]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]
   resume                       Run the unfinished seats of an interrupted run again: --prior-run-id <run>

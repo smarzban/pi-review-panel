@@ -39,7 +39,7 @@ import {
 	ROUND_DEADLINE_MS,
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
-import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import { signGroups, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 /**
  * Each review and verify round posts to the open PR whose head is the run's
@@ -712,6 +712,68 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 				"PR close-out: not posted (F-2 is still present; 1 regression)",
 			);
 			expect(posted).toHaveLength(1);
+		});
+	});
+
+	it("posts the member F-ids of the G-ids it was given: each dismissed member with the reason, each advisory member in its section (panel P-2)", async () => {
+		await withRepository(async (repo, head) => {
+			const rows: Row[] = [
+				{ id: "F-1", severity: "high" },
+				{ id: "F-2", severity: "medium" },
+				{ id: "F-3", severity: "medium" },
+				{ id: "F-4", severity: "low" },
+				{ id: "F-5", severity: "low" },
+			];
+			writeReviewRecord(repo, REVIEW_ID, rows);
+			const recordPath = path.join(repo, ".review-panel", "runs", REVIEW_ID);
+			writeFileSync(
+				path.join(recordPath, "groups.json"),
+				`${JSON.stringify({
+					version: 1,
+					runId: REVIEW_ID,
+					groups: [
+						{ id: "G-1", findingIds: ["F-1"] },
+						{ id: "G-2", findingIds: ["F-2", "F-3"] },
+						{ id: "G-3", findingIds: ["F-4", "F-5"] },
+					],
+				})}\n`,
+			);
+			signGroups(recordPath);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["G-1"],
+					dismissed: [{ id: "G-2", reason: "by design, see ADR 4" }],
+					lowAdvisory: ["G-3"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRun(repo, "v-1", REVIEW_ID, rows.slice(0, 1), [
+							{
+								id: "F-1",
+								disposition: "resolved",
+								evidence: { file: "src/a.ts", explanation: "fixed" },
+							},
+						]),
+					}),
+				},
+			);
+			const posted = posts(gh.calls);
+			expect(posted.length).toBeGreaterThanOrEqual(1);
+			const body = bodyOf(posted[0]);
+			expect(body.split("\n")[0]).toBe("## Review panel · verify 1");
+			expect(body).toMatch(/F-1 resolved\*\*/);
+			expect(body).toMatch(
+				/### Dismissed \(not fixed\)\n- \*\*F-2\*\* — F-2 title — by design, see ADR 4\n- \*\*F-3\*\* — F-3 title — by design, see ADR 4\n/,
+			);
+			expect(body).toMatch(
+				/### Low \/ advisory \(not kept\)\n- \*\*F-4\*\* — F-4 title\n- \*\*F-5\*\* — F-5 title\n/,
+			);
+			expect(body).not.toMatch(/\bG-\d/);
+			expect(textOf(result)).toContain("PR comment: posted to #12");
 		});
 	});
 
