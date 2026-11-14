@@ -1,4 +1,5 @@
 import type { Finding } from "../seat/schema.js";
+import { inertLine } from "./inert-text.js";
 import {
 	type ResumeFacts,
 	renderResumeSection,
@@ -71,11 +72,11 @@ function renderFindings(stamped: StampedFinding[]): string[] {
 				? `${entry.finding.file}:${entry.finding.line}`
 				: `${entry.finding.file}:${entry.finding.line}-${entry.finding.endLine}`;
 		lines.push(
-			`### ${entry.id} [${entry.finding.severity}] ${entry.finding.title}`,
+			`### ${entry.id} [${entry.finding.severity}] ${inertLine(entry.finding.title)}`,
 			"",
 			`- Seat: ${entry.seat.provider}/${entry.seat.model} (${entry.seat.lens})`,
-			`- Location: ${location}`,
-			`- Evidence: ${entry.finding.evidence}`,
+			`- Location: ${inertLine(location)}`,
+			`- Evidence: ${inertLine(entry.finding.evidence)}`,
 			"",
 		);
 	}
