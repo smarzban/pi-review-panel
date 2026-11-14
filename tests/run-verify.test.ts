@@ -118,7 +118,7 @@ describe("planVerifySeats", () => {
 	it("refuses more than two explicit verification seats", () => {
 		expect(() =>
 			planVerifySeats(multiSeatConfig, ["terra", "claude", "qwen"]),
-		).toThrow(/at most two/i);
+		).toThrow("Verify selects 3 seats; expected at most 2");
 	});
 });
 
@@ -315,6 +315,62 @@ describe("runVerify", () => {
 				expect(outcome.result.items[0]?.disposition).toBe("resolved");
 				expect(outcome.result.regressions).toHaveLength(1);
 			}
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("runs the seats named in defaults.verifySeats, not the first default seat", async () => {
+		const root = mkdtempSync(path.join(tmpdir(), "run-verify-"));
+		try {
+			const { repo, base, head } = makeRepo(root);
+			writePriorRun(repo, "run-1", { baseOid: base, headOid: base }, [finding]);
+			const ran: string[] = [];
+			const result = await runVerify(
+				{
+					repoDir: repo,
+					config: {
+						roster: [
+							...config.roster,
+							{ id: "claude", provider: "anthropic", model: "claude-opus-5" },
+						],
+						defaults: { seats: ["terra"], verifySeats: ["claude"] },
+					},
+					priorRunId: "run-1",
+					headRevision: head,
+					keptFindingIds: ["F-1"],
+				},
+				{
+					pinSnapshot: () => ({
+						worktreePath: repo,
+						release: () => ({ ok: true }),
+					}),
+					runAdvisorySeat: async (spec: unknown) => {
+						ran.push(JSON.stringify(spec));
+						return {
+							outcome: {
+								kind: "verification",
+								result: {
+									items: [
+										{
+											id: "F-1",
+											disposition: "resolved",
+											evidence: { file: "a.txt", explanation: "fixed" },
+										},
+									],
+									regressions: [],
+								},
+							},
+						} as never;
+					},
+				},
+			);
+			expect(result.outcomes.map((facts) => facts.seat.rosterId)).toEqual([
+				"claude",
+			]);
+			expect(ran).toHaveLength(1);
+			expect(ran[0]).toContain("claude-opus-5");
+			expect(ran[0]).not.toContain("gpt-5.6-terra");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

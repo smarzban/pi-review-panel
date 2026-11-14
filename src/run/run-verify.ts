@@ -112,7 +112,7 @@ export function planVerifySeats(
 	}
 	if (seats !== undefined && seats.length > MAX_VERIFY_SEATS) {
 		throw new Error(
-			`Verify selects ${seats.length} seats; expected at most two`,
+			`Verify selects ${seats.length} seats; expected at most ${MAX_VERIFY_SEATS}`,
 		);
 	}
 	const aliases =

@@ -184,14 +184,15 @@ function validateVerifySeats(
 				field: itemField,
 				message: "must not repeat an earlier roster id",
 			});
-		} else if (!rosterIds.has(item)) {
-			errors.push({
-				row: index,
-				field: itemField,
-				message: "must name a roster id",
-			});
 		} else {
 			seen.add(item);
+			if (!rosterIds.has(item)) {
+				errors.push({
+					row: index,
+					field: itemField,
+					message: "must name a roster id",
+				});
+			}
 		}
 	}
 }

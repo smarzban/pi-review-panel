@@ -57,6 +57,8 @@ describe("review skill required workflow", () => {
 			"Uncommitted",
 			"ownerApproved",
 			"close-out comment",
+			"Omit `seats`: verify then runs the owner's `defaults.verifySeats`",
+			"Pass `seats` (at most two) only when the owner names them",
 		]) {
 			expect(body, token).toContain(token);
 		}

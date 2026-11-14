@@ -437,6 +437,17 @@ const invalidCases: InvalidCase[] = [
 		errors: [{ row: 1, field: "defaults.verifySeats[1]" }],
 	},
 	{
+		name: "names a repeated unknown defaults.verifySeats id as a repeat",
+		document: {
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["ghost", "ghost"] },
+		},
+		errors: [
+			{ row: 0, field: "defaults.verifySeats[0]" },
+			{ row: 1, field: "defaults.verifySeats[1]" },
+		],
+	},
+	{
 		name: "rejects a defaults.verifySeats id that is not a roster id",
 		document: {
 			...validConfig(),
@@ -702,6 +713,20 @@ describe("validateConfig", () => {
 		expect(tooMany.ok).toBe(false);
 		if (!tooMany.ok) {
 			expect(tooMany.errors[0]?.message).toMatch(/1 to 2/);
+		}
+	});
+
+	it("calls a repeated unknown defaults.verifySeats id a repeat", () => {
+		const result = validateConfig({
+			...validConfig(),
+			defaults: { ...validConfig().defaults, verifySeats: ["ghost", "ghost"] },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.errors.map((error) => error.message)).toEqual([
+				expect.stringContaining("roster id"),
+				expect.stringContaining("must not repeat"),
+			]);
 		}
 	});
 
