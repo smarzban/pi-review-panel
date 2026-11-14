@@ -47,6 +47,11 @@ import {
 	type ReadinessReport,
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
+import {
+	isGroupId,
+	planConsolidator,
+	readSignedGroups,
+} from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
 import { loadPriorRun, resolvePriorRunId } from "../run/prior-run.js";
 import {
@@ -756,6 +761,65 @@ function readStampedFindings(recordPath: string): StampedFinding[] | undefined {
 	}
 }
 
+/** The ids a verify or comment call names, as F-ids only. */
+type JudgedIds = {
+	kept: string[];
+	dismissed: CloseoutJudgmentRow[];
+	lowAdvisory: string[];
+};
+
+/**
+ * Expands every G-id to its member F-ids, from the review's signed
+ * grouping. Calls with F-ids only are returned as they are, without
+ * reading the record key. A G-id needs `groups.json` with a valid
+ * `groups.mac` from the owner's record key that places every F-id of
+ * `findings.json` exactly once; otherwise G-ids are refused and the caller
+ * is asked for F-ids. A dismissed G-id gives its reason to each member.
+ */
+function expandGroupIds(
+	resolved: Resolved,
+	repoDir: string,
+	/** The review record; read only when a G-id is named. */
+	recordPathOf: () => string,
+	ids: JudgedIds,
+	refusal: string,
+): JudgedIds {
+	const named = [
+		...ids.kept,
+		...ids.dismissed.map((row) => row.id),
+		...ids.lowAdvisory,
+	];
+	if (!named.some(isGroupId)) {
+		return ids;
+	}
+	const recordPath = recordPathOf();
+	const key = ownerKey(resolved, repoDir, false, refusal);
+	const groups = readSignedGroups(recordPath, key);
+	if (groups === undefined) {
+		throw new Error(
+			`${refusal}: G-ids need the review's signed grouping (groups.json with a valid groups.mac from this owner's record key, grouping every finding once), and run "${path.basename(recordPath)}" has none; pass F-ids instead`,
+		);
+	}
+	const members = new Map(groups.map((group) => [group.id, group.findingIds]));
+	const expand = (id: string): string[] => {
+		if (!isGroupId(id)) {
+			return [id];
+		}
+		const found = members.get(id);
+		if (found === undefined) {
+			throw new Error(`${refusal}: ${id} is not a group in the review record`);
+		}
+		return found;
+	};
+	return {
+		kept: ids.kept.flatMap(expand),
+		dismissed: ids.dismissed.flatMap((row) =>
+			expand(row.id).map((id) => ({ ...row, id })),
+		),
+		lowAdvisory: ids.lowAdvisory.flatMap(expand),
+	};
+}
+
 export async function diagnoseAction(
 	input: RepositoryInput & DiagnoseInput,
 	context: ActionContext = {},
@@ -856,11 +920,24 @@ export async function verifyAction(
 	const { elapsed, emit } = progress(context);
 	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateVerifyInput(input);
-	const { priorRunId, head, keptFindingIds, seats, scopingNote } = valid;
-	const dismissed = valid.dismissed ?? [];
-	const lowAdvisory = valid.lowAdvisory ?? [];
+	const { priorRunId, head, seats, scopingNote } = valid;
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
+	// G-ids become F-ids here, before anything else reads them: verify
+	// itself checks F-ids only.
+	const judged = expandGroupIds(
+		resolved,
+		repoDir,
+		() => loadPriorRun(repoDir, priorRunId).recordPath,
+		{
+			kept: valid.keptFindingIds,
+			dismissed: valid.dismissed ?? [],
+			lowAdvisory: valid.lowAdvisory ?? [],
+		},
+		"Verify refused",
+	);
+	const keptFindingIds = judged.kept;
+	const { dismissed, lowAdvisory } = judged;
 	const headRevision = resolved.oidOf(repoDir, head);
 	const panel = planVerifySeats(config, seats);
 	// The reasons for findings not kept are checked against the review
@@ -954,8 +1031,15 @@ export async function commentAction(
 	const resolved = resolveDependencies(context.deps);
 	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateCommentInput(input);
-	const { priorRunId, dismissed, lowAdvisory } = valid;
+	const { priorRunId } = valid;
 	const facts = loadCloseoutRun(repoDir, priorRunId);
+	const { dismissed, lowAdvisory } = expandGroupIds(
+		resolved,
+		repoDir,
+		() => facts.run.recordPath,
+		{ kept: [], dismissed: valid.dismissed, lowAdvisory: valid.lowAdvisory },
+		"comment refused",
+	);
 	const accounted = accountCloseoutFindings({
 		findings: facts.run.findings,
 		dismissed,
@@ -1111,6 +1195,7 @@ export async function reviewAction(
 		...(lenses === undefined ? {} : { lenses }),
 	});
 
+	const consolidator = planConsolidator(config);
 	const reviewKey = ownerKey(resolved, repoDir, true, "Review refused");
 	const roster = compactPanelRoster(panel);
 	emit({
@@ -1137,6 +1222,7 @@ export async function reviewAction(
 			...(config.defaults.seatBudgetMs === undefined
 				? {}
 				: { seatBudgetMs: config.defaults.seatBudgetMs }),
+			...(consolidator === undefined ? {} : { consolidator }),
 		},
 		{
 			...(context.signal === undefined ? {} : { abortSignal: context.signal }),
