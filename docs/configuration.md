@@ -172,7 +172,8 @@ accept G-ids as well as F-ids. A G-id stands for all of its member F-ids, and a 
 gives its reason to each member. The G-ids are checked against `groups.json` before any seat runs:
 it must carry a valid `groups.mac` from the owner's record key and group exactly the F-ids in
 `findings.json`, or G-ids are refused and the message asks for F-ids. An id that names neither a
-finding nor a group is refused as before. Verify itself still checks F-ids, so the verify comment
+finding nor a group is refused as before, and so is a list that names one F-id twice, such as
+a G-id and one of its own members. Verify itself still checks F-ids, so the verify comment
 and the close-out card list F-ids.
 
 ## Interrupted runs and `resume`

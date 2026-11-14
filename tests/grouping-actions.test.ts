@@ -169,6 +169,8 @@ function writeReviewRecord(
 	return recordPath;
 }
 
+type VerifyArgs = Parameters<typeof verifyAction>[0];
+
 function verifyCapture(repo: string) {
 	const seen: RunVerifyInput[] = [];
 	return {
@@ -428,6 +430,48 @@ describe("verify takes G-ids as well as F-ids", () => {
 		});
 	});
 
+	it("refuses a G-id named with one of its own members, in one list or across lists, before any seat runs", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, "review-1");
+			const capture = verifyCapture(repo);
+			for (const [args, refusal] of [
+				[
+					{ keptFindingIds: ["G-1", "F-1"] },
+					/Verify refused: F-1 is named twice in keptFindingIds \(through G-1 and as F-1\); name it once/,
+				],
+				[
+					{
+						keptFindingIds: ["G-2"],
+						dismissed: [
+							{ id: "G-1", reason: "out of scope" },
+							{ id: "F-3", reason: "by design" },
+						],
+					},
+					/Verify refused: F-3 is named twice in dismissed \(through G-1 and as F-3\); name it once/,
+				],
+				[
+					{ keptFindingIds: ["G-1", "G-2"], lowAdvisory: ["F-2", "G-3"] },
+					/Verify refused: F-2 is named twice in lowAdvisory \(as F-2 and through G-3\); name it once/,
+				],
+				[
+					{
+						keptFindingIds: ["G-1"],
+						dismissed: [{ id: "F-1", reason: "by design" }],
+					},
+					/Verify refused: F-1 is listed more than once/,
+				],
+			] satisfies [Partial<VerifyArgs>, RegExp][]) {
+				await expect(
+					verifyAction(
+						{ repoDir: repo, priorRunId: "review-1", head: "HEAD", ...args },
+						{ deps: deps({ runVerify: capture.runVerify }) },
+					),
+				).rejects.toThrow(refusal);
+			}
+			expect(capture.seen).toHaveLength(0);
+		});
+	});
+
 	it("still refuses a high member listed as low/advisory through its group", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "review-1");
@@ -490,6 +534,33 @@ describe("comment takes G-ids as well as F-ids", () => {
 				expect(body).toContain(id);
 			}
 			expect(body).not.toContain("G-1");
+		});
+	});
+
+	it("refuses a G-id named with one of its own members before posting", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, "review-1");
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						ownerApproved: true,
+						priorRunId: "review-1",
+						dismissed: [
+							{ id: "G-1", reason: "out of scope" },
+							{ id: "F-1", reason: "by design" },
+							{ id: "G-2", reason: "by design" },
+						],
+						lowAdvisory: ["G-3"],
+						pr: 7,
+					},
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(
+				/comment refused: F-1 is named twice in dismissed \(through G-1 and as F-1\); name it once/,
+			);
+			expect(bodies).toHaveLength(0);
 		});
 	});
 

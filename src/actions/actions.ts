@@ -774,7 +774,9 @@ type JudgedIds = {
  * reading the record key. A G-id needs `groups.json` with a valid
  * `groups.mac` from the owner's record key that places every F-id of
  * `findings.json` exactly once; otherwise G-ids are refused and the caller
- * is asked for F-ids. A dismissed G-id gives its reason to each member.
+ * is asked for F-ids. A dismissed G-id gives its reason to each member. An
+ * F-id named in one list both by itself and through its group, or through
+ * two groups, is refused.
  */
 function expandGroupIds(
 	resolved: Resolved,
@@ -823,12 +825,41 @@ function expandGroupIds(
 		}
 		return found;
 	};
+	// An F-id named twice in one list, once through its group, is refused:
+	// the caller said it two ways and should say it once.
+	const once = <T>(
+		list: string,
+		rows: readonly T[],
+		idOf: (row: T) => string,
+		withId: (row: T, id: string) => T,
+	): T[] => {
+		const named = new Map<string, string>();
+		return rows.flatMap((row) => {
+			const id = idOf(row);
+			const how = isGroupId(id) ? `through ${id}` : `as ${id}`;
+			return expand(id).map((member) => {
+				const earlier = named.get(member);
+				if (earlier !== undefined) {
+					throw new Error(
+						`${refusal}: ${member} is named twice in ${list} (${earlier} and ${how}); name it once`,
+					);
+				}
+				named.set(member, how);
+				return withId(row, member);
+			});
+		});
+	};
+	const plain = (id: string) => id;
+	const same = (_row: string, id: string) => id;
 	return {
-		kept: ids.kept.flatMap(expand),
-		dismissed: ids.dismissed.flatMap((row) =>
-			expand(row.id).map((id) => ({ ...row, id })),
+		kept: once("keptFindingIds", ids.kept, plain, same),
+		dismissed: once(
+			"dismissed",
+			ids.dismissed,
+			(row) => row.id,
+			(row, id) => ({ ...row, id }),
 		),
-		lowAdvisory: ids.lowAdvisory.flatMap(expand),
+		lowAdvisory: once("lowAdvisory", ids.lowAdvisory, plain, same),
 	};
 }
 
