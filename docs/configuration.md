@@ -195,8 +195,9 @@ with a key only the owner holds:
   `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
   It never lives in the reviewed repository, and nothing secret is written to the record.
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
-- It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`) and a review's grouping
-  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id).
+- It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`), a review's grouping
+  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id), and every finished
+  review and verify record (`record.mac`, written just before `COMPLETE`).
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
   needs it. So is a key folder that other users can write, sticky bit or not: whoever can write the
@@ -213,14 +214,20 @@ with a key only the owner holds:
   run id. Each seat file gets `seats/<planned index>.mac`, an HMAC of its exact bytes bound to the run
   id, the plan's MAC and the seat's index. So a signed file cannot be edited, moved to another index,
   or copied in from another run.
-- Deleting the key makes every interrupted record unresumable; a new one is created by the next
-  review or audit. To keep resuming records across machines, copy the key with the config.
+- A finished review writes `record.mac`, an HMAC-SHA256 bound to the run id (the record's folder
+  name), the record kind and the plan's MAC, over the name and SHA-256 of the exact bytes of
+  `plan.json`, `panel.json`, `meta.json`, `findings.json` and `execution.json`. A finished verify
+  writes one over `panel.json`, `meta.json` and `verification.json`, with no plan. These are the
+  files `verify` and `comment` read; see [Verify and comment take only signed records](#verify-and-comment-take-only-signed-records).
+- Deleting the key makes every interrupted record unresumable and every finished record unusable by
+  `verify` and `comment`; a new one is created by the next review or audit. To keep using records
+  across machines, copy the key with the config.
 
 ### When the record key is refused
 
-Review, audit and resume refuse to start without a usable key, and `diagnose` reports the same
-cause as a `record key <path>` row. Resume also refuses when there is no key at all, since it never
-creates one. Each cause and its fix:
+Review, audit, resume, verify and comment refuse to start without a usable key, and `diagnose`
+reports the same cause as a `record key <path>` row. Resume, verify and comment also refuse when
+there is no key at all, since they never create one. Each cause and its fix:
 
 | `diagnose` or the refusal says | Fix |
 | --- | --- |
@@ -235,7 +242,8 @@ creates one. Each cause and its fix:
 | `is inside the reviewed repository` | Point `PI_REVIEW_PANEL_CONFIG` at a config outside the repository. |
 
 A new key cannot check records signed with the old one, so those interrupted runs can no longer be
-resumed. Start them again as new runs.
+resumed, and those finished reviews can no longer be verified or commented on. Start them again as
+new runs.
 
 ### Resuming
 
@@ -272,14 +280,13 @@ from `plan.json`. What resume trusts, and what it rebuilds:
   not written through. A symlinked `.review-panel`, `runs` or `seats` folder, or a folder where an
   output file belongs, is refused before any seat runs.
 
-The signatures cover what resume reads, and the grouping that G-ids are read from. `verify` and
-`comment` read a complete record without checking a signature, except when a call names a G-id:
-then they read the record key (never creating it) and check `groups.mac`, and refuse G-ids, asking
-for F-ids, when the key or the signature does not check out.
+The signatures cover what resume reads, what `verify` and `comment` read, and the grouping that
+G-ids are read from.
 
 Resume takes the run lock before it re-reads the record, pins the recorded head commit, runs only
-the planned seats with no settled outcome, then writes `execution.json`, `report.md`,
-`findings.json`, `meta.json`, and `COMPLETE` as a first run would. With a `consolidator` set, the
+the planned seats with no settled outcome, then writes `panel.json` (from the signed plan),
+`execution.json`, `report.md`, `findings.json`, `meta.json`, `record.mac` and `COMPLETE` as a first
+run would, so a resumed review can be verified. With a `consolidator` set, the
 grouping step runs again at the end over the finished list, so `groups.json` always matches the
 final F-ids. The report has a "Resumed run"
 section naming the seats kept, the seats run again and the seats lost, and `execution.json` lists
@@ -300,6 +307,34 @@ moment, and stays that way if the process is killed in that moment (a failed wri
 removes it). A `run.lock` that names no pid is therefore one another process is still writing, or
 one a crashed process left unfinished: it is refused, never taken over, and the message says to
 delete it when no review_panel run is active.
+
+### Verify and comment take only signed records
+
+`verify` and `comment` read a finished review record (and `comment` a finished verify record) from
+the reviewed repository, where anyone who can get a file into the checkout could plant one marked
+`COMPLETE`. So they take a record as the owner's own only when it is signed with the owner's record
+key:
+
+- They read the record key, and never create it. No key, or a key that is refused for any reason
+  above, refuses the call with the key's cause and fix.
+- A review record needs a `plan.json` of kind `review` with a valid `plan.mac`, and a `record.mac`
+  that matches the exact bytes of its `plan.json`, `panel.json`, `meta.json`, `findings.json` and
+  `execution.json`, bound to its own run id. A verify record named by `comment`'s `verifyRunId`
+  needs a `record.mac` over its `panel.json`, `meta.json` and `verification.json`. Each file is
+  read once, and only those signed bytes are used.
+- Anything else is refused: an unsigned record, one signed with another key, a signed record copied
+  to another run id, or a signed file copied in from another run. The refusal says the record is not
+  signed by this owner's record key and to run a new review. Verify refuses before any seat runs,
+  and comment before anything is posted.
+- Records written before records were signed have no `record.mac`, and cannot be told apart from
+  planted ones, so they are refused too: run a new review.
+
+When a call names a G-id, the review's `groups.mac` is checked as well, and G-ids are refused,
+asking for F-ids, when it does not check out.
+
+Two readers of the record are not covered: a review's persistence flags (which earlier findings
+look repeated) and the verify round number in a PR comment still count unsigned earlier records.
+Neither decides what verify checks or what `comment` posts as fixed.
 
 ## Posting rounds to the pull request
 

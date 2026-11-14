@@ -138,7 +138,9 @@ review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
-carry your reasons. An unknown id refuses the verify before any seat runs.
+carry your reasons. An unknown id refuses the verify before any seat runs. Verify and
+`comment` take only a record signed with the owner's record key; a record written before
+records were signed, or one planted in the repository, is refused: run a new review.
 
 Do not start a new full discovery review on the same change.
 

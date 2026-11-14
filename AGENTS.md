@@ -25,8 +25,13 @@ rows and package-owned lens prompts by name; the calling agent chooses only amon
 Runs record under `<repo>/.review-panel/runs/`, each seat as it settles. `resume` finishes an
 interrupted review or audit record, running only its unsettled seats at the recorded head. Review
 and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
-the repository); resume refuses an unsigned plan and re-runs an unsigned seat. Verify reads
-those trees and writes only its posting claims and markers into the review's record
+the repository); resume refuses an unsigned plan and re-runs an unsigned seat. A finished review
+(first run or resume) and a finished verify also write `record.mac` just before `COMPLETE`: an
+HMAC bound to the run id (the folder name), the kind and the plan's MAC, over the exact bytes of
+the files verify and comment read. Verify and comment take a record only when that MAC and (for a
+review) `plan.mac` check out with the owner's key, which they never create; an unsigned, foreign,
+copied or pre-signing record is refused with "run a new review", before any seat runs or post.
+Verify reads those trees and writes only its posting claims and markers into the review's record
 (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
