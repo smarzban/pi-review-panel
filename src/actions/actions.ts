@@ -793,7 +793,19 @@ function expandGroupIds(
 		return ids;
 	}
 	const recordPath = recordPathOf();
-	const key = ownerKey(resolved, repoDir, false, refusal);
+	let key: Buffer;
+	try {
+		key = resolved.keyOf({
+			repoDir,
+			env: resolved.env,
+			home: resolved.home,
+			create: false,
+		});
+	} catch (error) {
+		throw new Error(
+			`${refusal}: G-ids need the review's signed grouping, and the record key cannot be read: ${error instanceof Error ? error.message : String(error)}; pass F-ids instead`,
+		);
+	}
 	const groups = readSignedGroups(recordPath, key);
 	if (groups === undefined) {
 		throw new Error(

@@ -209,6 +209,16 @@ describe("the grouped review reply", () => {
 		expect(text).not.toMatch(AGREEMENT);
 	});
 
+	it("counts the grouping seat's time and cost in the summary", () => {
+		const grouping: GroupingFacts = {
+			...GROUPED,
+			lifecycle: { ...LIFECYCLE, settledAtMs: 9_000, cost: 0.5 },
+		};
+		expect(reply(grouping)).toContain(
+			"2/2 voted · 4 findings in 3 groups · 8.0s · $0.5200",
+		);
+	});
+
 	it("keeps every finding's id, severity and evidence (T495)", () => {
 		const text = reply(GROUPED);
 		for (const row of FINDINGS) {

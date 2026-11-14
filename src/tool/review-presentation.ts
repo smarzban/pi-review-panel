@@ -325,7 +325,11 @@ function formatCost(cost: number): string {
 	return `$${cost.toFixed(4)}`;
 }
 
-function rollupLifecycle(outcomes: RunReviewResult["outcomes"]):
+function rollupLifecycle(
+	outcomes: ReadonlyArray<
+		Pick<RunReviewResult["outcomes"][number], "lifecycle">
+	>,
+):
 	| {
 			durationMs: number;
 			cost: number;
@@ -515,7 +519,11 @@ export function reviewHeadLines(
 				: ` in ${groups.length} group${groups.length === 1 ? "" : "s"}`
 		}`,
 	];
-	const totals = rollupLifecycle(input.result.outcomes);
+	// The grouping seat's time and cost count too; it is never a vote.
+	const totals = rollupLifecycle([
+		...input.result.outcomes,
+		...(input.result.grouping === undefined ? [] : [input.result.grouping]),
+	]);
 	if (totals !== undefined) {
 		summary.push(formatDuration(totals.durationMs), formatCost(totals.cost));
 	}

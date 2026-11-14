@@ -158,7 +158,8 @@ line names the grouping seat (`grouping (claude)`). `findings.json` stays the fl
 The groups go in `groups.json` beside it: `version`, `runId`, the grouping seat (`rosterId`,
 `provider`, `model`) and `groups`, each `{ "id": "G-1", "findingIds": ["F-1", "F-3"] }`. A review
 signed with the record key also writes `groups.mac`, the MAC of the exact `groups.json` bytes.
-`execution.json` records the grouping seat's timing and outcome under `grouping`.
+`execution.json` records the grouping seat's timing and outcome under `grouping`, and the reply's
+time and cost include it.
 
 If the grouping seat fails, times out, runs out of budget or never submits a valid grouping, the
 review keeps the flat list and adds one line, `Lost: grouping (<roster id>, <failure class>)`. No
@@ -191,6 +192,8 @@ with a key only the owner holds:
   `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
   It never lives in the reviewed repository, and nothing secret is written to the record.
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
+- It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`) and a review's grouping
+  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id).
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
   needs it. So is a key folder that other users can write, sticky bit or not: whoever can write the
@@ -266,8 +269,10 @@ from `plan.json`. What resume trusts, and what it rebuilds:
   not written through. A symlinked `.review-panel`, `runs` or `seats` folder, or a folder where an
   output file belongs, is refused before any seat runs.
 
-The signatures cover what resume reads. `verify` and `comment` still read a complete record
-without checking a signature.
+The signatures cover what resume reads, and the grouping that G-ids are read from. `verify` and
+`comment` read a complete record without checking a signature, except when a call names a G-id:
+then they read the record key (never creating it) and check `groups.mac`, and refuse G-ids, asking
+for F-ids, when the key or the signature does not check out.
 
 Resume takes the run lock before it re-reads the record, pins the recorded head commit, runs only
 the planned seats with no settled outcome, then writes `execution.json`, `report.md`,

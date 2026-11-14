@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -396,9 +397,7 @@ describe("the grouping step", () => {
 		const error = await settled;
 		expect(error).toBeInstanceOf(RunReviewError);
 		const runs = path.join(repo, ".review-panel", "runs");
-		const [runId] = execFileSync("ls", [runs], { encoding: "utf8" })
-			.trim()
-			.split("\n");
+		const [runId] = readdirSync(runs);
 		expect(existsSync(path.join(runs, runId ?? "", COMPLETE_MARKER))).toBe(
 			false,
 		);

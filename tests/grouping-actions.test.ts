@@ -371,6 +371,42 @@ describe("verify takes G-ids as well as F-ids", () => {
 		});
 	});
 
+	it("asks for F-ids when the record key cannot be read, for verify and comment", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, "review-1");
+			const capture = verifyCapture(repo);
+			const noKey = () => {
+				throw new Error("there is no record key at /k");
+			};
+			await expect(
+				verifyAction(
+					{
+						repoDir: repo,
+						priorRunId: "review-1",
+						head: "HEAD",
+						keptFindingIds: ["G-1"],
+					},
+					{ deps: deps({ runVerify: capture.runVerify, recordKey: noKey }) },
+				),
+			).rejects.toThrow(
+				/Verify refused: G-ids need .*record key cannot be read: there is no record key at \/k.*pass F-ids instead/,
+			);
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						ownerApproved: true,
+						priorRunId: "review-1",
+						dismissed: [{ id: "G-1", reason: "x" }],
+						lowAdvisory: [],
+					},
+					{ deps: deps({ recordKey: noKey }) },
+				),
+			).rejects.toThrow(/comment refused: G-ids need .*pass F-ids instead/);
+			expect(capture.seen).toHaveLength(0);
+		});
+	});
+
 	it("refuses signed groups that do not place every F-id exactly once", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "partial", {
