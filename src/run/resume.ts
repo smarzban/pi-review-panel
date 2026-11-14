@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import path from "node:path";
 

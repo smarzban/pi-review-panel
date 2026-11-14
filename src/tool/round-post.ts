@@ -871,7 +871,6 @@ type CloseoutCard = {
 
 /** The close-out card for this review, or why it cannot be built. */
 function buildCloseout(
-	ctx: RoundContext,
 	facts: VerifyRoundFacts,
 ): CloseoutCard | { reason: string } {
 	const { result } = facts;
@@ -1093,7 +1092,7 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", blocker));
 		return lines;
 	}
-	const card = buildCloseout(ctx, facts);
+	const card = buildCloseout(facts);
 	if ("reason" in card) {
 		lines.push(notPosted("PR close-out", card.reason));
 		return lines;
