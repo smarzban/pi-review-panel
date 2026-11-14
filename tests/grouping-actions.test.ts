@@ -191,20 +191,65 @@ describe("review passes the owner's grouping seat to the run", () => {
 	it("plans defaults.consolidator as the grouping seat, and none without it (T495)", async () => {
 		await withRepository(async (repo) => {
 			const seen: RunConfig[] = [];
+			// A record with four findings, as the run leaves it.
+			const recordPath = writeReviewRecord(repo, "r", { groups: null });
 			const runReview = async (input: RunConfig) => {
 				seen.push(input);
-				const recordPath = path.join(repo, ".review-panel", "runs", "r");
-				return { recordPath, outcomes: [] };
+				return {
+					recordPath,
+					outcomes: [],
+					...(input.consolidator === undefined
+						? {}
+						: {
+								grouping: {
+									seat: input.consolidator,
+									lifecycle: {
+										startedAtMs: 0,
+										settledAtMs: 1,
+										durationMs: 1,
+										attempts: 1 as const,
+										aborted: false,
+										tokens: {
+											input: 0,
+											output: 0,
+											cacheRead: 0,
+											cacheWrite: 0,
+											total: 0,
+										},
+										cost: 0,
+									},
+									outcome: {
+										kind: "grouped" as const,
+										groups: [
+											{ id: "G-1", findingIds: ["F-1", "F-3"] },
+											{ id: "G-2", findingIds: ["F-4"] },
+											{ id: "G-3", findingIds: ["F-2"] },
+										],
+									},
+								},
+							}),
+				};
 			};
+			const replies: string[] = [];
 			for (const loadConfig of [
 				() => CONFIG,
 				() => ({ ...CONFIG, defaults: { seats: ["terra"] } }),
 			]) {
-				await reviewAction(
-					{ repoDir: repo, base: "HEAD~1", head: "HEAD" },
-					{ deps: deps({ loadConfig, runReview, suggestLenses: () => [] }) },
+				replies.push(
+					textOf(
+						await reviewAction(
+							{ repoDir: repo, base: "HEAD~1", head: "HEAD" },
+							{
+								deps: deps({ loadConfig, runReview, suggestLenses: () => [] }),
+							},
+						),
+					),
 				);
 			}
+			expect(replies[0]).toContain("4 findings in 3 groups");
+			expect(replies[0]).toContain("grouping (claude)");
+			expect(replies[0]).toContain("- G-1 [high, stated by a seat] F-1 title");
+			expect(replies[1]).not.toContain("G-1");
 			expect(seen[0]?.consolidator).toEqual({
 				rosterId: "claude",
 				provider: "anthropic",

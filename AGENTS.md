@@ -31,6 +31,12 @@ those trees and writes only its posting claims and markers into the review's rec
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
 review-derived semantic stop signal: agents judge, and the human is the merge gate.
+One step may group findings: the grouping seat the owner names in config (`defaults.consolidator`)
+reads the submitted findings and puts findings that describe the same defect in one group (`G-1`,
+...). Grouping never drops, rewrites or re-rates a finding: each group keeps every member id, its
+seat attribution, stated severity and evidence, and shows the highest severity a seat stated. Group
+size is never shown as agreement or used to rank. A failed or invalid grouping leaves the ungrouped
+list and is named as lost grouping.
 
 Install as a Pi package with `pi install npm:pi-review-panel` (not `npm install`). Omit
 `repository`, or pass `/`, when this process is already in the repo; an explicit real
@@ -62,6 +68,19 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 ### Review invariants
 
 - Repair implementation is orchestrator-owned. The package selects and launches no fixer.
+- Grouping (`src/run/grouping.ts`) only groups. With `defaults.consolidator` set and two or more
+  findings, one grouping seat runs after every reviewer settles, on the same snapshot with the
+  read-only tools and `submit_groups`, which refuses any submission that does not place every F-id
+  in exactly one group. It never drops, rewrites or re-rates a finding: `groups.json` holds ids
+  only, every member keeps its F-id, seat, stated severity and evidence, and a group shows the
+  highest severity a seat stated. Groups are numbered `G-1`, … by that severity, then the lowest
+  member F-id; size never ranks and is never shown as agreement. A failed, invalid or timed-out
+  grouping keeps the flat list and adds `Lost: grouping (<roster id>, <class>)`. The grouping seat
+  is not a reviewer: it is never in `outcomes`, a vote count or lost reviewer coverage. G-ids in
+  `keptFindingIds`, `dismissed` and `lowAdvisory` expand to F-ids before any seat runs, only from a
+  `groups.json` with a valid `groups.mac` that groups every F-id once; verify itself sees F-ids.
+  Resume always runs the grouping step again, and a run removes any earlier `groups.json` first.
+  Audit never groups.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR by default, always as a new comment that is

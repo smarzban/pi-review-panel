@@ -162,6 +162,14 @@ describe("review skill extra-lens triggers", () => {
 		expect(body).toContain('`{"action":"audit","passes":["tests"]}`');
 	});
 
+	it("judges grouped findings group by group and verifies with G-ids or F-ids (T495)", () => {
+		const body = splitFrontmatter(readSkill()).body;
+		expect(body).toContain("Findings may arrive grouped");
+		expect(body).toContain("Judge each group");
+		expect(body).toContain("G-ids or F-ids");
+		expect(body).toContain("not agreement");
+	});
+
 	it("keeps contracts to OpenAPI, proto, or GraphQL, not app config", () => {
 		const body = splitFrontmatter(readSkill()).body;
 		expect(body).toContain("`contracts`: OpenAPI, proto, or GraphQL files");
