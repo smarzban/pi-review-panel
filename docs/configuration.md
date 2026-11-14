@@ -159,7 +159,8 @@ members that fit, then a line counting the members left out (all of them are in 
 the groups after it still post when they fit. `findings.json` stays the flat stamped list.
 The groups go in `groups.json` beside it: `version`, `runId`, the grouping seat (`rosterId`,
 `provider`, `model`) and `groups`, each `{ "id": "G-1", "findingIds": ["F-1", "F-3"] }`. A review
-signed with the record key also writes `groups.mac`, the MAC of the exact `groups.json` bytes.
+signed with the record key also writes `groups.mac`, the MAC of the exact `groups.json` bytes, bound to
+the run id, the plan's MAC and the SHA-256 of the exact `findings.json` bytes it grouped.
 `execution.json` records the grouping seat's timing and outcome under `grouping`, and the reply's
 time and cost include it.
 
@@ -196,7 +197,9 @@ with a key only the owner holds:
   It never lives in the reviewed repository, and nothing secret is written to the record.
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
 - It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`), a review's grouping
-  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id), and every finished
+  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id, the plan's MAC and the
+  `findings.json` bytes it grouped, so a grouping made before a resume regrouped cannot be put
+  back), and every finished
   review and verify record (`record.mac`, written just before `COMPLETE`).
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
@@ -328,7 +331,8 @@ key:
   needs a `record.mac` over its `panel.json`, `meta.json` and `verification.json`. Each file is
   read once, and only those signed bytes are used: verify builds the automatic close-out card from
   the review it checked before any seat ran, and checks G-ids against those signed findings, so a
-  file changed while the seats run changes nothing posted.
+  file changed while the seats run changes nothing posted. Review and resume reply and post the
+  findings the run itself stamped, never `findings.json` read back after the record was sealed.
 - The key is per owner, not per repository, so a review record's `meta.json` must also name a base
   and a head commit this repository holds; a signed record copied in from another repository is
   refused with "not a commit in this repository". A record from another clone of the same

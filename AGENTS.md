@@ -34,6 +34,8 @@ review) `plan.mac` check out with the owner's key, which they never create, the 
 `runs` folders are not symlinks, and the review's base and head are commits in this repository;
 an unsigned, foreign, copied or pre-signing record is refused with "run a new review", before any
 seat runs or post. They use only the bytes they authenticated (the close-out card and G-ids too).
+Review and resume reply and post the findings the run stamped, never `findings.json` read back.
+`groups.mac` binds the run id, the plan's MAC and the exact `findings.json` bytes it grouped.
 Verify reads those trees and writes only its posting claims and markers into the review's record
 (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
