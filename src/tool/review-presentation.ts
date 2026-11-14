@@ -1,4 +1,5 @@
 import type { ReadinessReport } from "../config/readiness.js";
+import { inert, inertLine } from "../run/inert-text.js";
 import { inlineCode, renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type {
@@ -220,19 +221,7 @@ export function renderReadiness(
 	].join("\n");
 }
 
-/**
- * Text that reaches a terminal or a model with no control character, no
- * invisible format character (bidi controls, zero-width characters, U+FEFF,
- * Unicode tag characters), no other default-ignorable character (variation
- * selectors, Hangul fillers, the combining grapheme joiner) and no line or
- * paragraph separator: each shows as U+FFFD.
- */
-export function inert(text: string): string {
-	return text.replace(
-		/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
-		"\uFFFD",
-	);
-}
+export { inert, inertLine };
 
 /** The one line that says no rule ran because the diff could not be read. */
 export function formatSuggestionsUnavailable(
@@ -399,11 +388,11 @@ export function renderReviewResult(input: {
 	} else {
 		for (const entry of orderFindings(findings)) {
 			lines.push(
-				`- ${entry.id} [${entry.finding.severity}] ${entry.finding.title} (${entry.finding.file}:${entry.finding.line}) — ${findingAttribution(entry, input.panel)}`,
+				`- ${entry.id} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, input.panel)}`,
 			);
-			const evidence = entry.finding.evidence.trim();
+			const evidence = inertLine(entry.finding.evidence.trim());
 			if (evidence.length > 0) {
-				lines.push(`  ${truncateUtf8(evidence, EVIDENCE_CHARS)}`);
+				lines.push(`  ${truncateCodePoints(evidence, EVIDENCE_CHARS)}`);
 			}
 		}
 	}
@@ -497,7 +486,9 @@ export function renderAuditResult(input: {
 		facts.outcome.kind === "voted" ? facts.outcome.findings : [],
 	);
 	const areas = [
-		...new Set(findings.map((finding) => finding.file.split("/")[0] ?? ".")),
+		...new Set(
+			findings.map((finding) => inertLine(finding.file.split("/")[0] ?? ".")),
+		),
 	].sort();
 	const lines = [
 		"# Repository audit",
@@ -519,7 +510,7 @@ export function renderAuditResult(input: {
 	lines.push(`Record: \`${input.recordPath}\``, "");
 	for (const finding of findings) {
 		lines.push(
-			`- [${finding.severity}] ${finding.title} (${finding.file}:${finding.line})`,
+			`- [${finding.severity}] ${inertLine(finding.title)} (${inertLine(finding.file)}:${finding.line})`,
 		);
 	}
 	if (findings.length === 0) {
@@ -628,11 +619,11 @@ export function renderVerifyResult(
 		lines.push("");
 		for (const regression of regressions) {
 			lines.push(
-				`- regression ${regression.id}: ${regression.title} (${regression.file}:${regression.line})`,
+				`- regression ${inertLine(regression.id)}: ${inertLine(regression.title)} (${inertLine(regression.file)}:${regression.line})`,
 			);
-			const evidence = regression.evidence.trim();
+			const evidence = inertLine(regression.evidence.trim());
 			if (evidence.length > 0) {
-				lines.push(`  ${truncateUtf8(evidence, EVIDENCE_CHARS)}`);
+				lines.push(`  ${truncateCodePoints(evidence, EVIDENCE_CHARS)}`);
 			}
 		}
 	}

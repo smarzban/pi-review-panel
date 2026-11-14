@@ -1,5 +1,6 @@
 import type { SeatIdentity } from "../seat/classify.js";
 import type { Finding } from "../seat/schema.js";
+import { inertLine } from "./inert-text.js";
 import type { PlannedSeat, SeatOutcomeFacts, StampedFinding } from "./types.js";
 
 /** Identifies this run in the report header. */
@@ -256,16 +257,16 @@ function renderFinding(
 	priorReason: string | undefined,
 ): string[] {
 	const lines = [
-		`### ${entry.id} [${entry.finding.severity}] ${entry.finding.title}`,
+		`### ${entry.id} [${entry.finding.severity}] ${inertLine(entry.finding.title)}`,
 		"",
 		`- Seat: ${seatLabel(entry.seat)}`,
-		`- Location: ${location(entry.finding)}`,
-		`- Evidence: ${entry.finding.evidence}`,
+		`- Location: ${inertLine(location(entry.finding))}`,
+		`- Evidence: ${inertLine(entry.finding.evidence)}`,
 	];
 	if (priorReason !== undefined) {
 		lines.push(
 			"- Flag: co-locates with a finding discarded in a prior run.",
-			`- Prior discard reason: ${priorReason}`,
+			`- Prior discard reason: ${inertLine(priorReason)}`,
 		);
 	}
 	return lines;
