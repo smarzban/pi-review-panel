@@ -269,8 +269,9 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   - A stale claim, left by a verify that crashed, is never taken over, renamed or removed. It
     stays where it is and the verify tries N+1. A claim is stale when it is older than the round
     deadline plus 5 s (65 s), or when it was made on this host and its process is gone. A claim
-    from another host (a shared or synced folder, a container and its host) is judged by age
-    alone. A claim with unreadable content is judged by its age on disk.
+    from another host (a shared network folder, a container and its host) is judged by age
+    alone. A folder synced by Dropbox, iCloud or Syncthing is not supported: an exclusive create
+    does not exclude anything across a sync. A claim with unreadable content is judged by its age on disk.
   - Mutual exclusion comes only from the exclusive create, so two verifies never hold the same
     number at once. A crash can leave a gap in the numbering (`verify 3` after `verify 1`), never a
     duplicate. One case is set aside: when `gh` reports a POST as failed (it timed out or was
@@ -289,7 +290,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card's `Lost:` line
   names the review's lost seats; it never names a verify seat, because a lost verify seat stops
   the automatic card.
-- The close-out posts at most once per review, by these rules:
+- The close-out posts at most once per review, by these rules and with the exceptions below:
   - A `closeout.posted` in the review's run record means it is posted. The verify does not ask the
     PR, and the reply says `PR close-out: not posted (this review's close-out is already posted)`.
   - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
@@ -311,6 +312,10 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   - One case is set aside: a verify that crashes after GitHub accepted the card but before it
     wrote `closeout.posted`. The PR-comment check catches it, so the next verify finds the card
     and posts no second one.
+  - Another is set aside: a verify that is still posting but whose claim looks stale to another
+    verify can lead to a second card. That happens when it pauses for over 65 s mid-post, when
+    its machine's clock runs over 65 s behind the other's, or when it runs in a container that
+    shares the host's hostname in its own process namespace.
 - When the card cannot be built (for example a high or medium finding that was neither kept nor
   dismissed with a reason), the reply says why.
 - An explicit `pr` must be an open pull request whose head is the run's head. Otherwise nothing is

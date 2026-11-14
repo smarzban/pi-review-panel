@@ -87,8 +87,10 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
   to the PR's comments, then to the next generation; only a generation's creator posts, and a
   posted card writes `closeout.posted` (`wx`), which stops every later verify. The close-out posts
-  at most once per review, except after a crash between GitHub accepting the card and
-  `closeout.posted` being written; the PR-comment check catches that case.
+  at most once per review, with two exceptions set aside: a crash between GitHub accepting the
+  card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
+  whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a
+  container sharing this hostname), which can post a second card.
 - Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
 - `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
