@@ -21,6 +21,8 @@ export type PriorRun = {
 	recordPath: string;
 	meta: PriorRunMeta;
 	findings: StampedFinding[];
+	/** The exact signed bytes of the record's `findings.json`. */
+	findingsText: string;
 	/** The exact signed bytes of the record's `panel.json`. */
 	panelText: string;
 	/** The exact signed bytes of the record's `execution.json`. */
@@ -159,6 +161,7 @@ export function loadPriorRun(
 		recordPath,
 		meta,
 		findings: findings as StampedFinding[],
+		findingsText: signed.get("findings.json") as string,
 		panelText: signed.get(PANEL_FILE) as string,
 		executionText: signed.get(EXECUTION_FILE) as string,
 	};

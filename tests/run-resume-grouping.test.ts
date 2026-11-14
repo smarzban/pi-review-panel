@@ -97,9 +97,11 @@ describe("resume and the grouping step", () => {
 		expect(kinds).toEqual([undefined, "grouping"]);
 		expect((result as RunReviewResult).grouping?.outcome.kind).toBe("grouped");
 		expect(
-			readSignedGroups(result.recordPath, TEST_RECORD_KEY)?.flatMap(
-				(group) => group.findingIds,
-			),
+			readSignedGroups(
+				result.recordPath,
+				TEST_RECORD_KEY,
+				readFileSync(path.join(result.recordPath, "findings.json"), "utf8"),
+			)?.flatMap((group) => group.findingIds),
 		).toEqual(["F-1", "F-2"]);
 		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
 			true,
@@ -221,7 +223,13 @@ describe("resume and the grouping step", () => {
 		});
 		expect(existsSync(path.join(recordPath, GROUPS_FILE))).toBe(false);
 		expect(existsSync(path.join(recordPath, GROUPS_MAC_FILE))).toBe(false);
-		expect(readSignedGroups(recordPath, TEST_RECORD_KEY)).toBeUndefined();
+		expect(
+			readSignedGroups(
+				recordPath,
+				TEST_RECORD_KEY,
+				readFileSync(path.join(recordPath, "findings.json"), "utf8"),
+			),
+		).toBeUndefined();
 		const report = readFileSync(path.join(recordPath, "report.md"), "utf8");
 		expect(report).toContain(
 			"Lost: grouping (opus, provider-error). The list below is not grouped.",

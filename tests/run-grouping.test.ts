@@ -271,11 +271,27 @@ describe("the grouping step", () => {
 		expect(
 			readFileSync(path.join(result.recordPath, GROUPS_MAC_FILE), "utf8"),
 		).toBe(testGroupsMac(runId, bytes));
+		const findingsText = readFileSync(
+			path.join(result.recordPath, "findings.json"),
+			"utf8",
+		);
 		expect(
-			readSignedGroups(result.recordPath, TEST_RECORD_KEY)?.map(
+			readSignedGroups(result.recordPath, TEST_RECORD_KEY, findingsText)?.map(
 				(group) => group.id,
 			),
 		).toEqual(["G-1", "G-2", "G-3"]);
+		// The groups are checked against the signed findings bytes the caller
+		// passes, never findings.json read again from disk (review R-2).
+		writeFileSync(path.join(result.recordPath, "findings.json"), "[]");
+		expect(
+			readSignedGroups(result.recordPath, TEST_RECORD_KEY, findingsText)?.map(
+				(group) => group.id,
+			),
+		).toEqual(["G-1", "G-2", "G-3"]);
+		expect(
+			readSignedGroups(result.recordPath, TEST_RECORD_KEY, "[]"),
+		).toBeUndefined();
+		writeFileSync(path.join(result.recordPath, "findings.json"), findingsText);
 
 		// findings.json stays the flat stamped list, untouched.
 		const findings = JSON.parse(

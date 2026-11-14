@@ -346,13 +346,16 @@ export function removeGroups(recordPath: string): void {
 /**
  * The record's grouping, only when `groups.mac` is the owner's MAC of the
  * exact `groups.json` bytes for this run, and the groups place every F-id of
- * `findings.json` in exactly one group. Anything else is undefined: the
+ * `findingsText` in exactly one group. `findingsText` is the record's
+ * `findings.json` bytes as the caller already authenticated them; the file
+ * is never read again here. Anything else is undefined: the
  * record lives in the reviewed repository, so an unsigned or forged grouping
  * is never taken as the owner's.
  */
 export function readSignedGroups(
 	recordPath: string,
 	key: Buffer,
+	findingsText: string,
 ): FindingGroup[] | undefined {
 	const runId = path.basename(recordPath);
 	const bytes = readRegularFile(path.join(recordPath, GROUPS_FILE));
@@ -365,10 +368,6 @@ export function readSignedGroups(
 			readRegularFile(path.join(recordPath, GROUPS_MAC_FILE)),
 		)
 	) {
-		return undefined;
-	}
-	const findingsText = readRegularFile(path.join(recordPath, "findings.json"));
-	if (findingsText === undefined) {
 		return undefined;
 	}
 	try {

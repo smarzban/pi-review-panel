@@ -53,7 +53,11 @@ import {
 	readSignedGroups,
 } from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
-import { loadPriorRun, resolvePriorRunId } from "../run/prior-run.js";
+import {
+	loadPriorRun,
+	type PriorRun,
+	resolvePriorRunId,
+} from "../run/prior-run.js";
 import {
 	checkRecordKey,
 	loadRecordKey,
@@ -778,8 +782,8 @@ type JudgedIds = {
  * through its group, or through two groups, is refused.
  */
 function expandGroupIds(
-	/** The review record, already checked as signed by `key`. */
-	recordPath: string,
+	/** The review record, already loaded and checked as signed by `key`. */
+	review: PriorRun,
 	key: Buffer,
 	ids: JudgedIds,
 	refusal: string,
@@ -792,7 +796,8 @@ function expandGroupIds(
 	if (!named.some(isGroupId)) {
 		return ids;
 	}
-	const groups = readSignedGroups(recordPath, key);
+	const recordPath = review.recordPath;
+	const groups = readSignedGroups(recordPath, key, review.findingsText);
 	if (groups === undefined) {
 		throw new Error(
 			`${refusal}: G-ids need the review's signed grouping (groups.json with a valid groups.mac from this owner's record key, grouping every finding once), and run "${path.basename(recordPath)}" has none; pass F-ids instead`,
@@ -958,7 +963,7 @@ export async function verifyAction(
 	// G-ids become F-ids here, before anything else reads them: verify
 	// itself checks F-ids only.
 	const judged = expandGroupIds(
-		prior.recordPath,
+		prior,
 		verifyKey,
 		{
 			kept: valid.keptFindingIds,
@@ -1070,7 +1075,7 @@ export async function commentAction(
 	const commentKey = ownerKey(resolved, repoDir, false, "comment refused");
 	const facts = loadCloseoutRun(repoDir, priorRunId, commentKey);
 	const { dismissed, lowAdvisory } = expandGroupIds(
-		facts.run.recordPath,
+		facts.run,
 		commentKey,
 		{ kept: [], dismissed: valid.dismissed, lowAdvisory: valid.lowAdvisory },
 		"comment refused",
