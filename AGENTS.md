@@ -27,10 +27,13 @@ interrupted review or audit record, running only its unsettled seats at the reco
 and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
 the repository); resume refuses an unsigned plan and re-runs an unsigned seat. A finished review
 (first run or resume) and a finished verify also write `record.mac` just before `COMPLETE`: an
-HMAC bound to the run id (the folder name), the kind and the plan's MAC, over the exact bytes of
-the files verify and comment read. Verify and comment take a record only when that MAC and (for a
-review) `plan.mac` check out with the owner's key, which they never create; an unsigned, foreign,
-copied or pre-signing record is refused with "run a new review", before any seat runs or post.
+HMAC bound to the run id (the folder name), the kind and the plan's MAC, over the exact bytes the
+run itself wrote to the files verify and comment read (kept on the record handle as written; the
+folder is never re-read to sign). Verify and comment take a record only when that MAC and (for a
+review) `plan.mac` check out with the owner's key, which they never create, the `.review-panel` and
+`runs` folders are not symlinks, and the review's base and head are commits in this repository;
+an unsigned, foreign, copied or pre-signing record is refused with "run a new review", before any
+seat runs or post. They use only the bytes they authenticated (the close-out card and G-ids too).
 Verify reads those trees and writes only its posting claims and markers into the review's record
 (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost

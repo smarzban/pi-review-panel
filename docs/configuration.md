@@ -215,10 +215,13 @@ with a key only the owner holds:
   id, the plan's MAC and the seat's index. So a signed file cannot be edited, moved to another index,
   or copied in from another run.
 - A finished review writes `record.mac`, an HMAC-SHA256 bound to the run id (the record's folder
-  name), the record kind and the plan's MAC, over the name and SHA-256 of the exact bytes of
-  `plan.json`, `panel.json`, `meta.json`, `findings.json` and `execution.json`. A finished verify
-  writes one over `panel.json`, `meta.json` and `verification.json`, with no plan. These are the
-  files `verify` and `comment` read; see [Verify and comment take only signed records](#verify-and-comment-take-only-signed-records).
+  name), the record kind and the plan's MAC, over the name and SHA-256 of the exact bytes the run
+  itself wrote to `plan.json`, `panel.json`, `meta.json`, `findings.json` and `execution.json`
+  (a resume signs the `plan.json` bytes whose `plan.mac` it checked). A finished verify writes one
+  over `panel.json`, `meta.json` and `verification.json`, with no plan. The run keeps each file's
+  text as it writes it and signs that, never what is in the folder at the end, so a file a
+  repository writer replaces while the seats run is not signed. These are the files `verify` and
+  `comment` read; see [Verify and comment take only signed records](#verify-and-comment-take-only-signed-records).
 - Deleting the key makes every interrupted record unresumable and every finished record unusable by
   `verify` and `comment`; a new one is created by the next review or audit. To keep using records
   across machines, copy the key with the config.
@@ -317,11 +320,20 @@ key:
 
 - They read the record key, and never create it. No key, or a key that is refused for any reason
   above, refuses the call with the key's cause and fix.
+- The record must sit in this repository's own `.review-panel/runs`: a `.review-panel` or `runs`
+  folder that is a symlink is refused, by run name and by record path.
 - A review record needs a `plan.json` of kind `review` with a valid `plan.mac`, and a `record.mac`
   that matches the exact bytes of its `plan.json`, `panel.json`, `meta.json`, `findings.json` and
   `execution.json`, bound to its own run id. A verify record named by `comment`'s `verifyRunId`
   needs a `record.mac` over its `panel.json`, `meta.json` and `verification.json`. Each file is
-  read once, and only those signed bytes are used.
+  read once, and only those signed bytes are used: verify builds the automatic close-out card from
+  the review it checked before any seat ran, and checks G-ids against those signed findings, so a
+  file changed while the seats run changes nothing posted.
+- The key is per owner, not per repository, so a review record's `meta.json` must also name a base
+  and a head commit this repository holds; a signed record copied in from another repository is
+  refused with "not a commit in this repository". A record from another clone of the same
+  repository still passes, and a shallow checkout that lacks the record's base commit refuses the
+  owner's own record (fetch more history, or run a new review).
 - Anything else is refused: an unsigned record, one signed with another key, a signed record copied
   to another run id, or a signed file copied in from another run. The refusal says the record is not
   signed by this owner's record key and to run a new review. Verify refuses before any seat runs,
