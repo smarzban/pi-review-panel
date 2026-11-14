@@ -17,6 +17,7 @@ import {
 	reserve,
 	sealRecord,
 	writeExecution,
+	writeOwnRecordFile,
 	writePanel,
 	writePlan,
 	writeRecordFile,
@@ -386,9 +387,10 @@ export async function executeReview(
 						}),
 			}),
 		);
-		writeRecordFile(record.findingsPath, renderFindingsJson(stamped));
-		writeRecordFile(
-			path.join(record.recordPath, "meta.json"),
+		writeOwnRecordFile(record, "findings.json", renderFindingsJson(stamped));
+		writeOwnRecordFile(
+			record,
+			"meta.json",
 			`${JSON.stringify(meta, null, 2)}\n`,
 		);
 		if (cleanupError !== undefined) {

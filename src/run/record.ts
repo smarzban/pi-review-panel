@@ -167,6 +167,7 @@ export function reserve(
 		findingsPath: path.join(recordPath, "findings.json"),
 		panelPath: path.join(recordPath, PANEL_FILE),
 		executionPath: path.join(recordPath, EXECUTION_FILE),
+		written: new Map(),
 	};
 }
 
@@ -191,8 +192,9 @@ export function writePanel(
 			: { scopingNote: input.scopingNote }),
 		seats: input.seats.map(projectSeat),
 	};
-	writeRecordFile(
-		record.panelPath,
+	writeOwnRecordFile(
+		record,
+		PANEL_FILE,
 		`${JSON.stringify(panelRecord, null, 2)}\n`,
 	);
 }
@@ -229,8 +231,9 @@ export function writeExecution(
 				`${entry.seat.provider}/${entry.seat.model}/${entry.seat.lens}`,
 		)
 		.sort();
-	writeRecordFile(
-		record.executionPath,
+	writeOwnRecordFile(
+		record,
+		EXECUTION_FILE,
 		`${JSON.stringify(
 			{
 				cancelled: input.cancelled,
@@ -260,7 +263,21 @@ export function recordAt(recordPath: string): ReservedRecord {
 		findingsPath: path.join(recordPath, "findings.json"),
 		panelPath: path.join(recordPath, PANEL_FILE),
 		executionPath: path.join(recordPath, EXECUTION_FILE),
+		written: new Map(),
 	};
+}
+
+/**
+ * Writes one file at the record root, as {@link writeRecordFile} does, and
+ * keeps its exact text on the record handle for {@link sealRecord}.
+ */
+export function writeOwnRecordFile(
+	record: ReservedRecord,
+	name: string,
+	text: string,
+): void {
+	writeRecordFile(path.join(record.recordPath, name), text);
+	record.written.set(name, text);
 }
 
 /**
@@ -377,7 +394,7 @@ export function writePlan(
 	key?: Buffer,
 ): RecordSeal | undefined {
 	const bytes = `${JSON.stringify(plan, null, 2)}\n`;
-	writeRecordFile(path.join(record.recordPath, PLAN_FILE), bytes);
+	writeOwnRecordFile(record, PLAN_FILE, bytes);
 	if (key === undefined) {
 		return undefined;
 	}
@@ -747,10 +764,13 @@ function lockToken(text: string): string | undefined {
 }
 
 /**
- * Signs a finished record: writes `record.mac` over the exact bytes now in
- * the files its kind covers, bound to the run id and, for a review, to the
- * plan's MAC. Called last before {@link complete}. A covered file that is
- * missing or not a regular file throws: the run never completes unsigned.
+ * Signs a finished record: writes `record.mac` over the exact bytes this
+ * process wrote to the files its kind covers (kept on `record.written`),
+ * bound to the run id and, for a review, to the plan's MAC. The record folder
+ * is never read for this: a file a repository writer replaced while the seats
+ * ran is then not what was signed, and verify and comment refuse it. Called
+ * last before {@link complete}. A covered file this process did not write
+ * throws: the run never completes signed over bytes it did not produce.
  */
 export function sealRecord(
 	record: ReservedRecord,
@@ -760,10 +780,10 @@ export function sealRecord(
 ): void {
 	const names = kind === "review" ? REVIEW_SIGNED_FILES : VERIFY_SIGNED_FILES;
 	const files = names.map((name): [string, string] => {
-		const text = readRegularFile(path.join(record.recordPath, name));
+		const text = record.written.get(name);
 		if (text === undefined) {
 			throw new Error(
-				`${path.join(record.recordPath, name)} cannot be signed: it is missing or not a regular file`,
+				`${path.join(record.recordPath, name)} cannot be signed: this run did not write it`,
 			);
 		}
 		return [name, text];

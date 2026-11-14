@@ -1,4 +1,3 @@
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { loadRoleTable } from "../config/roles.js";
 import {
@@ -22,8 +21,8 @@ import {
 	complete,
 	reserve,
 	sealRecord,
+	writeOwnRecordFile,
 	writePanel,
-	writeRecordFile,
 } from "./record.js";
 import { DEFAULT_SEAT_BUDGET_MS, HEARTBEAT_INTERVAL_MS } from "./scheduler.js";
 import { pinSnapshot } from "./snapshot.js";
@@ -364,12 +363,14 @@ export async function runVerify(
 		}
 	}
 
-	writeRecordFile(
-		path.join(record.recordPath, "verification.json"),
+	writeOwnRecordFile(
+		record,
+		"verification.json",
 		`${JSON.stringify({ priorRunId: prior.runId, keptFindingIds: input.keptFindingIds, outcomes }, null, 2)}\n`,
 	);
-	writeRecordFile(
-		path.join(record.recordPath, "meta.json"),
+	writeOwnRecordFile(
+		record,
+		"meta.json",
 		`${JSON.stringify(
 			{
 				runId: record.runId,

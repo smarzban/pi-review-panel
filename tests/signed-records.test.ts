@@ -25,6 +25,8 @@ import { loadPriorRun } from "../src/run/prior-run.js";
 import { loadResumable, resumeRun } from "../src/run/resume.js";
 import { runReview } from "../src/run/run-review.js";
 import { runVerify } from "../src/run/run-verify.js";
+import { pinSnapshot } from "../src/run/snapshot.js";
+import { assertFixedResolved } from "../src/tool/closeout-from-run.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
 import {
 	interruptedReviewRecord,
@@ -605,6 +607,151 @@ describe("records that look like the owner's but are not finished by it", () => 
 				),
 			).rejects.toThrow(NOT_SIGNED);
 			expect(bodies).toEqual([]);
+		});
+	});
+});
+
+/**
+ * A real snapshot whose release first runs `swap`: release comes after every
+ * seat (and grouping) has settled and before the record is signed, so a
+ * file replaced here is what a repository writer could plant mid-run.
+ */
+function swappingPin(swap: () => void): typeof pinSnapshot {
+	return (repoDir, commit) => {
+		const snapshot = pinSnapshot(repoDir, commit);
+		return {
+			worktreePath: snapshot.worktreePath,
+			release: () => {
+				swap();
+				return snapshot.release();
+			},
+		};
+	};
+}
+
+/** Replaces each named file in `recordPath`, returning the original bytes. */
+function plantOver(
+	recordPath: string,
+	planted: Record<string, string>,
+): Map<string, string> {
+	const originals = new Map<string, string>();
+	for (const [name, text] of Object.entries(planted)) {
+		originals.set(name, readFileSync(path.join(recordPath, name), "utf8"));
+		writeFileSync(path.join(recordPath, name), text);
+	}
+	return originals;
+}
+
+function restore(recordPath: string, originals: Map<string, string>): void {
+	for (const [name, text] of originals) {
+		writeFileSync(path.join(recordPath, name), text);
+	}
+}
+
+const PLANTED_PANEL = JSON.stringify({
+	runId: "planted",
+	baseRef: "main",
+	seats: [
+		{ rosterId: "x", lens: "planted-lens", provider: "evil", model: "evil" },
+	],
+});
+const PLANTED_EXECUTION = JSON.stringify({
+	cancelled: false,
+	lostCoverage: [],
+	outcomes: [],
+});
+
+describe("the seal signs the bytes the run wrote, not what is on disk at the end (P-1/P-5)", () => {
+	it("review: panel.json and execution.json replaced mid-run are refused; the originals are accepted", async () => {
+		await withRepository(async (repo) => {
+			let originals = new Map<string, string>();
+			let recordPath = "";
+			await runReview(
+				{ repoDir: repo, baseRef: "HEAD~1", seats: plannedSeats(["holistic"]) },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+					pinSnapshot: swappingPin(() => {
+						const [runId] = readdirSync(
+							path.join(repo, ".review-panel", "runs"),
+						);
+						recordPath = recordOf(repo, runId as string);
+						originals = plantOver(recordPath, {
+							"panel.json": PLANTED_PANEL,
+							"execution.json": PLANTED_EXECUTION,
+						});
+					}),
+				},
+			);
+			const runId = path.basename(recordPath);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).toThrow(
+				NOT_SIGNED,
+			);
+			restore(recordPath, originals);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
+		});
+	});
+
+	it("verify: a verify record's panel.json replaced mid-run is refused; the original is accepted", async () => {
+		await withRepository(async (repo) => {
+			signReviewRecord(plantReview(repo, "real-1"));
+			let originals = new Map<string, string>();
+			let recordPath = "";
+			const result = await runVerify(
+				{
+					repoDir: repo,
+					config,
+					priorRunId: "real-1",
+					headRevision: git(repo, ["rev-parse", "HEAD"]).trim(),
+					keptFindingIds: ["F-1"],
+				},
+				{
+					recordKey: TEST_RECORD_KEY,
+					runAdvisorySeat: createAdvisorySeatRunner(),
+					pinSnapshot: swappingPin(() => {
+						const name = readdirSync(
+							path.join(repo, ".review-panel", "runs"),
+						).find((entry) => entry !== "real-1") as string;
+						recordPath = recordOf(repo, name);
+						originals = plantOver(recordPath, { "panel.json": PLANTED_PANEL });
+					}),
+				},
+			);
+			const verifyId = path.basename(result.recordPath);
+			const check = () =>
+				assertFixedResolved(repo, verifyId, ["F-1"], "real-1", TEST_RECORD_KEY);
+			expect(check).toThrow(NOT_SIGNED);
+			restore(recordPath, originals);
+			expect(check).not.toThrow();
+		});
+	});
+
+	it("resume: a panel.json replaced mid-resume is refused; the original is accepted", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			const recordPath = recordOf(repo, runId);
+			let originals = new Map<string, string>();
+			await resumeRun(loadResumable(repo, runId, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+				pinSnapshot: swappingPin(() => {
+					originals = plantOver(recordPath, { "panel.json": PLANTED_PANEL });
+				}),
+			});
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).toThrow(
+				NOT_SIGNED,
+			);
+			restore(recordPath, originals);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
 		});
 	});
 });

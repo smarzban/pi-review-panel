@@ -93,6 +93,13 @@ export type ReservedRecord = {
 	panelPath: string;
 	/** Durable SDK lifecycle and structured replay record. */
 	executionPath: string;
+	/**
+	 * The exact text this process wrote to each record file, by file name
+	 * (or, for a resume, took from its MAC-checked read). `sealRecord` signs
+	 * only these bytes, never what is in the record folder at the end, which
+	 * a writer in the repository could have replaced while the seats ran.
+	 */
+	written: Map<string, string>;
 };
 
 /**
