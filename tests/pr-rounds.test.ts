@@ -1692,6 +1692,11 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 		expect(text.split("\n").at(-1)).toBe(
 			"PR close-out: not posted (lost verify coverage: claude/fix-verification)",
 		);
+		expect(
+			bodyOf(posts(gh.calls)[0])
+				.split("\n")
+				.filter((line) => line.includes("Lost:")),
+		).toEqual(["**Lost:** claude/fix-verification"]);
 	});
 
 	it("a regression: the reply says so", async () => {
@@ -3215,6 +3220,32 @@ describe("T498: readable PR comments", () => {
 			const lines = bodyOf(posts(gh.calls)[0]).split("\n");
 			expect(lines).toContain("**Lost:** claude/holistic (provider-error)");
 			expect(lines.filter((line) => line.includes("Lost:"))).toHaveLength(1);
+		});
+	});
+
+	it("the review comment bolds the Suggest label of an untaken lens", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: reviewRun(repo, REVIEW_RUN, []),
+						suggestLenses: () => [
+							{
+								lens: "migrations",
+								reason: "changed file(s) match a migration path",
+								evidence: [{ file: "db/a.sql" }],
+							},
+						],
+					}),
+				},
+			);
+			const lines = bodyOf(posts(gh.calls)[0]).split("\n");
+			expect(lines).toContain("**Suggest:**");
+			expect(lines.filter((line) => line.includes("Suggest:"))).toEqual([
+				"**Suggest:**",
+			]);
 		});
 	});
 
