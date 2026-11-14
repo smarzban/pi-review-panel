@@ -294,6 +294,15 @@ export async function resumeRun(
 			heldLock: releaseLock,
 			scopingNoteDropped,
 			seal,
+			// panel.json as the first run wrote it, from the signed plan.
+			panel: {
+				runId: run.runId,
+				baseRef: plan.baseRef,
+				...(plan.scopingNote === undefined
+					? {}
+					: { scopingNote: plan.scopingNote }),
+				seats: plan.seats.map((seat) => ({ ...seat, lensPrompt: "" })),
+			},
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
 		const consolidator =

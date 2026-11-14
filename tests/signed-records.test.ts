@@ -23,6 +23,7 @@ import {
 import type { Config } from "../src/config/schema.js";
 import { loadPriorRun } from "../src/run/prior-run.js";
 import { loadResumable, resumeRun } from "../src/run/resume.js";
+import { runReview } from "../src/run/run-review.js";
 import { runVerify } from "../src/run/run-verify.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
 import {
@@ -471,6 +472,139 @@ describe("the owner's own records still work", () => {
 					readFileSync(path.join(prior.recordPath, "meta.json"), "utf8"),
 				).runId,
 			).toBe(runId);
+		});
+	});
+
+	it("a resumed review keeps panel.json as the first run wrote it, scoping note included", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const controller = new AbortController();
+			const fake = createSdkSeatFake([
+				{ kind: "default" },
+				{ kind: "pending" },
+			]);
+			await runReview(
+				{
+					repoDir: repo,
+					baseRef: "HEAD~1",
+					seats,
+					scopingNote: "Only the parser changed.",
+				},
+				{
+					abortSignal: controller.signal,
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: fake.factory,
+					onProgress: (event) => {
+						if (event.kind === "seat-finished") {
+							controller.abort();
+						}
+					},
+				},
+			).catch(() => undefined);
+			const [runId] = readdirSync(path.join(repo, ".review-panel", "runs"));
+			const panelPath = path.join(
+				recordOf(repo, runId as string),
+				"panel.json",
+			);
+			const before = readFileSync(panelPath, "utf8");
+			expect(before).toContain("Only the parser changed.");
+			await resumeRun(loadResumable(repo, runId as string, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+			});
+			expect(readFileSync(panelPath, "utf8")).toBe(before);
+			expect(() =>
+				loadPriorRun(repo, runId as string, TEST_RECORD_KEY),
+			).not.toThrow();
+		});
+	});
+});
+
+describe("records that look like the owner's but are not finished by it", () => {
+	it("refuses a genuine finished review with only record.mac removed, as a record from before signing looks", async () => {
+		await withRepository(async (repo) => {
+			await runReview(
+				{ repoDir: repo, baseRef: "HEAD~1", seats: plannedSeats(["holistic"]) },
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: createSdkSeatFake([
+						{
+							kind: "findings",
+							findings: [{ ...SDK_FINDING, severity: "high" }],
+						},
+					]).factory,
+				},
+			);
+			const [runId] = readdirSync(path.join(repo, ".review-panel", "runs"));
+			const recordPath = recordOf(repo, runId as string);
+			expect(() =>
+				loadPriorRun(repo, runId as string, TEST_RECORD_KEY),
+			).not.toThrow();
+			rmSync(path.join(recordPath, "record.mac"));
+			commit(repo, "fix.txt");
+			await expect(
+				verifyAction(verifyCall(repo, runId as string), { deps: deps() }),
+			).rejects.toThrow(NOT_SIGNED);
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{
+						repoDir: repo,
+						...commentCall(runId as string),
+						dismissed: [{ id: "F-1", reason: "out of scope" }],
+					},
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			expect(bodies).toEqual([]);
+		});
+	});
+
+	it("refuses an interrupted signed review with planted findings, meta, execution and COMPLETE", async () => {
+		await withRepository(async (repo) => {
+			const runId = await interruptedReviewRecord(
+				repo,
+				plannedSeats(["holistic", "security"]),
+			);
+			const recordPath = recordOf(repo, runId);
+			expect(existsSync(path.join(recordPath, "plan.mac"))).toBe(true);
+			writeFileSync(
+				path.join(recordPath, "meta.json"),
+				JSON.stringify({
+					runId,
+					baseRef: "HEAD~1",
+					baseOid: git(repo, ["rev-parse", "HEAD~1"]).trim(),
+					headOid: git(repo, ["rev-parse", "HEAD~1"]).trim(),
+				}),
+			);
+			writeFileSync(path.join(recordPath, "findings.json"), "[]");
+			writeFileSync(
+				path.join(recordPath, "execution.json"),
+				JSON.stringify({ cancelled: false, lostCoverage: [], outcomes: [] }),
+			);
+			writeFileSync(path.join(recordPath, "COMPLETE"), "");
+			await expect(
+				verifyAction(
+					{ ...verifyCall(repo, runId), keptFindingIds: [] },
+					{ deps: deps() },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			const { bodies, postComment } = poster();
+			await expect(
+				commentAction(
+					{ repoDir: repo, ...commentCall(runId) },
+					{ deps: deps({ postComment }) },
+				),
+			).rejects.toThrow(NOT_SIGNED);
+			expect(bodies).toEqual([]);
 		});
 	});
 });

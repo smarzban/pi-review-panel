@@ -40,6 +40,7 @@ import {
 	type SnapshotReleaseOutcome,
 } from "./snapshot.js";
 import type {
+	PanelRecordInput,
 	PlannedSeat,
 	ReservedRecord,
 	RunConfig,
@@ -93,6 +94,12 @@ export type ResumeState = {
 	scopingNoteDropped?: boolean;
 	/** Signs the seats this resume runs; absent only for an unsigned record. */
 	seal?: RecordSeal;
+	/**
+	 * The panel record as the signed plan gives it (base ref, scoping note
+	 * and seat rows), written again before the record is signed: what is in
+	 * the folder may have been planted, and resume does not pass the note on.
+	 */
+	panel?: PanelRecordInput;
 };
 
 export type RunReviewOptions = {
@@ -228,18 +235,21 @@ export async function executeReview(
 	try {
 		// The planned panel is durable before any pinning or scheduling, so a
 		// run that reaches reservation retains it even if it aborts (AC-25).
-		// A resume writes the panel again too, from the seats and note its
-		// signed plan gave it: the record's panel.json is signed at
-		// completion, so it must be this run's, never what is in the folder.
+		// A resume writes the panel again too, from its signed plan: the
+		// record's panel.json is signed at completion, so it must be this
+		// run's, never what is in the folder.
 		const panelWrite = options.writePanel ?? writePanel;
-		panelWrite(record, {
-			runId: record.runId,
-			baseRef: config.baseRef,
-			...(config.scopingNote === undefined
-				? {}
-				: { scopingNote: config.scopingNote }),
-			seats: config.seats,
-		});
+		panelWrite(
+			record,
+			resume?.panel ?? {
+				runId: record.runId,
+				baseRef: config.baseRef,
+				...(config.scopingNote === undefined
+					? {}
+					: { scopingNote: config.scopingNote }),
+				seats: config.seats,
+			},
+		);
 		if (resume === undefined) {
 			seal = writePlan(
 				record,
