@@ -901,9 +901,15 @@ async function closeoutAlreadyPosted(
 			return false;
 		}
 		const body = typeof comment.body === "string" ? comment.body : "";
-		const first = body.split(/\r?\n/, 1)[0]?.trim();
+		const [first, second] = body.split(/\r?\n/, 2);
+		if (first?.trim() !== CLOSEOUT_ROUND_HEADING) {
+			return false;
+		}
+		// A card posted before the hidden marker named its review on line 2,
+		// which the tool writes and no seat text reaches.
+		const legacy = `Review ${postedCode(reviewRunId)} `;
 		return (
-			first === CLOSEOUT_ROUND_HEADING && isRunMarkerFor(body, reviewRunId)
+			isRunMarkerFor(body, reviewRunId) || second?.startsWith(legacy) === true
 		);
 	});
 }

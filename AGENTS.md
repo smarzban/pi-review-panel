@@ -75,13 +75,17 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   `)` of a list number; `&` stays escaped so no entity decodes into `@`, `#` or `://`), a
   zero-width joiner after every `@`, `＠` and `#`, in `GH-123` and in `://`, the dot of `www.`
   backslash-escaped, and control, bidi and invisible characters replaced (an emoji keeps its
-  U+FE0F and in-sequence joiners); parentheses, braces, `$`, quotes and dots stay plain. File
+  U+FE0F and in-sequence joiners); every `$` posts as `<span>$</span>`, because GitHub runs
+  math (which can colour, hide or resize text) on `\$` and `&#36;` too; parentheses, braces,
+  quotes and dots stay plain. File
   names and ids are code spans with a fence longer than any backtick run inside, with nothing
   escaped or joined in them, and a value with nothing visible renders as `(empty)`. Labels the
   tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in
   visible text: each body ends with one hidden `<!-- review-panel review=<id> verify=<id> -->`
-  marker holding only ids of the run-id character set without `--`, and the close-out duplicate
-  check matches author, first-line heading and that exact marker as the last non-empty line.
+  marker holding only ids of the run-id character set (an id with `--`, from a base ref such as
+  `HEAD^`, is safe: the marker is its own HTML block, which only `-->` ends), and the close-out
+  duplicate check matches author, first-line heading and that exact marker as the last non-empty
+  line, or, for a card posted before the marker, ``Review `<id>` `` on line 2.
   Bodies are capped under 65,536 characters and sent to `gh` on stdin; `gh` runs asynchronously
   within one deadline per round, and an interrupt kills it.
 - Posting claims (`src/tool/round-claim.ts`) are fresh exclusive creates (`wx`) in the review's

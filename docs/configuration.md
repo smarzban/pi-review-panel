@@ -253,8 +253,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   seat text never is. No run id appears in visible text: every posted body (review, verify, the
   automatic close-out and the manual `comment` card) ends with one hidden HTML comment carrying the
   ids that apply, such as `<!-- review-panel review=<review run id> verify=<verify run id> -->`.
-  An id outside the run-id characters (`A-Z a-z 0-9 . _ -`), or one holding `--` (a base ref such
-  as `HEAD^` can make one), is left out of the marker. A review comment starts like this:
+  An id outside the run-id characters (`A-Z a-z 0-9 . _ -`) is left out of the marker. A review
+  comment starts like this:
 
   ```
   ## Review panel · review
@@ -350,7 +350,10 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   `#`, `-`, `+`, `=` and the `.` or `)` of a list number, so no HTML, image, Markdown link,
   emphasis, list or heading forms. `&` stays escaped because GitHub decodes an entity such as
   `&commat;` or `&num;` after the text is parsed, which would bring back the `@` or `#` the joiners
-  broke. Parentheses, braces, `$`, quotes and dots stay plain; a zero-width
+  broke. Every `$` posts as `<span>$</span>`: GitHub renders `$…$` as math, which can colour,
+  hide or resize text, and it does so on `\$` and `&#36;` too (checked with `gh api markdown`);
+  only a dollar inside an element stays a plain dollar. Parentheses, braces, quotes and dots stay
+  plain; a zero-width
   joiner follows every `@` and `＠`, every `#` (so `#123` and `owner/repo#123` do not link), the
   `-` in `GH-123`, and the `:` of `://`; the dot of every `www.` is backslash-escaped, so neither a
   URL nor a `www.` address becomes a link (checked with cmark-gfm, GitHub's Markdown engine).

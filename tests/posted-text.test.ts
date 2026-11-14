@@ -13,10 +13,23 @@ import {
  */
 
 describe("posted text escapes only what can form markup", () => {
-	it("leaves parentheses, braces, dollars, quotes and dots plain", () => {
-		expect(postedText("call f(x) with {a: 1} for $5, say \"hi\" 'yo'.")).toBe(
-			"call f(x) with {a: 1} for $5, say \"hi\" 'yo'.",
+	it("leaves parentheses, braces, quotes and dots plain", () => {
+		expect(postedText("call f(x) with {a: 1}, say \"hi\" 'yo'.")).toBe(
+			"call f(x) with {a: 1}, say \"hi\" 'yo'.",
 		);
+	});
+
+	it("posts every $ as <span>$</span>, so no seat text reaches GitHub math", () => {
+		// GitHub's renderer still runs math on `\\$x\\$` and `&#36;x&#36;`; only a
+		// dollar inside an element stays a plain dollar (checked with
+		// `gh api markdown`, 2026-11-14).
+		expect(postedText("$\\color{white}{hidden}$")).toBe(
+			"<span>$</span>\\\\color{white}{hidden}<span>$</span>",
+		);
+		expect(postedText("$\\phantom{x}$ and $$\\Huge X$$ cost $5")).toBe(
+			"<span>$</span>\\\\phantom{x}<span>$</span> and <span>$</span><span>$</span>\\\\Huge X<span>$</span><span>$</span> cost <span>$</span>5",
+		);
+		expect(postedText("$ok % hidden$")).not.toMatch(/(?<!<span>)\$/);
 	});
 
 	it("escapes the inline specials", () => {
@@ -94,7 +107,6 @@ describe("the hidden run marker", () => {
 
 	it("omits an id that is not a run id or could close the comment", () => {
 		expect(runMarker({ review: "a-->b" })).toBeUndefined();
-		expect(runMarker({ review: "a--b" })).toBeUndefined();
 		expect(runMarker({ review: "a>b" })).toBeUndefined();
 		expect(runMarker({ review: "a b" })).toBeUndefined();
 		expect(runMarker({ review: "" })).toBeUndefined();
@@ -113,10 +125,14 @@ describe("the hidden run marker", () => {
 		expect(isRunMarkerFor(`## x\n\n${marker}`, VERIFY)).toBe(false);
 		expect(isRunMarkerFor(`## x\n${marker}\nlater`, REVIEW)).toBe(false);
 		expect(isRunMarkerFor(`## x\nReview \`${REVIEW}\``, REVIEW)).toBe(false);
-		// An id that cannot be in a marker is never found.
+		// An id with -- is still a run id: the marker is its own HTML block,
+		// which only `-->` ends, and no run id holds a `>`.
+		expect(runMarker({ review: "a--b" })).toBe(
+			"<!-- review-panel review=a--b -->",
+		);
 		expect(
-			isRunMarkerFor("## x\n<!-- review-panel review=a--b -->", "a--b"),
-		).toBe(false);
+			isRunMarkerFor("## x\n\n<!-- review-panel review=a--b -->", "a--b"),
+		).toBe(true);
 	});
 
 	it("seat text cannot produce the marker, as text or as a code span", () => {
@@ -127,14 +143,16 @@ describe("the hidden run marker", () => {
 	});
 });
 
-describe("a run id the marker cannot hold", () => {
-	it("a base ref like HEAD^ gives a real run id with --: no marker, never found", async () => {
+describe("a run id with --", () => {
+	it("a base ref like HEAD^ gives a run id with --, which still gets a marker and is found", async () => {
 		const { sanitizeBaseRef } = await import("../src/run/record.js");
 		const id = `2026-11-14T17-24-42-501Z-${sanitizeBaseRef("HEAD^")}-e52d7adb77ca8882`;
 		expect(id).toContain("--");
-		expect(runMarker({ review: id })).toBeUndefined();
-		expect(isRunMarkerFor(`## x\n<!-- review-panel review=${id} -->`, id)).toBe(
-			false,
+		expect(runMarker({ review: id })).toBe(
+			`<!-- review-panel review=${id} -->`,
 		);
+		expect(
+			isRunMarkerFor(`## x\n\n<!-- review-panel review=${id} -->`, id),
+		).toBe(true);
 	});
 });

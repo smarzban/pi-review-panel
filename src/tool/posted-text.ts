@@ -106,12 +106,15 @@ export function postedText(text: string, maxChars = POSTED_TEXT_CHARS): string {
  * which would otherwise decode an entity such as `&commat;` or `&num;`
  * into a character the joiners never saw. At the start of the text, where
  * it may follow a list marker, a `#`, `-`, `+` or `=` and the `.` or `)`
- * of an ordered-list number are escaped too. Parentheses, braces, `$`,
- * quotes and dots stay plain.
+ * of an ordered-list number are escaped too. Every `$` is posted as
+ * `<span>$</span>`: GitHub runs math (which can colour, hide or resize
+ * text) on `\$` and `&#36;` too, and only a dollar inside an element stays
+ * a plain dollar. Parentheses, braces, quotes and dots stay plain.
  */
 function escapeMarkdown(line: string): string {
 	return line
 		.replace(/[\\`*_[\]<>|~&]|!(?=\[)/gu, "\\$&")
+		.replaceAll("$", () => "<span>$</span>")
 		.replace(
 			/^(?:[#\-+=]|(\d{1,9})([.)]))/u,
 			(marker, digits?: string, dot?: string) =>
@@ -178,17 +181,19 @@ export function fitCommentBody(
 /** The characters a run id is made of: see `reserve` in `run/record.ts`. */
 const RUN_ID = /^[A-Za-z0-9._-]+$/u;
 
-/** A run id that can sit inside an HTML comment without closing it. */
+/**
+ * A run id that can sit inside the marker without closing it. The marker is
+ * its own HTML block, which only `-->` ends, and a run id holds no `>`, so
+ * an id with `--` (a base ref like `HEAD^`) is safe.
+ */
 function markerId(id: string | undefined): string | undefined {
-	return id !== undefined && RUN_ID.test(id) && !id.includes("--")
-		? id
-		: undefined;
+	return id !== undefined && RUN_ID.test(id) ? id : undefined;
 }
 
 /**
  * The hidden HTML comment that ends a posted body and carries its run ids,
- * only those that apply. An id outside the run-id character set, or one
- * holding `--`, is left out; with no id left there is no marker.
+ * only those that apply. An id outside the run-id character set is left
+ * out; with no id left there is no marker.
  */
 export function runMarker(ids: {
 	review?: string;

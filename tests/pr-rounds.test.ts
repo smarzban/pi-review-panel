@@ -1339,7 +1339,10 @@ function expectInert(body: string): void {
 			continue;
 		}
 		expect(line).not.toMatch(/^\s*(={2,}|-{2,}|>|`{3}|~{3}|#|\d+\.\s)/);
-		const outside = outsideCodeSpans(line);
+		// The tool's own plain dollar: `<span>$</span>`. Any other `$` could
+		// open GitHub math.
+		const outside = outsideCodeSpans(line).replaceAll("<span>$</span>", "");
+		expect(outside).not.toContain("$");
 		// An escaped backslash escapes nothing after it: drop `\\` pairs first.
 		const unpaired = outside.replace(/\\\\/g, "");
 		expect(unpaired).not.toMatch(/(?<!\\)[<>*_~|&`]/);
@@ -1374,6 +1377,7 @@ const HOSTILE = [
 	"&#64;octocat",
 	"*bold* _em_ ~~s~~ | t",
 	"$x$",
+	"$\\color{white}{hidden}$",
 	"www.evil.example/p?q=1",
 	"_www.e.example",
 	"(www.f.example)",
@@ -2362,18 +2366,19 @@ function verifyOnce(
 	id: string,
 	votes: SeatVote[] = STILL,
 	signal?: AbortSignal,
+	reviewId = REVIEW_ID,
 ) {
 	return verifyAction(
 		{
 			repoDir: repo,
-			priorRunId: REVIEW_ID,
+			priorRunId: reviewId,
 			head: "HEAD",
 			keptFindingIds: ["F-1"],
 		},
 		{
 			...(signal === undefined ? {} : { signal }),
 			deps: deps(gh.runGh, {
-				runVerify: verifyRunSeats(repo, id, REVIEW_ID, ROWS_R2, votes),
+				runVerify: verifyRunSeats(repo, id, reviewId, ROWS_R2, votes),
 			}),
 		},
 	);
@@ -2562,6 +2567,74 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER)),
 			).toBe(true);
 			expect(claimsLeft(repo)).toEqual([]);
+		});
+	});
+
+	it("a review id with -- (base HEAD^) still finds its card on the PR", async () => {
+		const reviewId = "2026-11-14T17-24-42-501Z-head--e52d7adb77ca8882";
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, reviewId, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${reviewId} verify=v-0 -->`,
+					},
+				],
+			});
+			const result = await verifyOnce(
+				repo,
+				gh,
+				"v-1",
+				clean,
+				undefined,
+				reviewId,
+			);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("a card posted before T498, with the review id visible on line 2, still counts", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\` · verify \`v-0\`\n\n1 finding submitted`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("a pre-T498 lookalike whose line 2 names another review does not count", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\nReview \`${REVIEW_ID}-other\` · verify \`v-0\`\n\nsee \`${REVIEW_ID}\``,
+					},
+				],
+			});
+			await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
 		});
 	});
 
@@ -2823,8 +2896,10 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 		expect(postedText("trail\\")).toBe("trail\\\\");
 	});
 
-	it("leaves $ plain (T498)", () => {
-		expect(postedText("$x$ and $$y$$")).toBe("$x$ and $$y$$");
+	it("keeps $ out of GitHub math (T498)", () => {
+		expect(postedText("$x$ and $$y$$")).toBe(
+			"<span>$</span>x<span>$</span> and <span>$</span><span>$</span>y<span>$</span><span>$</span>",
+		);
 	});
 
 	it("puts no joiner inside a code span, so copied paths still work", () => {
@@ -3100,11 +3175,46 @@ describe("T498: readable PR comments", () => {
 					"**Seats:** holistic (terra, claude)",
 					"",
 					"- **F-1 [high]** \\*\\*not bold\\*\\* (really) (`src/a.ts:3`) — terra/holistic",
-					"  **Evidence:** calls f(x) for $5",
+					"  **Evidence:** calls f(x) for <span>$</span>5",
 					"",
 					`<!-- review-panel review=${REVIEW_RUN} -->`,
 				].join("\n"),
 			);
+		});
+	});
+
+	it("the review comment bolds the Lost label of a failed seat", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const voted = reviewRun(repo, REVIEW_RUN, []);
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: async (runConfig: { seats: PlannedSeat[] }) => {
+							const result = await voted(runConfig);
+							const [first, ...rest] = result.outcomes;
+							return {
+								...result,
+								outcomes: [
+									first,
+									...rest.map((facts) => ({
+										...facts,
+										outcome: {
+											kind: "failed" as const,
+											class: "provider-error",
+											reason: "quota",
+										},
+									})),
+								],
+							} as unknown as RunReviewResult;
+						},
+					}),
+				},
+			);
+			const lines = bodyOf(posts(gh.calls)[0]).split("\n");
+			expect(lines).toContain("**Lost:** claude/holistic (provider-error)");
+			expect(lines.filter((line) => line.includes("Lost:"))).toHaveLength(1);
 		});
 	});
 
