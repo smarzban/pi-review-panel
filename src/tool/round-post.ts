@@ -41,6 +41,7 @@ import {
 import { loadCloseoutRun } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
 import {
+	type CommentGroupRow,
 	fitCommentBody,
 	isRunMarkerFor,
 	markerTail,
@@ -530,29 +531,31 @@ function findingRow(
 /**
  * One group as one unit of the comment: a group of one is its finding's
  * row with both ids; a larger group is a header, then each member's own row:
- * id, severity, title, place, seat and evidence. The member count is never
- * shown.
+ * id, severity, title, place, seat and evidence. A group too long for the
+ * comment posts in part. The member count is never shown.
  */
-function groupRow(group: GroupView, panel: PlannedSeat[]): string[] {
+function groupRow(group: GroupView, panel: PlannedSeat[]): CommentGroupRow {
 	const [only] = group.members;
 	if (group.members.length === 1 && only !== undefined) {
-		return findingRow(
-			only,
-			panel,
-			`${githubSafe(group.id, 40)} / ${githubSafe(only.id, 40)}`,
-		);
+		return {
+			head: findingRow(
+				only,
+				panel,
+				`${githubSafe(group.id, 40)} / ${githubSafe(only.id, 40)}`,
+			),
+			members: [],
+		};
 	}
-	const rows = [
-		`- **${githubSafe(group.id, 40)} [${group.severity}, ${GROUP_SEVERITY_LABEL}]** ${githubSafe(group.lead.finding.title)}`,
-	];
-	for (const entry of group.members) {
-		rows.push(
-			...findingRow(entry, panel, githubSafe(entry.id, 40)).map(
+	return {
+		head: [
+			`- **${githubSafe(group.id, 40)} [${group.severity}, ${GROUP_SEVERITY_LABEL}]** ${githubSafe(group.lead.finding.title)}`,
+		],
+		members: group.members.map((entry) =>
+			findingRow(entry, panel, githubSafe(entry.id, 40)).map(
 				(line) => `  ${line}`,
 			),
-		);
-	}
-	return rows;
+		),
+	};
 }
 
 export type ReviewRoundFacts = {

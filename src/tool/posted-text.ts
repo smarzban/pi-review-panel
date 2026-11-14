@@ -25,8 +25,8 @@
  *   would hide in a copied path. A value with nothing visible renders as
  *   `(empty)`.
  *
- * {@link fitCommentBody} cuts a body by whole rows to stay under GitHub's
- * comment limit; every posted body goes through it.
+ * {@link fitCommentBody} cuts a body by whole rows (a group in part) to stay
+ * under GitHub's comment limit; every posted body goes through it.
  *
  * Run ids appear in no visible text: {@link runMarker} carries them in one
  * hidden HTML comment at the end of a body, and {@link isRunMarkerFor}
@@ -141,12 +141,37 @@ export function postedCode(text: string, maxChars = POSTED_CODE_CHARS): string {
 }
 
 /**
- * Joins the head, as many whole rows as fit, a line counting the rows cut,
- * and the tail, within {@link BODY_BUDGET} characters.
+ * A group as one unit of a body: its header lines, then each member's
+ * lines. When the whole group does not fit, its header and the members that
+ * fit are posted, with {@link groupCutLine} for the rest.
+ */
+export type CommentGroupRow = {
+	head: readonly string[];
+	members: readonly (readonly string[])[];
+};
+
+/** One unit of a body: plain lines, or a group that may post in part. */
+export type CommentRow = readonly string[] | CommentGroupRow;
+
+function isGroupRow(row: CommentRow): row is CommentGroupRow {
+	return !Array.isArray(row);
+}
+
+/** The line that ends a group posted in part. */
+export function groupCutLine(count: number): string {
+	return `  - ${count} more finding(s) in this group cut to fit GitHub's comment limit; the full group is in the run record's report.md.`;
+}
+
+/**
+ * Joins the head, the rows that fit, a line counting the rows cut, and the
+ * tail, within {@link BODY_BUDGET} characters. Plain rows are whole: the
+ * first one that does not fit ends the list. A group that does not fit
+ * keeps its header, its first member and its cut line, the rows after it
+ * are still tried, and what is left goes to its further members.
  */
 export function fitCommentBody(
 	head: readonly string[],
-	rows: readonly (readonly string[])[],
+	rows: readonly CommentRow[],
 	tail: readonly string[],
 	noun: string,
 ): string {
@@ -154,19 +179,82 @@ export function fitCommentBody(
 		lines.reduce((sum, line) => sum + line.length + 1, 0);
 	const fixed = size(head) + size(tail) + 200;
 	let used = fixed;
-	let kept = 0;
+	// Per row: every line, the members shown of a group posted in part, or cut.
+	const plan: Array<"whole" | "cut" | number> = [];
+	let stopped = false;
 	for (const row of rows) {
-		const next = used + size(row);
-		if (next > BODY_BUDGET) {
-			break;
+		if (stopped) {
+			plan.push("cut");
+			continue;
 		}
-		used = next;
-		kept += 1;
+		const whole = isGroupRow(row)
+			? size(row.head) + row.members.reduce((sum, m) => sum + size(m), 0)
+			: size(row);
+		if (used + whole <= BODY_BUDGET) {
+			used += whole;
+			plan.push("whole");
+			continue;
+		}
+		if (!isGroupRow(row)) {
+			stopped = true;
+			plan.push("cut");
+			continue;
+		}
+		const [first] = row.members;
+		const least =
+			first === undefined
+				? Number.POSITIVE_INFINITY
+				: size(row.head) +
+					size(first) +
+					size([groupCutLine(row.members.length - 1)]);
+		if (used + least <= BODY_BUDGET) {
+			used += least;
+			plan.push(1);
+		} else {
+			plan.push("cut");
+		}
 	}
-	const cut = rows.length - kept;
+	// What is left goes to the groups posted in part, in order.
+	for (const [index, row] of rows.entries()) {
+		let shown = plan[index];
+		if (typeof shown !== "number" || !isGroupRow(row)) {
+			continue;
+		}
+		while (shown < row.members.length) {
+			const left = row.members.length - shown - 1;
+			const grow =
+				size(row.members[shown] ?? []) -
+				size([groupCutLine(left + 1)]) +
+				(left === 0 ? 0 : size([groupCutLine(left)]));
+			if (used + grow > BODY_BUDGET) {
+				break;
+			}
+			used += grow;
+			shown += 1;
+		}
+		plan[index] = shown === row.members.length ? "whole" : shown;
+	}
+	const kept = rows.flatMap((row, index) => {
+		const shown = plan[index];
+		if (shown === "cut") {
+			return [];
+		}
+		if (!isGroupRow(row)) {
+			return [...row];
+		}
+		const count = shown === "whole" ? row.members.length : shown;
+		return [
+			...row.head,
+			...row.members.slice(0, count).flat(),
+			...(count === row.members.length
+				? []
+				: [groupCutLine(row.members.length - count)]),
+		];
+	});
+	const cut = plan.filter((shown) => shown === "cut").length;
 	const text = [
 		...head,
-		...rows.slice(0, kept).flat(),
+		...kept,
 		...(cut === 0
 			? []
 			: [

@@ -11,7 +11,10 @@ import type {
 import type { SeatLifecycle } from "../src/seat/classify.js";
 import type { Finding } from "../src/seat/schema.js";
 import { renderReviewResult } from "../src/tool/review-presentation.js";
-import { renderReviewRound } from "../src/tool/round-post.js";
+import {
+	GITHUB_COMMENT_LIMIT,
+	renderReviewRound,
+} from "../src/tool/round-post.js";
 
 const LIFECYCLE: SeatLifecycle = {
 	startedAtMs: 1_000,
@@ -335,6 +338,71 @@ describe("the grouped review PR comment", () => {
 			"  - **F-3 [high]** Leak #\u200d Heading\ufffd @\u200doctocat \\[x\\](y) (`src/cache.ts:511`) — kimi/holistic",
 		);
 		expect(body).not.toContain("\n# Heading");
+	});
+
+	it("posts an over-budget group partly, with a marker, and keeps the rows after it (review R-1)", () => {
+		const members: StampedFinding[] = Array.from({ length: 120 }, (_, index) =>
+			finding(`F-${index + 1}`, index % 2, {
+				file: "src/cache.ts",
+				line: index + 1,
+				severity: index === 0 ? "high" : "medium",
+				title: `Leak ${index + 1}`,
+				evidence: "e".repeat(900),
+			}),
+		);
+		const small = finding("F-121", 1, {
+			file: "src/log.ts",
+			line: 1,
+			severity: "low",
+			title: "Typo after the big group",
+			evidence: "short",
+		});
+		const grouping: GroupingFacts = {
+			...GROUPED,
+			outcome: {
+				kind: "grouped",
+				groups: [
+					{ id: "G-1", findingIds: members.map((row) => row.id) },
+					{ id: "G-2", findingIds: ["F-121"] },
+				],
+			},
+		};
+		const body = renderReviewRound({
+			runId: "r1",
+			baseRef: "main",
+			baseOid: "a".repeat(40),
+			headOid: "b".repeat(40),
+			panel: PANEL,
+			result: result(grouping),
+			findings: [...members, small],
+			suggestions: [],
+		});
+		expect(body.length).toBeLessThan(GITHUB_COMMENT_LIMIT);
+		const lines = body.split("\n");
+		expect(lines).toContain("- **G-1 [high, stated by a seat]** Leak 1");
+		const shown = lines.filter((line) => /^ {2}- \*\*F-\d+ /.test(line));
+		expect(shown.length).toBeGreaterThan(0);
+		expect(shown.length).toBeLessThan(120);
+		const more = lines
+			.map((line) =>
+				/^ {2}- (\d+) more finding\(s\) in this group cut to fit GitHub's comment limit; the full group is in the run record's report\.md\.$/.exec(
+					line,
+				),
+			)
+			.find((match) => match !== null);
+		expect(more).toBeDefined();
+		expect(shown.length + Number(more?.[1])).toBe(120);
+		// The marker follows the last shown member, inside the group.
+		const markerAt = lines.findIndex((line) =>
+			line.includes("more finding(s) in this group"),
+		);
+		expect(lines[markerAt - 1]?.startsWith("    **Evidence:**")).toBe(true);
+		// The row after the big group still posts, and nothing is cut whole.
+		expect(body).toContain(
+			"- **G-2 / F-121 [low]** Typo after the big group (`src/log.ts:1`)",
+		);
+		expect(body).not.toContain("group(s) cut to fit");
+		expect(lines.at(-1)).toBe("<!-- review-panel review=r1 -->");
 	});
 
 	it("names lost grouping and posts the flat list", () => {

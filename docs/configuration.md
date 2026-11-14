@@ -154,7 +154,9 @@ lowest member F-id. Group size is never shown as agreement or used to rank.
 The reply, `report.md` and the PR review comment show the grouped list: one header row per group,
 then a row per member with its F-id, severity, own title, seat, `file:line` and evidence. A group of one shows
 as one row with both ids. The summary line counts both (`8 findings in 5 groups`), and the Seats
-line names the grouping seat (`grouping (claude)`). `findings.json` stays the flat stamped list.
+line names the grouping seat (`grouping (claude)`). A group too long for the PR comment posts its header and the
+members that fit, then a line counting the members left out (all of them are in `report.md`), and
+the groups after it still post when they fit. `findings.json` stays the flat stamped list.
 The groups go in `groups.json` beside it: `version`, `runId`, the grouping seat (`rosterId`,
 `provider`, `model`) and `groups`, each `{ "id": "G-1", "findingIds": ["F-1", "F-3"] }`. A review
 signed with the record key also writes `groups.mac`, the MAC of the exact `groups.json` bytes.
