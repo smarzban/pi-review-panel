@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { GroupingFacts } from "../src/run/grouping.js";
+import { type GroupingFacts, groupedView } from "../src/run/grouping.js";
 import { renderReport } from "../src/run/render.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type {
@@ -511,5 +511,69 @@ describe("the grouped report.md", () => {
 
 	it("is unchanged without a grouping step", () => {
 		expect(report()).not.toContain("rouping");
+	});
+});
+
+describe("groupedView", () => {
+	const groupedAs = (groups: { id: string; findingIds: string[] }[]) =>
+		({
+			...GROUPED,
+			outcome: { kind: "grouped", groups },
+		}) satisfies GroupingFacts;
+
+	it("is undefined, and every surface shows the flat list, when the groups do not place every shown finding exactly once", () => {
+		for (const groups of [
+			// F-2 is in no group.
+			[
+				{ id: "G-1", findingIds: ["F-1", "F-3"] },
+				{ id: "G-2", findingIds: ["F-4"] },
+			],
+			// F-9 is not a shown finding.
+			[
+				{ id: "G-1", findingIds: ["F-1", "F-3"] },
+				{ id: "G-2", findingIds: ["F-4", "F-9"] },
+				{ id: "G-3", findingIds: ["F-2"] },
+			],
+			// F-1 is in two groups.
+			[
+				{ id: "G-1", findingIds: ["F-1", "F-3"] },
+				{ id: "G-2", findingIds: ["F-4", "F-1"] },
+				{ id: "G-3", findingIds: ["F-2"] },
+			],
+			// An empty group.
+			[
+				{ id: "G-1", findingIds: ["F-1", "F-3"] },
+				{ id: "G-2", findingIds: ["F-4"] },
+				{ id: "G-3", findingIds: ["F-2"] },
+				{ id: "G-4", findingIds: [] },
+			],
+		]) {
+			const grouping = groupedAs(groups);
+			expect(groupedView(FINDINGS, grouping)).toBeUndefined();
+			const text = reply(grouping);
+			expect(text).toContain("2/2 voted · 4 findings ·");
+			expect(text).not.toMatch(/\bG-\d/);
+			expect(text).toContain(
+				"- F-3 [high] Tenant data leaks through the shared cache (src/cache.ts:511) — kimi/holistic",
+			);
+			expect(round(grouping)).not.toMatch(/\bG-\d/);
+			expect(report(grouping)).not.toMatch(/\bG-\d/);
+		}
+		// The same findings with every one placed once are grouped.
+		expect(
+			groupedView(
+				FINDINGS,
+				groupedAs([
+					{ id: "G-1", findingIds: ["F-1", "F-3"] },
+					{ id: "G-2", findingIds: ["F-4"] },
+					{ id: "G-3", findingIds: ["F-2"] },
+				]),
+			)?.map((group) => group.id),
+		).toEqual(["G-1", "G-2", "G-3"]);
+	});
+
+	it("is undefined without a grouping step or with lost grouping", () => {
+		expect(groupedView(FINDINGS, undefined)).toBeUndefined();
+		expect(groupedView(FINDINGS, LOST)).toBeUndefined();
 	});
 });

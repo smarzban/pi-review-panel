@@ -22,6 +22,7 @@ import {
 } from "../src/run/grouping.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
 import { RunReviewError, runReview } from "../src/run/run-review.js";
+import { RunCancelledError } from "../src/run/scheduler.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import type { runGroupingSeat } from "../src/seat/run-seat.js";
 import { TEST_RECORD_KEY, testGroupsMac } from "./fixtures/record-key.js";
@@ -124,6 +125,31 @@ const GROUPED: FakeResponse = {
 	],
 };
 
+/** A cancelled run: one record, incomplete, with no groups and no grouping outcome. */
+function expectCancelledRecord(error: unknown): void {
+	expect(error).toBeInstanceOf(RunReviewError);
+	expect((error as RunReviewError).cause).toBeInstanceOf(RunCancelledError);
+	const runs = path.join(repo, ".review-panel", "runs");
+	const ids = readdirSync(runs);
+	expect(ids).toHaveLength(1);
+	const recordPath = path.join(runs, ids[0] as string);
+	// Both reviewers settled and were recorded before the grouping step.
+	expect(readdirSync(path.join(recordPath, "seats")).sort()).toEqual([
+		"0.json",
+		"0.mac",
+		"1.json",
+		"1.mac",
+	]);
+	expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(false);
+	expect(existsSync(path.join(recordPath, GROUPS_FILE))).toBe(false);
+	expect(existsSync(path.join(recordPath, GROUPS_MAC_FILE))).toBe(false);
+	const execution = JSON.parse(
+		readFileSync(path.join(recordPath, "execution.json"), "utf8"),
+	) as { cancelled: boolean; grouping?: unknown };
+	expect(execution.cancelled).toBe(true);
+	expect(execution).not.toHaveProperty("grouping");
+}
+
 async function review(
 	options: {
 		reviewers?: FakeResponse[];
@@ -133,6 +159,8 @@ async function review(
 		abort?: AbortController;
 		/** Stands in for the grouping seat, through both run hooks. */
 		runGroupingSeat?: typeof runGroupingSeat;
+		/** Stands in for the grouping step. */
+		groupingStep?: typeof runGroupingStep;
 	} = {},
 ) {
 	repo = createHostRepo();
@@ -155,6 +183,9 @@ async function review(
 		{
 			sessionFactory: fake.factory,
 			recordKey: TEST_RECORD_KEY,
+			...(options.groupingStep === undefined
+				? {}
+				: { runGroupingStep: options.groupingStep }),
 			...(options.runGroupingSeat === undefined
 				? {}
 				: {
@@ -376,6 +407,18 @@ describe("the grouping step", () => {
 			class: "provider-error",
 		});
 		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		// report.md names the lost grouping above the flat list.
+		const report = readFileSync(
+			path.join(result.recordPath, "report.md"),
+			"utf8",
+		);
+		const lost =
+			"Lost: grouping (opus, provider-error). The list below is not grouped.";
+		expect(report).toContain(lost);
+		expect(report.indexOf(lost)).toBeLessThan(report.indexOf("### F-1 ["));
+		expect(report).not.toMatch(/### G-\d/);
+		expect(report).toContain("- Outcome: lost");
+		expect(report).toContain("- Failure class: provider-error");
 	});
 
 	it("falls back to the flat list when the grouping seat runs out of its budget", async () => {
@@ -488,13 +531,28 @@ describe("the grouping step", () => {
 		}
 		abort.abort();
 		const error = await settled;
-		expect(error).toBeInstanceOf(RunReviewError);
-		const runs = path.join(repo, ".review-panel", "runs");
-		const [runId] = readdirSync(runs);
-		expect(existsSync(path.join(runs, runId ?? "", COMPLETE_MARKER))).toBe(
-			false,
+		expectCancelledRecord(error);
+	});
+
+	it("writes no groups when the host cancels as a grouping is submitted", async () => {
+		const abort = new AbortController();
+		const outcomes: string[] = [];
+		const { run } = await review({
+			abort,
+			// The seat submits a valid grouping; the host cancels right after.
+			groupingStep: async (input, stepOptions) => {
+				const facts = await runGroupingStep(input, stepOptions);
+				outcomes.push(facts.outcome.kind);
+				abort.abort();
+				return facts;
+			},
+		});
+		const error = await run.then(
+			() => undefined,
+			(caught: unknown) => caught,
 		);
-		expect(existsSync(path.join(runs, runId ?? "", GROUPS_FILE))).toBe(false);
+		expect(outcomes).toEqual(["grouped"]);
+		expectCancelledRecord(error);
 	});
 });
 
