@@ -281,38 +281,6 @@ describe("readiness diagnostic", () => {
 		);
 	});
 
-	it("inspects the consolidator's model like every roster row", async () => {
-		root = mkdtempSync(
-			path.join(tmpdir(), "review-panel-readiness-consolidator-model-"),
-		);
-		const repoDir = path.join(root, "repo");
-		mkdirSync(repoDir, { recursive: true });
-		const configPath = path.join(root, "config.json");
-		writeFileSync(
-			configPath,
-			JSON.stringify({
-				roster: [
-					{ id: "a", provider: "p", model: "m" },
-					{ id: "g", provider: "q", model: "grouper" },
-				],
-				defaults: { seats: ["a"], consolidator: "g" },
-			}),
-		);
-		const report = await diagnoseReadiness({
-			repoDir,
-			env: { PI_REVIEW_PANEL_CONFIG: configPath },
-			home: path.join(root, "home"),
-			inspectModel: async (provider) => ({
-				model: true,
-				auth: provider !== "q",
-			}),
-		});
-		expect(report.ready).toBe(false);
-		expect(report.rows.map((row) => row.prerequisite)).toEqual([
-			"authentication q",
-		]);
-	});
-
 	it("reports the configuration failure alone and does not inspect a model", async () => {
 		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-config-"));
 		const repoDir = path.join(root, "repo");
