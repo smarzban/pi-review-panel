@@ -486,7 +486,9 @@ export function renderAuditResult(input: {
 		facts.outcome.kind === "voted" ? facts.outcome.findings : [],
 	);
 	const areas = [
-		...new Set(findings.map((finding) => finding.file.split("/")[0] ?? ".")),
+		...new Set(
+			findings.map((finding) => inertLine(finding.file.split("/")[0] ?? ".")),
+		),
 	].sort();
 	const lines = [
 		"# Repository audit",

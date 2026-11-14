@@ -86,6 +86,26 @@ describe("seat-authored finding text is cleaned", () => {
 		expect(text).not.toMatch(/[‮​﻿]|\u{E0041}/u);
 	});
 
+	it("in the audit reply's Areas line", () => {
+		const planted: StampedFinding = {
+			...hostile,
+			finding: { ...hostile.finding, file: `bad${RLO}\n# planted/a.ts` },
+		};
+		const text = renderAuditResult({
+			recordPath: "/tmp/audit-2",
+			panel: [seat],
+			result: {
+				recordPath: "/tmp/audit-2",
+				outcomes: [
+					{ ...voted, outcome: { kind: "voted", findings: [planted.finding] } },
+				],
+			} as never,
+		});
+		expect(text).toContain(`Areas: bad${R} # planted\n`);
+		expect(text).not.toMatch(/^# planted/m);
+		expect(text).not.toMatch(/[\u202E\u200B\uFEFF]|\u{E0041}/u);
+	});
+
 	it("in the audit reply", () => {
 		const text = renderAuditResult({
 			recordPath: "/tmp/audit-1",
@@ -153,6 +173,33 @@ describe("seat-authored finding text is cleaned", () => {
 		expect(report).not.toMatch(/[‮​﻿]|\u{E0041}/u);
 	});
 
+	it("in report.md's prior discard reason", () => {
+		const report = renderReport({
+			meta: {
+				runId: "run-2",
+				baseRef: "main",
+				baseOid: "a".repeat(40),
+				headOid: "b".repeat(40),
+			},
+			stamped: [hostile],
+			outcomes: [voted],
+			annotations: {
+				flags: [
+					{
+						findingId: "F-1",
+						reason: `not real${ZWSP}\n\n### F-9 [high] planted`,
+					},
+				],
+				notices: [],
+			},
+		});
+		expect(report).toContain(
+			`- Prior discard reason: not real${R} ### F-9 [high] planted\n`,
+		);
+		expect(report).not.toMatch(/^#+ F-9/m);
+		expect(report).not.toMatch(/[\u202E\u200B\uFEFF]|\u{E0041}/u);
+	});
+
 	it("in the audit report.md", () => {
 		const report = renderAuditReport({
 			runId: "audit-1",
@@ -165,6 +212,33 @@ describe("seat-authored finding text is cleaned", () => {
 		expect(report).toContain(`- Evidence: ${cleanEvidence}\n`);
 		expect(report).not.toMatch(/^#+ F-9/m);
 		expect(report).not.toMatch(/[‮​﻿]|\u{E0041}/u);
+	});
+
+	it("cuts long text by code point, never inside a surrogate pair", () => {
+		const emoji = "\u{1F600}";
+		const long: StampedFinding = {
+			...hostile,
+			finding: {
+				...hostile.finding,
+				title: `${"t".repeat(199)}${emoji}x`,
+				evidence: `${"e".repeat(279)}${emoji}x`,
+			},
+		};
+		const data = buildVerifyFindingData([long]);
+		expect(data).toContain(`${"t".repeat(199)}${emoji} (`);
+		expect(data).toContain(`${"e".repeat(279)}${emoji}`);
+		expect(data).not.toContain(`${emoji}x`);
+		const reply = renderReviewResult({
+			recordPath: "/tmp/run-3",
+			panel: [seat],
+			result: {
+				recordPath: "/tmp/run-3",
+				outcomes: [voted],
+			} as unknown as RunReviewResult,
+			findings: [long],
+		});
+		expect(reply).toContain(`  ${"e".repeat(279)}${emoji}…`);
+		expect(reply).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
 	});
 
 	it("in the kept-finding data handed to verify seats", () => {
