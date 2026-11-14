@@ -98,6 +98,20 @@ describe("planVerifySeats", () => {
 		).toEqual(["claude", "qwen"]);
 	});
 
+	it("uses the owner's defaults.verifySeats when set, unless the caller selects seats", () => {
+		const verifyConfig: Config = {
+			...multiSeatConfig,
+			defaults: { ...multiSeatConfig.defaults, verifySeats: ["qwen", "claude"] },
+		};
+		expect(planVerifySeats(verifyConfig).map((seat) => seat.rosterId)).toEqual([
+			"qwen",
+			"claude",
+		]);
+		expect(
+			planVerifySeats(verifyConfig, ["terra"]).map((seat) => seat.rosterId),
+		).toEqual(["terra"]);
+	});
+
 	it("refuses more than two explicit verification seats", () => {
 		expect(() =>
 			planVerifySeats(multiSeatConfig, ["terra", "claude", "qwen"]),
