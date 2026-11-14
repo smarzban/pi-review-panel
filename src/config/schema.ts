@@ -13,12 +13,20 @@ export type ConfigDefaults = {
 	lenses?: string[];
 	seatBudgetMs?: number;
 	/**
+	 * Optional roster ids that run verify, 1 to MAX_VERIFY_SEATS, unique.
+	 * Omitted means the first `seats` entry. A caller's `seats` still wins.
+	 */
+	verifySeats?: string[];
+	/**
 	 * How review and verify rounds reach the open PR: `"auto"` (the default
 	 * when absent) posts each round; `"ownerApproved"` posts a round only when
 	 * the call also passes `ownerApproved: true`.
 	 */
 	prComment?: PrCommentMode;
 };
+
+/** Verify runs at most this many seats, from the caller or the owner config. */
+export const MAX_VERIFY_SEATS = 2;
 
 export type PrCommentMode = "auto" | "ownerApproved";
 
@@ -53,6 +61,7 @@ const defaultsFields = new Set([
 	"seats",
 	"lenses",
 	"seatBudgetMs",
+	"verifySeats",
 	"prComment",
 ]);
 
@@ -141,6 +150,52 @@ function validateStringList(
 	}
 }
 
+function validateVerifySeats(
+	value: unknown,
+	rosterIds: ReadonlySet<string>,
+	errors: ConfigError[],
+): void {
+	const field = "defaults.verifySeats";
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.length > MAX_VERIFY_SEATS
+	) {
+		errors.push({
+			row: -1,
+			field,
+			message: `must be an array of 1 to ${MAX_VERIFY_SEATS} roster ids`,
+		});
+		return;
+	}
+
+	const seen = new Set<string>();
+	for (const [index, item] of value.entries()) {
+		const itemField = `${field}[${index}]`;
+		if (!isNonEmptyString(item)) {
+			errors.push({
+				row: index,
+				field: itemField,
+				message: "must be a non-empty string",
+			});
+		} else if (seen.has(item)) {
+			errors.push({
+				row: index,
+				field: itemField,
+				message: "must not repeat an earlier roster id",
+			});
+		} else if (!rosterIds.has(item)) {
+			errors.push({
+				row: index,
+				field: itemField,
+				message: "must name a roster id",
+			});
+		} else {
+			seen.add(item);
+		}
+	}
+}
+
 export function validateConfig(document: unknown): ConfigResult {
 	if (!isObject(document)) {
 		return {
@@ -151,6 +206,7 @@ export function validateConfig(document: unknown): ConfigResult {
 
 	const errors: ConfigError[] = [];
 	rejectUnknownFields(document, rootFields, -1, errors);
+	const seenIds = new Set<string>();
 
 	if (!Object.hasOwn(document, "roster")) {
 		errors.push({ row: -1, field: "roster", message: "is required" });
@@ -161,7 +217,6 @@ export function validateConfig(document: unknown): ConfigResult {
 			message: "must be a non-empty array of roster rows",
 		});
 	} else {
-		const seenIds = new Set<string>();
 		for (const [rowIndex, row] of document.roster.entries()) {
 			if (!isObject(row)) {
 				errors.push({
@@ -259,6 +314,10 @@ export function validateConfig(document: unknown): ConfigResult {
 			}
 		}
 
+		if (Object.hasOwn(defaults, "verifySeats")) {
+			validateVerifySeats(defaults.verifySeats, seenIds, errors);
+		}
+
 		if (
 			Object.hasOwn(defaults, "prComment") &&
 			!PR_COMMENT_MODES.includes(defaults.prComment as PrCommentMode)
@@ -284,6 +343,9 @@ export function validateConfig(document: unknown): ConfigResult {
 	}
 	if (Object.hasOwn(defaultsRecord, "seatBudgetMs")) {
 		configDefaults.seatBudgetMs = defaultsRecord.seatBudgetMs as number;
+	}
+	if (Object.hasOwn(defaultsRecord, "verifySeats")) {
+		configDefaults.verifySeats = defaultsRecord.verifySeats as string[];
 	}
 	if (Object.hasOwn(defaultsRecord, "prComment")) {
 		configDefaults.prComment = defaultsRecord.prComment as PrCommentMode;

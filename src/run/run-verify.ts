@@ -2,7 +2,11 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { loadRoleTable } from "../config/roles.js";
-import type { Config, RosterRow } from "../config/schema.js";
+import {
+	type Config,
+	MAX_VERIFY_SEATS,
+	type RosterRow,
+} from "../config/schema.js";
 import { SEAT_PROFILES } from "../seat/channel-profile.js";
 import type { FailureClass } from "../seat/classify.js";
 import {
@@ -22,7 +26,6 @@ import type { PlannedSeat, StampedFinding } from "./types.js";
 
 const VERIFY_LENS = "fix-verification";
 export const DEFAULT_VERIFY_SEATS = 1;
-export const MAX_VERIFY_SEATS = 2;
 
 export type VerifySeatOutcome = {
 	seat: PlannedSeat;
@@ -95,7 +98,10 @@ function resolveAliases(
 	return rows;
 }
 
-/** Default to one independent check; high-stakes callers can select a second. */
+/**
+ * The caller's `seats` win; otherwise the owner's `defaults.verifySeats`;
+ * otherwise one independent check on the first default seat.
+ */
 export function planVerifySeats(
 	config: Config,
 	seats?: string[],
@@ -109,7 +115,10 @@ export function planVerifySeats(
 			`Verify selects ${seats.length} seats; expected at most two`,
 		);
 	}
-	const aliases = seats ?? config.defaults.seats.slice(0, DEFAULT_VERIFY_SEATS);
+	const aliases =
+		seats ??
+		config.defaults.verifySeats ??
+		config.defaults.seats.slice(0, DEFAULT_VERIFY_SEATS);
 	return resolveAliases(aliases, config.roster).map((row) => {
 		const seat: PlannedSeat = {
 			rosterId: row.id,
