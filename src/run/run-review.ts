@@ -358,6 +358,7 @@ export async function executeReview(
 				stamped,
 				outcomes,
 				annotations,
+				...(grouping === undefined ? {} : { grouping }),
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined
 					? {}

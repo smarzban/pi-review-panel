@@ -256,6 +256,14 @@ describe("the grouping step", () => {
 		expect(execution.lostCoverage).toEqual([]);
 		expect(execution.grouping?.seat.rosterId).toBe("opus");
 		expect(execution.grouping?.outcome.kind).toBe("grouped");
+		const report = readFileSync(
+			path.join(result.recordPath, "report.md"),
+			"utf8",
+		);
+		expect(report).toContain(
+			"### G-1 [high, stated by a seat] Cache key ignores the tenant",
+		);
+		expect(report).toContain("### G-3 / F-2 [low] Typo in the log line");
 		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
 			true,
 		);

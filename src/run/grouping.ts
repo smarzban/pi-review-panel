@@ -423,3 +423,66 @@ export function isGroupId(id: string): boolean {
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/** One group as it is shown: its members' own findings, never a merged one. */
+export type GroupView = {
+	id: string;
+	/** The highest severity a seat stated among the members. */
+	severity: Finding["severity"];
+	/** The lowest member F-id: its title heads the group. */
+	lead: StampedFinding;
+	/** Every member, in F-id order, exactly as stamped. */
+	members: StampedFinding[];
+};
+
+/**
+ * The grouped list to show, in G-id order, or undefined when there is none
+ * to show (no grouping step, lost grouping, or groups that do not place
+ * every shown finding exactly once): the caller then shows the flat list.
+ */
+export function groupedView(
+	findings: readonly StampedFinding[],
+	grouping: GroupingFacts | undefined,
+): GroupView[] | undefined {
+	if (grouping?.outcome.kind !== "grouped") {
+		return undefined;
+	}
+	const byId = new Map(findings.map((row) => [row.id, row]));
+	const placed = new Set<string>();
+	const views: GroupView[] = [];
+	for (const group of grouping.outcome.groups) {
+		const members: StampedFinding[] = [];
+		for (const id of [...group.findingIds].sort(compareFindingIds)) {
+			const row = byId.get(id);
+			if (row === undefined || placed.has(id)) {
+				return undefined;
+			}
+			placed.add(id);
+			members.push(row);
+		}
+		const lead = members[0];
+		if (lead === undefined) {
+			return undefined;
+		}
+		views.push({
+			id: group.id,
+			severity: groupSeverity(group, byId),
+			lead,
+			members,
+		});
+	}
+	return placed.size === byId.size ? views : undefined;
+}
+
+/** `Lost: grouping (<roster id>, <failure class>)`, when grouping was lost. */
+export function groupingLostLine(
+	grouping: GroupingFacts | undefined,
+): string | undefined {
+	if (grouping?.outcome.kind !== "lost") {
+		return undefined;
+	}
+	return `Lost: grouping (${grouping.seat.rosterId}, ${grouping.outcome.class})`;
+}
+
+/** How a group header labels its severity: the highest one a seat stated. */
+export const GROUP_SEVERITY_LABEL = "stated by a seat";
