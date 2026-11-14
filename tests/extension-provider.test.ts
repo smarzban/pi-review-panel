@@ -217,7 +217,9 @@ describe("readiness for a provider registered by a seat extension", () => {
 				},
 				{ id: "bare", provider: PROVIDER },
 			],
-			{ inspectionTimeoutMs: 200 },
+			// The bound also covers the healthy row, which loads Pi's real SDK:
+			// it must be long enough for that under a loaded test run.
+			{ inspectionTimeoutMs: 3_000 },
 		);
 
 		expect(report).toEqual({
@@ -225,7 +227,7 @@ describe("readiness for a provider registered by a seat extension", () => {
 			rows: [
 				{
 					prerequisite: `readiness check ${HANGING_PROVIDER}/${MODEL} (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION})`,
-					remediation: `The readiness check for "${HANGING_PROVIDER}/${MODEL}" timed out after 0.2 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
+					remediation: `The readiness check for "${HANGING_PROVIDER}/${MODEL}" timed out after 3 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
 				},
 				...modelRows(PROVIDER),
 			],
@@ -274,7 +276,7 @@ describe("readiness for a provider registered by a seat extension", () => {
 				},
 				{ id: "bare", provider: PROVIDER },
 			],
-			{ inspectionTimeoutMs: 1_000 },
+			{ inspectionTimeoutMs: 3_000 },
 		);
 
 		expect(report).toEqual({
@@ -282,7 +284,7 @@ describe("readiness for a provider registered by a seat extension", () => {
 			rows: [
 				{
 					prerequisite: `readiness check ${PROVIDER}/${MODEL} (${PROVIDER_EXTENSION}, ${HANGING_LOAD_EXTENSION})`,
-					remediation: `The readiness check for "${PROVIDER}/${MODEL}" timed out after 1 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_LOAD_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
+					remediation: `The readiness check for "${PROVIDER}/${MODEL}" timed out after 3 s while loading its extensions (${PROVIDER_EXTENSION}, ${HANGING_LOAD_EXTENSION}) and checking provider auth. Fix or remove the extension that does not finish.`,
 				},
 				...modelRows(PROVIDER),
 			],
