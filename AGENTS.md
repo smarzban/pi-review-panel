@@ -153,9 +153,10 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   from the SDK loader's `systemPrompt` option. Seats pass literal role text through that option
   (`src/seat/channel-profile.ts`), so it must never name an existing file; pass a prompt file only
   as an absolute path to a file we own.
-- Built-in path args are normalized before use (Unicode-space fold, `@` strip, `~` expand,
-  `file://` decode, and on Windows the MSYS-style `/c/...` to `C:\...` drive rewrite). Guards must
-  apply the same normalization. The seat guard does not yet mirror the Windows drive rewrite (T491).
+- Built-in path args are normalized before use (Unicode-space fold, `@` strip, on Windows only the
+  MSYS `/c/...`, WSL `/mnt/c/...` and Cygwin `/cygdrive/c/...` to `C:\...` drive rewrite, then `~`
+  expand and `file://` decode), and the session cwd gets the same rewrite. Guards must apply the
+  same normalization in the same order.
 - `read` retries with path variants. A confinement check must confine the whole candidate set for
   `read`.
 - Tool args are coerced then validated BEFORE `execute`. Declare a permissive envelope and validate
