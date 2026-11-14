@@ -6,8 +6,29 @@ import {
 	resolveSeatRuntime,
 	type SeatServicesSdk,
 } from "../seat/seat-runtime.js";
-import { type ConfigEnv, loadConfig } from "./load.js";
+import {
+	type ConfigEnv,
+	ConfigInvalidError,
+	ConfigRefusedError,
+	loadConfig,
+} from "./load.js";
 import type { Config } from "./schema.js";
+
+/**
+ * What to do about a config that cannot be loaded, naming the problem but
+ * never echoing the file's content or path.
+ */
+function configRemediation(error: unknown): string {
+	if (error instanceof ConfigInvalidError) {
+		return `Fix the owner config: ${error.causes}.`;
+	}
+	if (error instanceof ConfigRefusedError) {
+		return error.problem === "not-json"
+			? "Fix the owner config: it is not valid JSON."
+			: "Move the owner config outside the reviewed repository; a config inside it is refused.";
+	}
+	return "Create the outside-repository config shown in the configuration guide.";
+}
 
 /** One concrete setup prerequisite that prevents model work. */
 export type ReadinessRow = {
@@ -147,14 +168,13 @@ export async function diagnoseReadiness(
 			env: input.env,
 			home: input.home,
 		});
-	} catch {
+	} catch (error) {
 		return {
 			ready: false,
 			rows: [
 				{
 					prerequisite: "configuration",
-					remediation:
-						"Create the outside-repository config shown in the configuration guide.",
+					remediation: configRemediation(error),
 				},
 			],
 		};

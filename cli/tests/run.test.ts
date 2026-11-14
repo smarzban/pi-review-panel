@@ -222,6 +222,72 @@ describe("action commands map flags onto the tool's arguments", () => {
 		});
 	});
 
+	it("review: --no-pr-comment, --pr and --owner-approved", async () => {
+		const h = harness();
+		const code = await h.run([
+			"review",
+			"--base",
+			"main",
+			"--head",
+			"HEAD",
+			"--no-pr-comment",
+			"--pr",
+			"12",
+			"--owner-approved",
+		]);
+		expect(code).toBe(EXIT_OK);
+		expect(h.calls.review?.[0]?.input).toEqual({
+			repoDir: REPO,
+			base: "main",
+			head: "HEAD",
+			prComment: false,
+			pr: 12,
+			ownerApproved: true,
+		});
+	});
+
+	it("verify: --dismissed, --low-advisory, --owner-approved, --pr and --no-pr-comment", async () => {
+		const h = harness({ stdin: '[{"id":"F-2","reason":"by design"}]' });
+		const code = await h.run([
+			"verify",
+			"--prior-run-id",
+			"run-1",
+			"--head",
+			"HEAD",
+			"--kept-finding-ids",
+			"F-1",
+			"--dismissed",
+			"-",
+			"--low-advisory",
+			"F-3,F-4",
+			"--owner-approved",
+			"--pr",
+			"7",
+			"--no-pr-comment",
+		]);
+		expect(code).toBe(EXIT_OK);
+		expect(h.calls.verify?.[0]?.input).toEqual({
+			repoDir: REPO,
+			priorRunId: "run-1",
+			head: "HEAD",
+			keptFindingIds: ["F-1"],
+			dismissed: [{ id: "F-2", reason: "by design" }],
+			lowAdvisory: ["F-3", "F-4"],
+			ownerApproved: true,
+			pr: 7,
+			prComment: false,
+		});
+	});
+
+	it('call coerces prComment "false" like the tool', async () => {
+		const h = harness();
+		await h.run([
+			"call",
+			'{"action":"review","base":"main","head":"HEAD","prComment":"false"}',
+		]);
+		expect(h.calls.review?.[0]?.input.prComment).toBe(false);
+	});
+
 	it("comment: --dismissed - reads stdin", async () => {
 		const h = harness({ stdin: '[{"id":"F-1","reason":"dup"}]' });
 		await h.run([

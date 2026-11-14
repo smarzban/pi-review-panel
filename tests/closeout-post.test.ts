@@ -146,3 +146,33 @@ describe("postCloseoutComment", () => {
 		).toThrow(/## Review panel/);
 	});
 });
+
+describe("postCloseoutComment reads every page of comments", () => {
+	it("updates its card when it is on the second page gh prints", () => {
+		const filler = Array.from({ length: 30 }, (_, index) => ({
+			id: 100 + index,
+			user: { login: "other" },
+			body: "hi",
+		}));
+		const ours = { id: 7, user: { login: "saeed" }, body: BODY };
+		const { calls, run } = posterWith((call) => {
+			if (is(call, "repo", "view")) {
+				return "smarzban/demo";
+			}
+			if (is(call, "user")) {
+				return "saeed";
+			}
+			if (is(call, "issues/29/comments") && !is(call, "--method")) {
+				return `${JSON.stringify(filler)}\n${JSON.stringify([ours])}\n`;
+			}
+			if (is(call, "--method", "PATCH")) {
+				return JSON.stringify({ id: 7, html_url: "https://example.test/7" });
+			}
+			throw new Error(`unexpected gh ${call.args.join(" ")}`);
+		});
+		expect(run({ repository: "/repo", body: BODY, pr: 29 }).action).toBe(
+			"updated",
+		);
+		expect(calls.some((call) => is(call, "--method", "POST"))).toBe(false);
+	});
+});

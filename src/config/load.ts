@@ -19,6 +19,32 @@ export const EXAMPLE_CONFIG = `{
   }
 }`;
 
+/** The owner config exists and parses, but a field does not validate. */
+export class ConfigInvalidError extends Error {
+	/** Each invalid field with what it must be, joined by `; `. */
+	readonly causes: string;
+
+	constructor(message: string, causes: string) {
+		super(message);
+		this.name = "ConfigInvalidError";
+		this.causes = causes;
+	}
+}
+
+/**
+ * The owner config cannot be used for a reason readiness can name without
+ * echoing the file: it is not JSON, or it sits inside the repository.
+ */
+export class ConfigRefusedError extends Error {
+	readonly problem: "not-json" | "inside-repository";
+
+	constructor(message: string, problem: ConfigRefusedError["problem"]) {
+		super(message);
+		this.name = "ConfigRefusedError";
+		this.problem = problem;
+	}
+}
+
 export function resolveConfigPath({
 	env,
 	home,
@@ -84,8 +110,9 @@ export function loadConfig({
 
 	const repoRoot = path.resolve(repoDir);
 	if (isInside(repoRoot, path.resolve(selected))) {
-		throw new Error(
+		throw new ConfigRefusedError(
 			`Config path "${selected}" is inside the reviewed repository "${repoDir}" and is refused`,
+			"inside-repository",
 		);
 	}
 
@@ -118,8 +145,9 @@ export function loadConfig({
 	}
 
 	if (isInside(canonicalRoot, canonicalTarget)) {
-		throw new Error(
+		throw new ConfigRefusedError(
 			`Config path "${selected}" resolves inside the reviewed repository "${repoDir}" and is refused`,
+			"inside-repository",
 		);
 	}
 
@@ -136,8 +164,9 @@ export function loadConfig({
 	try {
 		document = JSON.parse(bytes);
 	} catch (error) {
-		throw new Error(
+		throw new ConfigRefusedError(
 			`Failed to parse config "${selected}": ${causeDetail(error)}`,
+			"not-json",
 		);
 	}
 
@@ -146,7 +175,10 @@ export function loadConfig({
 		const causes = result.errors
 			.map((error: ConfigError) => `${error.field} ${error.message}`)
 			.join("; ");
-		throw new Error(`Config "${selected}" is invalid: ${causes}`);
+		throw new ConfigInvalidError(
+			`Config "${selected}" is invalid: ${causes}`,
+			causes,
+		);
 	}
 
 	return result.config;

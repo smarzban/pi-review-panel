@@ -55,6 +55,11 @@ Save these exact bytes as your config file (the entry below names the file locat
   - `lenses`: package-owned lens names (see below), no repeats.
   - `seatBudgetMs` (optional): per-seat wall-clock budget in milliseconds, an integer from 1 through
     2147483647. Omitted uses the built-in default of 1200000 ms (20 minutes).
+  - `prComment` (optional): how review and verify rounds reach the open pull request. `"auto"`,
+    the default when the field is absent, posts each round. `"ownerApproved"` posts a round only
+    when the call also passes `ownerApproved: true` (CLI `--owner-approved`); without it the reply
+    ends with `PR comment: not posted (the owner config asks for approval first)`. Any other value
+    refuses the config. See [Posting rounds to the pull request](#posting-rounds-to-the-pull-request).
 - Unknown fields refuse at every level: the root, each roster row, and `defaults` each reject keys
   they do not declare. Any single error refuses the whole config; there is no partial acceptance.
 
@@ -235,6 +240,114 @@ moment, and stays that way if the process is killed in that moment (a failed wri
 removes it). A `run.lock` that names no pid is therefore one another process is still writing, or
 one a crashed process left unfinished: it is refused, never taken over, and the message says to
 delete it when no review_panel run is active.
+
+## Posting rounds to the pull request
+
+When a review or verify run's head commit is the head of exactly one open pull request, the tool
+posts that round to it as a new comment when the run finishes. It finds the PR with
+`gh api repos/{owner}/{repo}/commits/<head-oid>/pulls`, keeping open PRs whose head is that commit;
+`pr` (CLI `--pr`) names one instead. The same rule holds for public and private repositories.
+
+- A review posts `## Review panel · review`: the reply's summary, `Seats:`, `Lost:`, findings and
+  `Suggest:`, with the run id instead of the local record path.
+- Each verify posts `## Review panel · verify N`. N starts one past the earlier verifies of the
+  same review whose comment reached the PR (each records that in its run record). The number is
+  then claimed in the review's run record, by these rules:
+  - The verify skips every N with a `round-<N>.posted`, then creates `round-<N>.claim`
+    exclusively (`wx`), holding the verify run id, its process id, the host name and when.
+  - After the create it checks `round-<N>.posted` again: another verify can post N and settle
+    between the first check and the create. If it is there now, the verify deletes its claim and
+    tries N+1.
+  - Once the comment is on the PR, the verify writes `round-<N>.posted` exclusively and then
+    deletes its claim. If the post fails, it deletes its claim and the reply says so
+    (`… ; verify 1 is left for the next verify`), so a waiting or later verify takes that number.
+  - A claim another verify still holds is waited on. The verify stops waiting while 30 s of the
+    round's 60 s deadline are still left, and once it has waited it takes no claim after that
+    point, so a claim it wins after waiting always has time for its POST. When it gives up it
+    posts no comment for that round, and the reply says
+    `PR comment: not posted (another verify is still posting verify N)`.
+  - A stale claim, left by a verify that crashed, is never taken over, renamed or removed. It
+    stays where it is and the verify tries N+1. A claim is stale when it is older than the round
+    deadline plus 5 s (65 s), or when it was made on this host and its process is gone. A claim
+    from another host (a shared network folder, a container and its host) is judged by age
+    alone. A folder synced by Dropbox, iCloud or Syncthing is not supported: an exclusive create
+    does not exclude anything across a sync. A claim with unreadable content is judged by its age on disk.
+  - Mutual exclusion comes only from the exclusive create, so two verifies never hold the same
+    number at once. A crash can leave a gap in the numbering (`verify 3` after `verify 1`), never a
+    duplicate. One case is set aside: when `gh` reports a POST as failed (it timed out or was
+    interrupted) after GitHub had already accepted it, the number is given back and the next
+    verify posts it again.
+  It lists each kept id as resolved, still present or inconclusive with the panel's one-line
+  evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept, and the
+  regressions as new findings. Verify checks `dismissed` and `lowAdvisory` against the review
+  record before any seat runs.
+- When every verify seat voted (none was lost), each marked every kept id resolved, and none
+  reported a regression, the verify also posts the close-out card as a separate comment,
+  `## Review panel · close-out`, built from the review, that verify and its `dismissed` and
+  `lowAdvisory`. A kept finding of any severity counts as fixed; a kept low need not be listed in
+  `lowAdvisory`. Otherwise only the verify comment is posted, and the reply says why, such as
+  `PR close-out: not posted (seats disagree on F-2)` or
+  `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card's `Lost:` line
+  names the review's lost seats; it never names a verify seat, because a lost verify seat stops
+  the automatic card.
+- The close-out posts at most once per review, by these rules and with the exceptions below:
+  - A `closeout.posted` in the review's run record means it is posted. The verify does not ask the
+    PR, and the reply says `PR close-out: not posted (this review's close-out is already posted)`.
+  - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
+    round claim, and checks `closeout.posted` again after the create. Only the creator of a claim
+    posts. Before posting it checks the PR's comments for a close-out of this review by the same
+    author (the manual card does not count; its heading differs). If one is there it writes
+    `closeout.posted` and posts nothing: `PR close-out: not posted (a close-out for this review is
+    already on PR #12)`.
+  - A posted card writes `closeout.posted` exclusively, then deletes the claim. A failed post
+    deletes the claim, so a later verify can post it.
+  - A live claim means another verify is posting it:
+    `PR close-out: not posted (another verify is posting this review's close-out)`.
+  - A stale claim (the same rule as for rounds) is never taken over. The verify checks the PR's
+    comments for the card. If it is there, the verify writes `closeout.posted` and stops. If not,
+    it tries `closeout.claim-2`, and so on up to `closeout.claim-5`. When all five are stale and
+    the card is not on the PR, nothing is posted, and the reply says
+    `PR close-out: not posted (closeout.claim-1 to closeout.claim-5 were all left by verifies that
+    stopped; delete them from the review's run record to post it)`.
+  - One case is set aside: a verify that crashes after GitHub accepted the card but before it
+    wrote `closeout.posted`. The PR-comment check catches it, so the next verify finds the card
+    and posts no second one.
+  - Another is set aside: a verify that is still posting but whose claim looks stale to another
+    verify can lead to a second card. That happens when it pauses for over 65 s mid-post, when
+    its machine's clock runs over 65 s behind the other's, or when it runs in a container that
+    shares the host's hostname in its own process namespace.
+- When the card cannot be built (for example a high or medium finding that was neither kept nor
+  dismissed with a reason), the reply says why.
+- An explicit `pr` must be an open pull request whose head is the run's head. Otherwise nothing is
+  posted and the reply says why, such as `PR comment: not posted (PR #7 is not open)`.
+- Every post is a new comment. Nothing edits or deletes an earlier one. Audit and resume never post.
+- `prComment: false` (CLI `--no-pr-comment`) turns posting off for one run.
+- No open PR, more than one, `gh` missing, signed out or failing: nothing is posted, and the reply
+  ends with one line saying why, such as `PR comment: not posted (no open PR has this head)`. A
+  failed post never fails the run and never changes an exit code.
+- Every posted body (the review and verify comments, the automatic close-out and the manual
+  `comment` card) uses one sanitizer. Text a seat wrote, dismissed reasons, record fields and refs
+  become one line of plain text: line breaks fold to spaces; `` \ ` * _ [ ] ( ) # ! < > | ~ & $ ``
+  are backslash-escaped, so no HTML, image, Markdown link, emphasis or heading forms; a zero-width
+  joiner follows every `@` and `＠`, every `#` (so `#123` and `owner/repo#123` do not link), the
+  `-` in `GH-123`, and the `:` of `://`; the dot of every `www.` is backslash-escaped, so neither a
+  URL nor a `www.` address becomes a link (checked with cmark-gfm, GitHub's Markdown engine).
+  Control, bidi and invisible characters become U+FFFD, except that an emoji keeps its
+  presentation selector (U+FE0F) and the joiners inside an emoji sequence, so `⚠️` posts as
+  itself. File names and ids are code spans whose fence is longer than any backtick run inside, so
+  they cannot be closed early; nothing is escaped or joined inside them, because GitHub forms no
+  mention, reference or link in a code span, and a copied path stays exact. The body is cut by whole rows below
+  GitHub's 65,536-character limit (saying how many were cut) and goes to `gh` on stdin.
+- `gh` runs asynchronously, so a slow call never blocks Pi; each call has a 30 s limit and one
+  round's calls share a 60 s deadline. Interrupting the run (Esc in Pi, Ctrl-C in the CLI) kills a
+  running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`. When
+  the interrupt comes after a verify claimed its round number, the claim is given back and the
+  reply says so: `PR comment: not posted (the run was interrupted; verify N is left for the next
+  verify)`. Comment listings read every page.
+
+The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
+or updates its own card with the heading `## Review panel`, separate from the automatic
+`## Review panel · close-out` comment. Its card is cut by whole rows below the same limit.
 
 ## Snapshot cleanup
 

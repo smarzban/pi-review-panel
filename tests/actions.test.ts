@@ -133,9 +133,23 @@ function deps(overrides: ActionDependencies = {}): ActionDependencies {
 		loadConfig: () => config,
 		recordKey: () => TEST_RECORD_KEY,
 		checkRecordKey: () => undefined,
+		runGh: noOpenPr,
 		...overrides,
 	};
 }
+
+/** A gh that finds no open PR at the head, so review and verify post nothing. */
+function noOpenPr(args: readonly string[]): string {
+	if (args[0] === "api" && args[1] === "user") {
+		return "saeed";
+	}
+	if (args[0] === "repo") {
+		return "smarzban/demo";
+	}
+	return "[]";
+}
+
+const NO_PR = "PR comment: not posted (no open PR has this head)";
 
 function textOf(result: ActionResult): string {
 	expect(result.content).toHaveLength(1);
@@ -343,6 +357,8 @@ describe("review_panel actions without Pi", () => {
 					`Record: \`${path.join(repo, ".review-panel", "runs", "r-1")}\``,
 					"",
 					"None submitted.",
+					"",
+					NO_PR,
 				].join("\n"),
 			);
 		});
@@ -385,6 +401,8 @@ describe("review_panel actions without Pi", () => {
 					`Record: \`${path.join(repo, ".review-panel", "runs", "r-2")}\``,
 					"",
 					"None submitted.",
+					"",
+					NO_PR,
 				].join("\n"),
 			);
 		});
@@ -442,6 +460,8 @@ describe("review_panel actions without Pi", () => {
 					"0/0 voted · no kept ids · no regressions",
 					"Seats: fix-verification (terra)",
 					`Record: \`${path.join(repo, ".review-panel", "runs", "v-1")}\``,
+					"",
+					NO_PR,
 				].join("\n"),
 			);
 		});

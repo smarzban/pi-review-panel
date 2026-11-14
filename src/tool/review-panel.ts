@@ -76,6 +76,7 @@ const parameters = Type.Object(
 		dismissed: Type.Optional(Type.Any()),
 		lowAdvisory: Type.Optional(Type.Any()),
 		verifyRunId: Type.Optional(nonEmpty),
+		prComment: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: true },
 );
@@ -124,8 +125,12 @@ export function prepareReviewArguments(args: unknown): unknown {
 	if (typeof next.dismissed === "string") {
 		next.dismissed = coerceJsonValue(next.dismissed);
 	}
-	if (next.ownerApproved === "true") {
-		next.ownerApproved = true;
+	for (const key of ["ownerApproved", "prComment"] as const) {
+		if (next[key] === "true") {
+			next[key] = true;
+		} else if (next[key] === "false") {
+			next[key] = false;
+		}
 	}
 	return next;
 }
@@ -148,7 +153,7 @@ export function createReviewPanelTool(
 		name: "review_panel",
 		label: "Review panel",
 		description:
-			"Diagnose setup, suggest lenses for a base...head change (no seat runs; you choose the lenses), review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
+			"Diagnose setup, suggest lenses for a base...head change (no seat runs; you choose the lenses), review an explicit base...head change, run an advisory whole-repository audit, verify a fix against a prior run, resume an interrupted review or audit run (only its unfinished seats run again), or post the owner-approved close-out comment. Review and verify post each round to the open PR whose head is the run's head by default (prComment: false skips it); a clean verify also posts the close-out card. Never call with {}. Review takes base and head. Omit repository when already in the repo. The tool writes a report and does not compute a merge decision.",
 		parameters,
 		prepareArguments: prepareReviewArguments,
 		async execute(_toolCallId, args, signal, onUpdate, context) {

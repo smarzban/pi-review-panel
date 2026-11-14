@@ -212,7 +212,7 @@ describe("renderCloseoutComment", () => {
 		expect(text).not.toContain("@org");
 		expect(text).not.toContain("@bot");
 		expect(text).toContain("F-1 auth bypass");
-		expect(text).toContain("(at)org/maintainers please land");
+		expect(text).toContain("@\u200Dorg/maintainers please land");
 	});
 
 	it("refuses a dismissed row without a reason", () => {

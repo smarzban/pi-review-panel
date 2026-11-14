@@ -12,10 +12,12 @@ import type { PlannedSeat, StampedFinding } from "../run/types.js";
 /** The public boundary never sends more than this many UTF-8 bytes. */
 export const MAX_PRESENTATION_BYTES = 16 * 1024;
 
-function fitPresentation(lines: string[]): string {
+/** `reserveBytes` keeps room for lines the caller appends after the report. */
+function fitPresentation(lines: string[], reserveBytes = 0): string {
 	const encoder = new TextEncoder();
+	const limit = MAX_PRESENTATION_BYTES - reserveBytes;
 	const joined = lines.join("\n");
-	if (encoder.encode(joined).length <= MAX_PRESENTATION_BYTES) {
+	if (encoder.encode(joined).length <= limit) {
 		return joined;
 	}
 	const recordIndex = lines.findIndex((line) => line.startsWith("Record:"));
@@ -26,7 +28,7 @@ function fitPresentation(lines: string[]): string {
 		rest.pop();
 		const omitted = "- additional row(s) omitted.";
 		const candidate = [...head, ...rest, omitted].join("\n");
-		if (encoder.encode(candidate).length <= MAX_PRESENTATION_BYTES) {
+		if (encoder.encode(candidate).length <= limit) {
 			return candidate;
 		}
 	}
@@ -225,7 +227,7 @@ export function renderReadiness(
  * selectors, Hangul fillers, the combining grapheme joiner) and no line or
  * paragraph separator: each shows as U+FFFD.
  */
-function inert(text: string): string {
+export function inert(text: string): string {
 	return text.replace(
 		/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu,
 		"\uFFFD",
@@ -357,7 +359,7 @@ function rollupLifecycle(outcomes: RunReviewResult["outcomes"]):
 	};
 }
 
-function findingAttribution(
+export function findingAttribution(
 	entry: StampedFinding,
 	panel: PlannedSeat[],
 ): string {
@@ -380,52 +382,22 @@ export function renderReviewResult(input: {
 	suggestions?: Suggestion[] | SuggestionsUnavailable;
 	scopingNote?: string;
 	findings?: StampedFinding[];
+	/** Room kept for lines the caller appends after the report. */
+	reserveBytes?: number;
 }): string {
-	const voted = input.result.outcomes.filter(
-		(facts) => facts.outcome.kind === "voted",
-	);
 	const failed = input.result.outcomes.filter(
 		(facts) => facts.outcome.kind === "failed",
 	);
-	const findingCount = voted.reduce((count, facts) => {
-		return facts.outcome.kind === "voted"
-			? count + facts.outcome.findings.length
-			: count;
-	}, 0);
 	const findings = input.findings ?? [];
-	const shownCount = findings.length > 0 ? findings.length : findingCount;
-	const summary = [
-		`${voted.length}/${input.result.outcomes.length} voted`,
-		`${shownCount} finding${shownCount === 1 ? "" : "s"}`,
-	];
-	const totals = rollupLifecycle(input.result.outcomes);
-	if (totals !== undefined) {
-		summary.push(formatDuration(totals.durationMs), formatCost(totals.cost));
-	}
-	const lines = [
-		"# Review panel",
-		summary.join(" · "),
-		renderSeatsLine(input.panel),
-	];
+	const lines = reviewHeadLines("# Review panel", input);
 	if (failed.length > 0) {
-		const lost = failed.map((facts) => {
-			const klass =
-				facts.outcome.kind === "failed" ? facts.outcome.class : "failed";
-			return `${facts.seat.rosterId}/${facts.seat.lens} (${klass})`;
-		});
-		lines.push(`Lost: ${lost.join(", ")}`);
+		lines.push(reviewLostLine(input.result));
 	}
 	lines.push(`Record: \`${input.recordPath}\``, "");
 	if (findings.length === 0) {
 		lines.push("None submitted.");
 	} else {
-		const ordered = [...findings].sort((left, right) => {
-			const rank =
-				SEVERITY_RANK[left.finding.severity] -
-				SEVERITY_RANK[right.finding.severity];
-			return rank !== 0 ? rank : left.id.localeCompare(right.id);
-		});
-		for (const entry of ordered) {
+		for (const entry of orderFindings(findings)) {
 			lines.push(
 				`- ${entry.id} [${entry.finding.severity}] ${entry.finding.title} (${entry.finding.file}:${entry.finding.line}) — ${findingAttribution(entry, input.panel)}`,
 			);
@@ -453,7 +425,61 @@ export function renderReviewResult(input: {
 	if (input.result.cleanupError !== undefined) {
 		lines.push("", input.result.cleanupError);
 	}
-	return fitPresentation(lines);
+	return fitPresentation(lines, input.reserveBytes);
+}
+
+/** Findings by severity, then id, as the review reply lists them. */
+export function orderFindings(
+	findings: readonly StampedFinding[],
+): StampedFinding[] {
+	return [...findings].sort((left, right) => {
+		const rank =
+			SEVERITY_RANK[left.finding.severity] -
+			SEVERITY_RANK[right.finding.severity];
+		return rank !== 0 ? rank : left.id.localeCompare(right.id);
+	});
+}
+
+/** The heading, the summary line and the Seats line of a review report. */
+export function reviewHeadLines(
+	heading: string,
+	input: {
+		panel: PlannedSeat[];
+		result: RunReviewResult;
+		findings?: StampedFinding[];
+	},
+): string[] {
+	const voted = input.result.outcomes.filter(
+		(facts) => facts.outcome.kind === "voted",
+	);
+	const findingCount = voted.reduce((count, facts) => {
+		return facts.outcome.kind === "voted"
+			? count + facts.outcome.findings.length
+			: count;
+	}, 0);
+	const findings = input.findings ?? [];
+	const shownCount = findings.length > 0 ? findings.length : findingCount;
+	const summary = [
+		`${voted.length}/${input.result.outcomes.length} voted`,
+		`${shownCount} finding${shownCount === 1 ? "" : "s"}`,
+	];
+	const totals = rollupLifecycle(input.result.outcomes);
+	if (totals !== undefined) {
+		summary.push(formatDuration(totals.durationMs), formatCost(totals.cost));
+	}
+	return [heading, summary.join(" · "), renderSeatsLine(input.panel)];
+}
+
+/** `Lost: seat/lens (class), …` for the seats that failed. */
+export function reviewLostLine(result: RunReviewResult): string {
+	const lost = result.outcomes
+		.filter((facts) => facts.outcome.kind === "failed")
+		.map((facts) => {
+			const klass =
+				facts.outcome.kind === "failed" ? facts.outcome.class : "failed";
+			return `${facts.seat.rosterId}/${facts.seat.lens} (${klass})`;
+		});
+	return `Lost: ${lost.join(", ")}`;
 }
 
 export function renderAuditResult(input: {
@@ -506,32 +532,42 @@ export function renderAuditResult(input: {
 }
 
 /** `panel` is the planned verify seats; it defaults to the outcomes' seats. */
-export function renderVerifyResult(
-	result: RunVerifyResult,
-	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
-): string {
-	const voted = result.outcomes.filter(
-		(facts) => facts.outcome.kind === "voted",
-	);
-	const failed = result.outcomes.filter(
-		(facts) => facts.outcome.kind === "failed",
-	);
+export type VerifyRegression = {
+	id: string;
+	title: string;
+	file: string;
+	line: number;
+	evidence: string;
+};
+
+export type VerifyFacts = {
+	/** Each id's dispositions across the seats that voted. */
+	dispositions: Map<string, Set<string>>;
+	/** The first resolved evidence each id got, as `file: explanation`. */
+	evidence: Map<string, { file: string; explanation: string }>;
+	regressions: VerifyRegression[];
+	keptIds: string[];
+	voted: number;
+};
+
+/** What the verify seats said, gathered across every seat that voted. */
+export function verifyFacts(result: RunVerifyResult): VerifyFacts {
 	const dispositions = new Map<string, Set<string>>();
-	const regressions: Array<{
-		id: string;
-		title: string;
-		file: string;
-		line: number;
-		evidence: string;
-	}> = [];
-	for (const facts of voted) {
+	const evidence = new Map<string, { file: string; explanation: string }>();
+	const regressions: VerifyRegression[] = [];
+	let voted = 0;
+	for (const facts of result.outcomes) {
 		if (facts.outcome.kind !== "voted") {
 			continue;
 		}
+		voted += 1;
 		for (const item of facts.outcome.result.items) {
 			const seen = dispositions.get(item.id) ?? new Set<string>();
 			seen.add(item.disposition);
 			dispositions.set(item.id, seen);
+			if (item.evidence !== undefined && !evidence.has(item.id)) {
+				evidence.set(item.id, item.evidence);
+			}
 		}
 		for (const regression of facts.outcome.result.regressions) {
 			regressions.push({
@@ -547,16 +583,29 @@ export function renderVerifyResult(
 		result.kept.length > 0
 			? result.kept.map((row) => row.id)
 			: [...dispositions.keys()];
-	const keptSummary = keptIds.map((id) => {
-		const states = [...(dispositions.get(id) ?? [])];
-		if (states.length === 1) {
-			return `${id} ${states[0]}`;
-		}
-		if (states.length === 0) {
-			return id;
-		}
-		return `${id} ${states.join("/")}`;
-	});
+	return { dispositions, evidence, regressions, keptIds, voted };
+}
+
+/** `F-1 resolved`, `F-2 resolved/still present`, or the bare id when no seat answered. */
+export function dispositionLabel(facts: VerifyFacts, id: string): string {
+	const states = [...(facts.dispositions.get(id) ?? [])];
+	return states.length === 0 ? id : `${id} ${states.join("/")}`;
+}
+
+export function renderVerifyResult(
+	result: RunVerifyResult,
+	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
+	reserveBytes = 0,
+): string {
+	const voted = result.outcomes.filter(
+		(facts) => facts.outcome.kind === "voted",
+	);
+	const failed = result.outcomes.filter(
+		(facts) => facts.outcome.kind === "failed",
+	);
+	const facts = verifyFacts(result);
+	const { regressions, keptIds } = facts;
+	const keptSummary = keptIds.map((id) => dispositionLabel(facts, id));
 	const summary = [
 		`${voted.length}/${result.outcomes.length} voted`,
 		...(keptSummary.length > 0 ? [keptSummary.join(", ")] : ["no kept ids"]),
@@ -590,5 +639,5 @@ export function renderVerifyResult(
 	if (result.cleanupError !== undefined) {
 		lines.push("", result.cleanupError);
 	}
-	return fitPresentation(lines);
+	return fitPresentation(lines, reserveBytes);
 }
