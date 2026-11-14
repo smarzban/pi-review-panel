@@ -530,6 +530,32 @@ describe("the owner's own records still work", () => {
 	});
 });
 
+describe("resume restores the panel from the signed plan (panel P-2, P-4)", () => {
+	it("replaces a different, valid panel.json planted before resume, and the record is accepted", async () => {
+		await withRepository(async (repo) => {
+			const seats = plannedSeats(["holistic", "security"]);
+			const runId = await interruptedReviewRecord(repo, seats);
+			const panelPath = path.join(recordOf(repo, runId), "panel.json");
+			const original = readFileSync(panelPath, "utf8");
+			writeFileSync(panelPath, PLANTED_PANEL);
+			await resumeRun(loadResumable(repo, runId, TEST_RECORD_KEY), {
+				config: {
+					roster: seats.map((seat) => ({
+						id: seat.rosterId,
+						provider: seat.provider,
+						model: seat.model,
+					})),
+					defaults: { seats: seats.map((seat) => seat.rosterId) },
+				},
+				recordKey: TEST_RECORD_KEY,
+				sessionFactory: createSdkSeatFake([{ kind: "default" }]).factory,
+			});
+			expect(readFileSync(panelPath, "utf8")).toBe(original);
+			expect(() => loadPriorRun(repo, runId, TEST_RECORD_KEY)).not.toThrow();
+		});
+	});
+});
+
 describe("records that look like the owner's but are not finished by it", () => {
 	it("refuses a genuine finished review with only record.mac removed, as a record from before signing looks", async () => {
 		await withRepository(async (repo) => {
