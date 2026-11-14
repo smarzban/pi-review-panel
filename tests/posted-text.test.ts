@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	type CommentRow,
+	fitCommentBody,
+	groupCutLine,
 	isRunMarkerFor,
+	POSTED_TEXT_CHARS,
 	postedCode,
 	postedText,
 	runMarker,
 } from "../src/tool/posted-text.js";
+
+const ZWJ = "\u200d";
+const DOLLAR = "<span>$</span>";
 
 /**
  * T498: posted text escapes only what can form Markdown or HTML, and run
@@ -20,14 +27,15 @@ describe("posted text escapes only what can form markup", () => {
 	});
 
 	it("posts every $ as <span>$</span>, so no seat text reaches GitHub math", () => {
-		// GitHub's renderer still runs math on `\\$x\\$` and `&#36;x&#36;`; only a
-		// dollar inside an element stays a plain dollar (checked with
-		// `gh api markdown`, 2026-11-14).
+		// GitHub's renderer still runs math on `\\$x\\$` and `&#36;x&#36;`; a
+		// dollar inside an element stays a plain dollar unless the element
+		// holds the whole paragraph's `$$` (checked with `gh api markdown`,
+		// 2026-11-14).
 		expect(postedText("$\\color{white}{hidden}$")).toBe(
 			"<span>$</span>\\\\color{white}{hidden}<span>$</span>",
 		);
 		expect(postedText("$\\phantom{x}$ and $$\\Huge X$$ cost $5")).toBe(
-			"<span>$</span>\\\\phantom{x}<span>$</span> and <span>$</span><span>$</span>\\\\Huge X<span>$</span><span>$</span> cost <span>$</span>5",
+			`<span>$</span>\\\\phantom{x}<span>$</span> and <span>$</span>${ZWJ}<span>$</span>\\\\Huge X<span>$</span>${ZWJ}<span>$</span> cost <span>$</span>5`,
 		);
 		expect(postedText("$ok % hidden$")).not.toMatch(/(?<!<span>)\$/);
 	});
@@ -89,6 +97,121 @@ describe("posted text escapes only what can form markup", () => {
 		for (const [input, output] of cases) {
 			expect(postedText(input)).toBe(output);
 		}
+	});
+});
+
+describe("adjacent dollars never form display math (T500 N-1)", () => {
+	it("puts a joiner between adjacent dollar spans", () => {
+		// `gh api markdown` renders a paragraph that is only
+		// `<span>$</span><span>$</span>\Huge X<span>$</span><span>$</span>` as
+		// display math; with a joiner between the spans it stays plain text
+		// (checked 2026-11-14).
+		expect(postedText("$$\\Huge X$$")).toBe(
+			`${DOLLAR}${ZWJ}${DOLLAR}\\\\Huge X${DOLLAR}${ZWJ}${DOLLAR}`,
+		);
+		expect(postedText("$$$")).toBe(`${DOLLAR}${ZWJ}${DOLLAR}${ZWJ}${DOLLAR}`);
+		for (const text of ["$$", "a $$$ b $$", "$".repeat(40)]) {
+			expect(postedText(text)).not.toContain("</span><span>");
+		}
+	});
+
+	it("leaves a single dollar without a joiner", () => {
+		expect(postedText("$5 and $6")).toBe(`${DOLLAR}5 and ${DOLLAR}6`);
+	});
+});
+
+describe("a posted text field has a fixed cap after escaping (T500 N-2)", () => {
+	const cap = (maxChars: number) => 2 * maxChars;
+
+	it("caps an all-dollar field at twice its length, cut at a span boundary", () => {
+		for (const maxChars of [40, POSTED_TEXT_CHARS, 1_000]) {
+			const posted = postedText("$".repeat(5_000), maxChars);
+			expect(posted.length).toBeLessThanOrEqual(cap(maxChars));
+			// Whole spans joined by joiners, then the ellipsis: never a cut
+			// inside `<span>$</span>`.
+			expect(posted).toMatch(/^<span>\$<\/span>(?:‍<span>\$<\/span>)*…$/u);
+			// It uses the cap, not a token of it.
+			expect(posted.length).toBeGreaterThan(cap(maxChars) - 16);
+		}
+	});
+
+	it("caps any field of escapes the same way, never inside an escape", () => {
+		const hostile = [
+			"\\".repeat(2_000),
+			"@".repeat(2_000),
+			"#".repeat(2_000),
+			"![".repeat(1_000),
+			"www.".repeat(500),
+			"$\\@#&".repeat(400),
+			"GH-1 ://".repeat(300),
+		];
+		for (const text of hostile) {
+			for (const maxChars of [40, POSTED_TEXT_CHARS, 1_000]) {
+				const posted = postedText(text, maxChars);
+				expect(posted.length).toBeLessThanOrEqual(cap(maxChars));
+				expect(posted.endsWith("…")).toBe(true);
+				// Never inside a span: what is left without the spans holds no
+				// bare `<` or `>`.
+				expect(posted.replaceAll(DOLLAR, "")).not.toMatch(/(?<!\\)[<>]/u);
+				// No dangling backslash before the ellipsis.
+				expect(posted.slice(0, -1)).not.toMatch(/(?<!\\)(?:\\\\)*\\$/u);
+			}
+		}
+	});
+
+	it("leaves ordinary text cut by code points as before", () => {
+		expect(postedText("a".repeat(400))).toBe(`${"a".repeat(300)}…`);
+		expect(postedText("a_b ".repeat(100), 300)).toBe(`${"a\\_b ".repeat(75)}…`);
+		expect(postedText("\\".repeat(300))).toBe("\\\\".repeat(300));
+	});
+});
+
+describe("fitCommentBody stops at a group that cannot fit its first member (T500)", () => {
+	const member = (id: string, chars: number) => [
+		`  - **${id} [low]** ${"x".repeat(chars)}`,
+	];
+	const group = (id: string, members: (readonly string[])[]): CommentRow => ({
+		head: [`- **${id} [low, stated by a seat]**`],
+		members,
+	});
+
+	it("cuts the unfittable group and every row after it, and counts them", () => {
+		const rows: CommentRow[] = [
+			group("G-1", [member("F-1", 30_000)]),
+			group("G-2", [member("F-2", 35_000), member("F-3", 10)]),
+			group("G-3", [member("F-4", 10)]),
+			["- **F-5 [low]** plain row"],
+		];
+		const body = fitCommentBody(["## head"], rows, ["", "<!-- m -->"], "group");
+		expect(body).toContain("**G-1 ");
+		expect(body).not.toContain("**G-2 ");
+		// A shorter later group does not post past the cut one.
+		expect(body).not.toContain("**G-3 ");
+		expect(body).not.toContain("**F-5 ");
+		expect(body).toContain(
+			"- 3 group(s) cut to fit GitHub's comment limit; the full list is in the run record.",
+		);
+		expect(body.split("\n").at(-1)).toBe("<!-- m -->");
+	});
+
+	it("still gives what is left to an earlier group posted in part, and tries rows after it", () => {
+		const rows: CommentRow[] = [
+			group("G-1", [
+				member("F-1", 20_000),
+				member("F-2", 20_000),
+				member("F-3", 30_000),
+			]),
+			group("G-2", [member("F-4", 10)]),
+		];
+		const body = fitCommentBody(["## head"], rows, [], "group");
+		expect(body).toContain("**F-1 ");
+		expect(body).toContain("**F-2 ");
+		expect(body).not.toContain("**F-3 ");
+		expect(body).toContain(groupCutLine(1));
+		expect(body).toContain("**G-2 ");
+		expect(body).not.toContain(
+			"cut to fit GitHub's comment limit; the full list",
+		);
 	});
 });
 
