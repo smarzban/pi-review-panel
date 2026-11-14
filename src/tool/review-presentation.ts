@@ -437,18 +437,22 @@ function evidenceText(entry: StampedFinding): string {
 	);
 }
 
-/** One flat finding: its row, then its evidence. `label` replaces the id. */
+/**
+ * One finding: its row, then its evidence. `label` replaces the id, and
+ * `indent` nests it under a group header.
+ */
 function findingReplyRows(
 	entry: StampedFinding,
 	panel: PlannedSeat[],
 	label = entry.id,
+	indent = "",
 ): string[] {
 	const rows = [
-		`- ${label} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, panel)}`,
+		`${indent}- ${label} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, panel)}`,
 	];
 	const evidence = evidenceText(entry);
 	if (evidence.length > 0) {
-		rows.push(`  ${evidence}`);
+		rows.push(`${indent}  ${evidence}`);
 	}
 	return rows;
 }
@@ -456,27 +460,20 @@ function findingReplyRows(
 /**
  * One group: a group of one is its finding's row with both ids; a larger
  * group is a header (id, the highest severity a seat stated, the lowest
- * member's title), then each member's own id, severity, seat, place and
- * evidence. The member count is never shown.
+ * member's title), then each member's own row: id, severity, title, place,
+ * seat and evidence. The member count is never shown.
  */
 function groupReplyRows(group: GroupView, panel: PlannedSeat[]): string[] {
 	const [only] = group.members;
 	if (group.members.length === 1 && only !== undefined) {
 		return findingReplyRows(only, panel, `${group.id} / ${only.id}`);
 	}
-	const rows = [
+	return [
 		`- ${group.id} [${group.severity}, ${GROUP_SEVERITY_LABEL}] ${inertLine(group.lead.finding.title)}`,
+		...group.members.flatMap((entry) =>
+			findingReplyRows(entry, panel, entry.id, "  "),
+		),
 	];
-	for (const entry of group.members) {
-		rows.push(
-			`  - ${entry.id} [${entry.finding.severity}] ${findingAttribution(entry, panel)} (${inertLine(entry.finding.file)}:${entry.finding.line})`,
-		);
-		const evidence = evidenceText(entry);
-		if (evidence.length > 0) {
-			rows.push(`    ${evidence}`);
-		}
-	}
-	return rows;
 }
 
 /** Findings by severity, then id, as the review reply lists them. */

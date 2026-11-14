@@ -529,8 +529,9 @@ function findingRow(
 
 /**
  * One group as one unit of the comment: a group of one is its finding's
- * row with both ids; a larger group is a header, then each member's own id,
- * severity, place, seat and evidence. The member count is never shown.
+ * row with both ids; a larger group is a header, then each member's own row:
+ * id, severity, title, place, seat and evidence. The member count is never
+ * shown.
  */
 function groupRow(group: GroupView, panel: PlannedSeat[]): string[] {
 	const [only] = group.members;
@@ -545,14 +546,11 @@ function groupRow(group: GroupView, panel: PlannedSeat[]): string[] {
 		`- **${githubSafe(group.id, 40)} [${group.severity}, ${GROUP_SEVERITY_LABEL}]** ${githubSafe(group.lead.finding.title)}`,
 	];
 	for (const entry of group.members) {
-		const where = safeCode(`${entry.finding.file}:${entry.finding.line}`);
 		rows.push(
-			`  - **${githubSafe(entry.id, 40)} [${entry.finding.severity}]** (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
+			...findingRow(entry, panel, githubSafe(entry.id, 40)).map(
+				(line) => `  ${line}`,
+			),
 		);
-		const evidence = githubSafe(entry.finding.evidence, EVIDENCE_CHARS);
-		if (evidence !== "") {
-			rows.push(`    **Evidence:** ${evidence}`);
-		}
 	}
 	return rows;
 }

@@ -114,7 +114,7 @@ Open the code behind every finding you might keep. Seat severity is an opinion:
 
 Findings may arrive grouped. When the owner names a grouping seat, findings that describe the
 same defect share a group (`G-1`, `G-2`, …): a header with the highest severity a seat stated,
-then each member with its own F-id, seat, severity and evidence. Judge each group once, as one
+then each member with its own F-id, title, seat, severity and evidence. Judge each group once, as one
 defect, but read its members: they may differ on place or severity. Group size is not agreement
 and not a reason to keep. `--kept-finding-ids`, `--dismissed` and `--low-advisory` take G-ids or
 F-ids; a G-id stands for all its members, and verify and the comments report F-ids. A

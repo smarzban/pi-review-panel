@@ -152,7 +152,7 @@ member F-id. A group shows that highest severity, labelled as stated by a seat, 
 lowest member F-id. Group size is never shown as agreement or used to rank.
 
 The reply, `report.md` and the PR review comment show the grouped list: one header row per group,
-then a row per member with its F-id, severity, seat, `file:line` and evidence. A group of one shows
+then a row per member with its F-id, severity, own title, seat, `file:line` and evidence. A group of one shows
 as one row with both ids. The summary line counts both (`8 findings in 5 groups`), and the Seats
 line names the grouping seat (`grouping (claude)`). `findings.json` stays the flat stamped list.
 The groups go in `groups.json` beside it: `version`, `runId`, the grouping seat (`rosterId`,

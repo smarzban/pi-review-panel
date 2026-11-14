@@ -101,6 +101,16 @@ const GROUPED: GroupingFacts = {
 	},
 };
 
+/** F-3, a member that is not its group's lead, with a hostile title. */
+const HOSTILE_MEMBER: StampedFinding[] = FINDINGS.map((row) =>
+	row.id === "F-3"
+		? {
+				...row,
+				finding: { ...row.finding, title: "Leak\n# Heading‮ @octocat [x](y)" },
+			}
+		: row,
+);
+
 const LOST: GroupingFacts = {
 	seat: CONSOLIDATOR,
 	lifecycle: LIFECYCLE,
@@ -193,9 +203,9 @@ describe("the grouped review reply", () => {
 		);
 		expect(g1).toBeGreaterThan(0);
 		expect(lines.slice(g1 + 1, g1 + 5)).toEqual([
-			"  - F-1 [medium] sol/holistic (src/cache.ts:489)",
+			"  - F-1 [medium] Cache key ignores the tenant (src/cache.ts:489) — sol/holistic",
 			"    lookup() keys only on the path.",
-			"  - F-3 [high] kimi/holistic (src/cache.ts:511)",
+			"  - F-3 [high] Tenant data leaks through the shared cache (src/cache.ts:511) — kimi/holistic",
 			"    store() writes without the tenant id.",
 		]);
 		expect(text).toContain(
@@ -219,10 +229,12 @@ describe("the grouped review reply", () => {
 		);
 	});
 
-	it("keeps every finding's id, severity and evidence (T495)", () => {
+	it("keeps every finding's id, severity, title and evidence (T495)", () => {
 		const text = reply(GROUPED);
 		for (const row of FINDINGS) {
-			expect(text).toContain(`${row.id} [${row.finding.severity}]`);
+			expect(text).toContain(
+				`${row.id} [${row.finding.severity}] ${row.finding.title}`,
+			);
 			expect(text).toContain(row.finding.evidence);
 		}
 	});
@@ -263,6 +275,18 @@ describe("the grouped review reply", () => {
 		expect(text).not.toContain("\n# Heading");
 		expect(text).not.toContain("‮");
 	});
+
+	it("cleans a later member's own title like any other seat text (panel P-1)", () => {
+		const text = renderReviewResult({
+			recordPath: "/r",
+			panel: PANEL,
+			result: result(GROUPED),
+			findings: HOSTILE_MEMBER,
+		});
+		expect(text).toContain("  - F-3 [high] Leak # Heading");
+		expect(text).not.toContain("\n# Heading");
+		expect(text).not.toContain("‮");
+	});
 });
 
 describe("the grouped review PR comment", () => {
@@ -274,7 +298,10 @@ describe("the grouped review PR comment", () => {
 			"- **G-1 [high, stated by a seat]** Cache key ignores the tenant",
 		);
 		expect(body).toContain(
-			"  - **F-1 [medium]** (`src/cache.ts:489`) — sol/holistic",
+			"  - **F-1 [medium]** Cache key ignores the tenant (`src/cache.ts:489`) — sol/holistic",
+		);
+		expect(body).toContain(
+			"  - **F-3 [high]** Tenant data leaks through the shared cache (`src/cache.ts:511`) — kimi/holistic",
 		);
 		expect(body).toContain(
 			"    **Evidence:** store() writes without the tenant id.",
@@ -284,8 +311,30 @@ describe("the grouped review PR comment", () => {
 		);
 		for (const row of FINDINGS) {
 			expect(body).toContain(`${row.id} [${row.finding.severity}]`);
+			expect(body).toContain(row.finding.title);
 		}
 		expect(body).not.toMatch(AGREEMENT);
+	});
+
+	it("posts a later member's own title through the posted-text cleaning (panel P-1)", () => {
+		const body = renderReviewRound({
+			runId: "r1",
+			baseRef: "main",
+			baseOid: "a".repeat(40),
+			headOid: "b".repeat(40),
+			panel: PANEL,
+			result: result(GROUPED),
+			findings: HOSTILE_MEMBER,
+			suggestions: [],
+		});
+		const line = body
+			.split("\n")
+			.find((row) => row.startsWith("  - **F-3 [high]**"));
+		// One line, the bidi override replaced, `#` and `@` joined, `[` escaped.
+		expect(line).toBe(
+			"  - **F-3 [high]** Leak #\u200d Heading\ufffd @\u200doctocat \\[x\\](y) (`src/cache.ts:511`) — kimi/holistic",
+		);
+		expect(body).not.toContain("\n# Heading");
 	});
 
 	it("names lost grouping and posts the flat list", () => {
