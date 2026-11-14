@@ -27,7 +27,7 @@
  *
  * {@link fitCommentBody} cuts a body by whole rows (a group in part) to stay
  * under GitHub's comment limit; every posted body goes through it. With each
- * text field capped after escaping, no one row can take most of the budget.
+ * text field capped after escaping, no one finding can take most of the budget.
  *
  * Run ids appear in no visible text: {@link runMarker} carries them in one
  * hidden HTML comment at the end of a body, and {@link isRunMarkerFor}
