@@ -127,6 +127,11 @@ function windowsHost(platform: NodeJS.Platform = "win32"): GuardHost {
 			"D:\\a",
 			"D:\\a\\repo",
 			"D:\\a\\repo\\x",
+			"D:\\ab",
+			"D:\\ab\\repo",
+			"D:\\d",
+			"D:\\d\\a",
+			"D:\\d\\a\\repo",
 		].map((value) => value.toLowerCase()),
 	);
 	const exists = (value: string) => existing.has(value.toLowerCase());
@@ -212,6 +217,39 @@ describe("SDK seat confinement on a Windows host", () => {
 		expect(guard({ toolName: "read", input: { path: "/a/repo/x" } })).toEqual(
 			refusal(),
 		);
+	});
+
+	it("leaves a shell-looking path with a backslash alone, as Pi does", () => {
+		// Pi skips the rewrite for any path holding a backslash, so it reads
+		// `/d/a/repo\x` as D:\d\a\repo\x, outside the worktree. Rewriting it
+		// would land on D:\a\repo\x and wrongly let the read through.
+		const guard = windowsGuard();
+		for (const toolName of ["read", "grep", "find", "ls", "git_diff"]) {
+			for (const value of [
+				"/d/a/repo\\x",
+				"/mnt/d/a/repo\\x",
+				"\\d\\a\\repo\\x",
+			]) {
+				expect(guard({ toolName, input: { path: value } })).toEqual(refusal());
+			}
+		}
+	});
+
+	it("rewrites only a one-letter drive segment, as Pi does", () => {
+		// `/ab/repo/x` has no drive letter, so Pi resolves it on the cwd drive:
+		// inside D:\ab\repo.
+		const guard = windowsGuard("D:\\ab\\repo");
+		expect(
+			guard({ toolName: "read", input: { path: "/ab/repo/x" } }),
+		).toBeUndefined();
+		expect(guard({ toolName: "read", input: { path: "/a/b/repo/x" } })).toEqual(
+			refusal(),
+		);
+		// Pi reads `/xy/z` as D:\xy\z, outside D:\a\repo; a rewrite to `XY:\z`
+		// would resolve as relative, inside the worktree.
+		expect(
+			windowsGuard()({ toolName: "read", input: { path: "/xy/z" } }),
+		).toEqual(refusal());
 	});
 
 	it("rewrites shell paths only on win32, as Pi does", () => {
