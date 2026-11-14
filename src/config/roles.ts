@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 
 /**
  * The package-owned prompt roles, in catalog order: the holistic baseline,
- * the generic-correctness lens, the ten specialist extras, and the
- * fix-verification check. The list is fixed: the registry accepts no config,
+ * the generic-correctness lens, the ten specialist extras, the
+ * fix-verification check, and the grouping check. The list is fixed: the registry accepts no config,
  * repository, or caller input.
  */
 export const SHIPPED_ROLES = [
@@ -22,6 +22,7 @@ export const SHIPPED_ROLES = [
 	"infrastructure",
 	"specification-conformance",
 	"fix-verification",
+	"grouping",
 ] as const;
 
 export type PromptRole = (typeof SHIPPED_ROLES)[number];
@@ -49,6 +50,7 @@ export const ROLE_KINDS: Readonly<Record<PromptRole, RoleKind>> = {
 	infrastructure: "specialist",
 	"specification-conformance": "specialist",
 	"fix-verification": "check",
+	grouping: "check",
 };
 
 /**
