@@ -18,10 +18,12 @@ import {
 	numberGroups,
 	planConsolidator,
 	readSignedGroups,
+	runGroupingStep,
 } from "../src/run/grouping.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
 import { RunReviewError, runReview } from "../src/run/run-review.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
+import type { runGroupingSeat } from "../src/seat/run-seat.js";
 import { TEST_RECORD_KEY, testGroupsMac } from "./fixtures/record-key.js";
 import {
 	createSdkSeatFake,
@@ -129,6 +131,8 @@ async function review(
 		consolidator?: PlannedSeat | undefined;
 		seatBudgetMs?: number;
 		abort?: AbortController;
+		/** Stands in for the grouping seat, through both run hooks. */
+		runGroupingSeat?: typeof runGroupingSeat;
 	} = {},
 ) {
 	repo = createHostRepo();
@@ -151,6 +155,15 @@ async function review(
 		{
 			sessionFactory: fake.factory,
 			recordKey: TEST_RECORD_KEY,
+			...(options.runGroupingSeat === undefined
+				? {}
+				: {
+						runGroupingStep: (input, stepOptions) =>
+							runGroupingStep(input, {
+								...stepOptions,
+								runGroupingSeat: options.runGroupingSeat,
+							}),
+					}),
 			...(options.abort === undefined
 				? {}
 				: { abortSignal: options.abort.signal }),
@@ -375,6 +388,86 @@ describe("the grouping step", () => {
 			kind: "lost",
 			class: "killed",
 		});
+		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
+			true,
+		);
+	});
+
+	it("records lost grouping, class spawn-failure, and completes the record when the grouping seat throws (panel P-5)", async () => {
+		const { run, fake } = await review({
+			runGroupingSeat: async () => {
+				throw new Error("the grouping session could not start");
+			},
+		});
+		const result = await run;
+		// The two reviewers ran; the grouping seat never reached a session.
+		expect(fake.runs).toHaveLength(2);
+		expect(result.grouping?.outcome).toEqual({
+			kind: "lost",
+			class: "spawn-failure",
+			reason: "the grouping session could not start",
+		});
+		expect(result.grouping?.lifecycle.aborted).toBe(false);
+		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
+			true,
+		);
+		const execution = JSON.parse(
+			readFileSync(path.join(result.recordPath, "execution.json"), "utf8"),
+		) as { grouping?: { outcome: { kind: string; class?: string } } };
+		expect(execution.grouping?.outcome).toMatchObject({
+			kind: "lost",
+			class: "spawn-failure",
+		});
+		expect(
+			readFileSync(path.join(result.recordPath, "report.md"), "utf8"),
+		).toContain(
+			"Lost: grouping (opus, spawn-failure). The list below is not grouped.",
+		);
+	});
+
+	it("records lost grouping, class channel-error, when the seat ends with a result that is not a grouping (panel P-5)", async () => {
+		const { run } = await review({
+			runGroupingSeat: async (spec) =>
+				({
+					identity: {
+						provider: spec.provider,
+						model: spec.model,
+						lens: spec.lens,
+					},
+					replay: {
+						provider: spec.provider,
+						model: spec.model,
+						lens: spec.lens,
+						lensPrompt: spec.lensPrompt,
+						worktree: spec.worktree,
+					},
+					lifecycle: {
+						startedAtMs: 0,
+						settledAtMs: 5,
+						durationMs: 5,
+						attempts: 1,
+						aborted: false,
+						tokens: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							total: 0,
+						},
+						cost: 0,
+					},
+					outcome: { kind: "findings", findings: [] },
+				}) as unknown as Awaited<ReturnType<typeof runGroupingSeat>>,
+		});
+		const result = await run;
+		expect(result.grouping?.outcome).toEqual({
+			kind: "lost",
+			class: "channel-error",
+			reason: "the seat produced an unusable grouping result",
+		});
+		expect(result.grouping?.lifecycle.durationMs).toBe(5);
+		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
 		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
 			true,
 		);
