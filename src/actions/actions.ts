@@ -963,6 +963,10 @@ export async function commentAction(
 		dismissed,
 		lowAdvisory,
 		...(valid.head === undefined ? {} : { headRef: valid.head }),
+		runIds: {
+			review: facts.run.runId,
+			...(valid.verifyRunId === undefined ? {} : { verify: valid.verifyRunId }),
+		},
 	});
 	const posted = resolved.postComment({
 		repository: repoDir,

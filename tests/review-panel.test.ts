@@ -1133,9 +1133,11 @@ describe("review_panel comment", () => {
 			expect(posted?.body).toContain(
 				"2 findings submitted · 0 fixed · 1 dismissed · 1 left as low/advisory",
 			);
-			expect(posted?.body).toContain("Lost: deepseek/holistic");
-			expect(posted?.body).toContain("extras: security");
-			expect(posted?.body).toContain("- F-1 auth bypass — checked, not real");
+			expect(posted?.body).toContain("**Lost:** deepseek/holistic");
+			expect(posted?.body).toMatch(/\*\*Seats:\*\* .*security \(/);
+			expect(posted?.body).toContain(
+				"- **F-1** auth bypass — checked, not real",
+			);
 			expect(posted?.body).not.toContain("### Fixed");
 			expect(posted?.body).not.toMatch(/ready to merge/i);
 			expect(response.content[0]?.text).toContain("Posted comment on PR #29");
@@ -1216,7 +1218,7 @@ describe("review_panel comment", () => {
 				"2 findings submitted · 1 fixed · 0 dismissed · 1 left as low/advisory",
 			);
 			expect(body).not.toContain("### Dismissed");
-			expect(body).toContain("- F-2 nit");
+			expect(body).toContain("- **F-2** nit");
 			expect(body).not.toContain("F-1");
 			expect(response.content[0]?.text).toContain("updated");
 		});

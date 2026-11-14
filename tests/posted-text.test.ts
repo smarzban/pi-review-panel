@@ -68,7 +68,10 @@ describe("posted text escapes only what can form markup", () => {
 			["<!-- hidden -->", "\\<!-- hidden --\\>"],
 			["**bold**", "\\*\\*bold\\*\\*"],
 			["[x](y)", "\\[x\\](y)"],
-			["## Review panel · close-out", "\\#\u200D#\u200D Review panel · close-out"],
+			[
+				"## Review panel · close-out",
+				"\\#\u200D#\u200D Review panel · close-out",
+			],
 		];
 		for (const [input, output] of cases) {
 			expect(postedText(input)).toBe(output);
@@ -104,25 +107,34 @@ describe("the hidden run marker", () => {
 		const marker = runMarker({ review: REVIEW, verify: VERIFY }) as string;
 		expect(isRunMarkerFor(`## x\n\nbody\n\n${marker}\n`, REVIEW)).toBe(true);
 		expect(
-			isRunMarkerFor(
-				`## x\n\n<!-- review-panel review=${REVIEW} -->`,
-				REVIEW,
-			),
+			isRunMarkerFor(`## x\n\n<!-- review-panel review=${REVIEW} -->`, REVIEW),
 		).toBe(true);
 		// Another review's marker, or the id elsewhere in the body.
 		expect(isRunMarkerFor(`## x\n\n${marker}`, VERIFY)).toBe(false);
 		expect(isRunMarkerFor(`## x\n${marker}\nlater`, REVIEW)).toBe(false);
 		expect(isRunMarkerFor(`## x\nReview \`${REVIEW}\``, REVIEW)).toBe(false);
 		// An id that cannot be in a marker is never found.
-		expect(isRunMarkerFor("## x\n<!-- review-panel review=a--b -->", "a--b")).toBe(
-			false,
-		);
+		expect(
+			isRunMarkerFor("## x\n<!-- review-panel review=a--b -->", "a--b"),
+		).toBe(false);
 	});
 
 	it("seat text cannot produce the marker, as text or as a code span", () => {
 		const marker = runMarker({ review: REVIEW }) as string;
 		expect(isRunMarkerFor(`## x\n- ${postedText(marker)}`, REVIEW)).toBe(false);
 		expect(isRunMarkerFor(`## x\n- ${postedCode(marker)}`, REVIEW)).toBe(false);
-		expect(postedText(marker)).not.toContain("<!--");
+		expect(postedText(marker)).toMatch(/^\\<!-- /);
+	});
+});
+
+describe("a run id the marker cannot hold", () => {
+	it("a base ref like HEAD^ gives a real run id with --: no marker, never found", async () => {
+		const { sanitizeBaseRef } = await import("../src/run/record.js");
+		const id = `2026-11-14T17-24-42-501Z-${sanitizeBaseRef("HEAD^")}-e52d7adb77ca8882`;
+		expect(id).toContain("--");
+		expect(runMarker({ review: id })).toBeUndefined();
+		expect(isRunMarkerFor(`## x\n<!-- review-panel review=${id} -->`, id)).toBe(
+			false,
+		);
 	});
 });

@@ -34,7 +34,13 @@ import {
 } from "./closeout-comment.js";
 import { loadCloseoutRun } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
-import { fitCommentBody, postedCode, postedText } from "./posted-text.js";
+import {
+	fitCommentBody,
+	isRunMarkerFor,
+	markerTail,
+	postedCode,
+	postedText,
+} from "./posted-text.js";
 import {
 	CLOSEOUT_GENERATIONS,
 	CLOSEOUT_POSTED_FILE,
@@ -184,6 +190,14 @@ function safeCode(text: string, maxChars = FILE_CHARS): string {
 /** A line of tool-owned text that carries owner-config names. */
 function ownLine(text: string): string {
 	return inert(text).replace(/[@\uFF20#]/gu, "$&\u200D");
+}
+
+/**
+ * A tool-owned `Label: rest` line with its label bold. Only labels the tool
+ * writes go through here; seat text is never bold.
+ */
+function boldLabel(line: string): string {
+	return line.replace(/^([A-Z][A-Za-z ]*:)/u, "**$1**");
 }
 
 function shortOid(oid: string): string {
@@ -494,11 +508,11 @@ async function postOne(
 function findingRow(entry: StampedFinding, panel: PlannedSeat[]): string[] {
 	const where = safeCode(`${entry.finding.file}:${entry.finding.line}`);
 	const row = [
-		`- ${githubSafe(entry.id, 40)} [${entry.finding.severity}] ${githubSafe(entry.finding.title)} (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
+		`- **${githubSafe(entry.id, 40)} [${entry.finding.severity}]** ${githubSafe(entry.finding.title)} (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
 	];
 	const evidence = githubSafe(entry.finding.evidence, EVIDENCE_CHARS);
 	if (evidence !== "") {
-		row.push(`  Evidence: ${evidence}`);
+		row.push(`  **Evidence:** ${evidence}`);
 	}
 	return row;
 }
@@ -519,12 +533,12 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 	const [, summary, seats] = reviewHeadLines("", facts);
 	const head = [
 		"## Review panel · review",
-		`Run ${safeCode(facts.runId)} · ${safeCode(facts.baseRef)} (\`${shortOid(facts.baseOid)}\`) → \`${shortOid(facts.headOid)}\``,
+		`${safeCode(facts.baseRef)} (\`${shortOid(facts.baseOid)}\`) → \`${shortOid(facts.headOid)}\``,
 		ownLine(summary as string),
-		ownLine(seats as string),
+		boldLabel(ownLine(seats as string)),
 	];
 	if (facts.result.outcomes.some((row) => row.outcome.kind === "failed")) {
-		head.push(ownLine(reviewLostLine(facts.result)));
+		head.push(boldLabel(ownLine(reviewLostLine(facts.result))));
 	}
 	head.push("");
 	const findings = facts.findings ?? [];
@@ -538,17 +552,22 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 	const offered = facts.suggestions ?? [];
 	const tail: string[] = [];
 	if (!Array.isArray(offered)) {
-		tail.push("", "Suggest:", ownLine(formatSuggestionsUnavailable(offered)));
+		tail.push(
+			"",
+			"**Suggest:**",
+			ownLine(formatSuggestionsUnavailable(offered)),
+		);
 	} else {
 		const shown = offered.filter((row) => !ran.has(row.lens));
 		if (shown.length > 0) {
 			tail.push(
 				"",
-				"Suggest:",
+				"**Suggest:**",
 				...shown.map((row) => ownLine(formatSuggestion(row))),
 			);
 		}
 	}
+	tail.push(...markerTail({ review: facts.runId }));
 	return fitCommentBody(head, rows, tail, "finding");
 }
 
@@ -639,7 +658,7 @@ export function renderVerifyRound(
 	const keptSet = new Set(seen.keptIds);
 	const head = [
 		`## Review panel · verify ${round}`,
-		`Run ${safeCode(runIdOf(result.recordPath))} · review ${safeCode(result.priorRunId)} · \`${shortOid(result.priorHeadOid)}\` → \`${shortOid(result.headOid)}\``,
+		`\`${shortOid(result.priorHeadOid)}\` → \`${shortOid(result.headOid)}\``,
 		[
 			`${seen.voted}/${result.outcomes.length} voted`,
 			keptSummary,
@@ -649,11 +668,11 @@ export function renderVerifyRound(
 		].join(" · "),
 		...(facts.panel.length === 0
 			? []
-			: [ownLine(renderSeatsLine([...facts.panel]))]),
+			: [boldLabel(ownLine(renderSeatsLine([...facts.panel])))]),
 		...(failed.length === 0
 			? []
 			: [
-					`Lost: ${failed.map((row) => githubSafe(`${row.seat.rosterId}/${row.seat.lens}`, 120)).join(", ")}`,
+					`**Lost:** ${failed.map((row) => githubSafe(`${row.seat.rosterId}/${row.seat.lens}`, 120)).join(", ")}`,
 				]),
 	];
 	const rows: string[][] = [];
@@ -671,36 +690,44 @@ export function renderVerifyRound(
 					? ""
 					: ` — ${safeCode(evidence.file)}: ${githubSafe(evidence.explanation, EVIDENCE_CHARS)}`;
 			return [
-				`- ${githubSafe(dispositionLabel(seen, id), 80)}${titled(id)}${why}`,
+				`- **${githubSafe(dispositionLabel(seen, id), 80)}**${titled(id)}${why}`,
 			];
 		}),
 	);
 	section(
 		"### Dismissed (not fixed)",
 		facts.dismissed.map((row) => [
-			`- ${githubSafe(row.id, 40)}${titled(row.id)} — ${githubSafe(row.reason, EVIDENCE_CHARS)}`,
+			`- **${githubSafe(row.id, 40)}**${titled(row.id)} — ${githubSafe(row.reason, EVIDENCE_CHARS)}`,
 		]),
 	);
 	section(
 		"### Low / advisory (not kept)",
 		facts.lowAdvisory
 			.filter((id) => !keptSet.has(id))
-			.map((id) => [`- ${githubSafe(id, 40)}${titled(id)}`]),
+			.map((id) => [`- **${githubSafe(id, 40)}**${titled(id)}`]),
 	);
 	section(
 		"### New findings (regressions)",
 		seen.regressions.map((row) => {
 			const lines = [
-				`- ${githubSafe(row.id, 40)} ${githubSafe(row.title)} (${safeCode(`${row.file}:${row.line}`)})`,
+				`- **${githubSafe(row.id, 40)}** ${githubSafe(row.title)} (${safeCode(`${row.file}:${row.line}`)})`,
 			];
 			const evidence = githubSafe(row.evidence, EVIDENCE_CHARS);
 			if (evidence !== "") {
-				lines.push(`  Evidence: ${evidence}`);
+				lines.push(`  **Evidence:** ${evidence}`);
 			}
 			return lines;
 		}),
 	);
-	return fitCommentBody(head, rows, [], "row");
+	return fitCommentBody(
+		head,
+		rows,
+		markerTail({
+			review: result.priorRunId,
+			verify: runIdOf(result.recordPath),
+		}),
+		"row",
+	);
 }
 
 /**
@@ -837,13 +864,16 @@ function buildCloseout(
 			kept,
 			headRef: facts.headRef,
 			heading: CLOSEOUT_ROUND_HEADING,
-			runLine: `Review ${safeCode(review.run.runId)} · verify ${safeCode(runIdOf(result.recordPath))}`,
+			runIds: {
+				review: review.run.runId,
+				verify: runIdOf(result.recordPath),
+			},
 		});
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}
 	return {
-		body: fitCommentBody(parts.head, parts.rows, [], "row"),
+		body: fitCommentBody(parts.head, parts.rows, parts.tail, "row"),
 		reviewRecord: review.run.recordPath,
 		reviewRunId: review.run.runId,
 	};
@@ -865,7 +895,6 @@ async function closeoutAlreadyPosted(
 	if (comments === undefined) {
 		throw new RoundSkip("gh returned unreadable comments");
 	}
-	const marker = safeCode(reviewRunId);
 	return comments.some((raw) => {
 		const comment = raw as IssueComment | null;
 		if (comment?.user?.login !== target.author) {
@@ -873,7 +902,9 @@ async function closeoutAlreadyPosted(
 		}
 		const body = typeof comment.body === "string" ? comment.body : "";
 		const first = body.split(/\r?\n/, 1)[0]?.trim();
-		return first === CLOSEOUT_ROUND_HEADING && body.includes(marker);
+		return (
+			first === CLOSEOUT_ROUND_HEADING && isRunMarkerFor(body, reviewRunId)
+		);
 	});
 }
 

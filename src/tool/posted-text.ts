@@ -7,7 +7,10 @@
  *
  * - {@link postedText} renders it as plain text GitHub cannot turn into
  *   markup: line breaks fold to spaces (so no line-start block marker can
- *   form), Markdown and HTML specials are backslash-escaped, control, bidi
+ *   form), only the characters that can form Markdown or HTML inline are
+ *   backslash-escaped (with block markers at the start of the text and `!`
+ *   before `[`; `&` too, so no entity decodes into `@`, `#` or `://` after
+ *   the joiners ran), control, bidi
  *   and invisible characters become U+FFFD (an emoji's presentation
  *   selector U+FE0F and the joiners inside an emoji sequence stay), a
  *   zero-width joiner breaks every `@` / `\uFF20` mention, `#123` /
@@ -24,6 +27,10 @@
  *
  * {@link fitCommentBody} cuts a body by whole rows to stay under GitHub's
  * comment limit; every posted body goes through it.
+ *
+ * Run ids appear in no visible text: {@link runMarker} carries them in one
+ * hidden HTML comment at the end of a body, and {@link isRunMarkerFor}
+ * finds an earlier body by it.
  */
 import { inlineCode } from "../run/render.js";
 import { truncateCodePoints } from "./review-presentation.js";
@@ -90,7 +97,26 @@ function breakLinks(text: string): string {
  */
 export function postedText(text: string, maxChars = POSTED_TEXT_CHARS): string {
 	const line = inertKeepingEmoji(truncateCodePoints(foldLines(text), maxChars));
-	return breakLinks(line.replace(/[\\`*_[\]()#!<>|~&$]/gu, "\\$&"));
+	return breakLinks(escapeMarkdown(line));
+}
+
+/**
+ * Backslash-escapes what can form Markdown or HTML in an inline context:
+ * `\` `` ` `` `*` `_` `[` `]` `<` `>` `|` `~`, `!` before `[`, and `&`,
+ * which would otherwise decode an entity such as `&commat;` or `&num;`
+ * into a character the joiners never saw. At the start of the text, where
+ * it may follow a list marker, a `#`, `-`, `+` or `=` and the `.` or `)`
+ * of an ordered-list number are escaped too. Parentheses, braces, `$`,
+ * quotes and dots stay plain.
+ */
+function escapeMarkdown(line: string): string {
+	return line
+		.replace(/[\\`*_[\]<>|~&]|!(?=\[)/gu, "\\$&")
+		.replace(
+			/^(?:[#\-+=]|(\d{1,9})([.)]))/u,
+			(marker, digits?: string, dot?: string) =>
+				digits === undefined ? `\\${marker}` : `${digits}\\${dot}`,
+		);
 }
 
 /** Nothing a reader could see: only space and invisible characters. */
@@ -147,4 +173,73 @@ export function fitCommentBody(
 		...tail,
 	].join("\n");
 	return text.length <= BODY_BUDGET ? text : text.slice(0, BODY_BUDGET);
+}
+
+/** The characters a run id is made of: see `reserve` in `run/record.ts`. */
+const RUN_ID = /^[A-Za-z0-9._-]+$/u;
+
+/** A run id that can sit inside an HTML comment without closing it. */
+function markerId(id: string | undefined): string | undefined {
+	return id !== undefined && RUN_ID.test(id) && !id.includes("--")
+		? id
+		: undefined;
+}
+
+/**
+ * The hidden HTML comment that ends a posted body and carries its run ids,
+ * only those that apply. An id outside the run-id character set, or one
+ * holding `--`, is left out; with no id left there is no marker.
+ */
+export function runMarker(ids: {
+	review?: string;
+	verify?: string;
+}): string | undefined {
+	const review = markerId(ids.review);
+	const verify = markerId(ids.verify);
+	const fields = [
+		...(review === undefined ? [] : [`review=${review}`]),
+		...(verify === undefined ? [] : [`verify=${verify}`]),
+	];
+	return fields.length === 0
+		? undefined
+		: `<!-- review-panel ${fields.join(" ")} -->`;
+}
+
+/**
+ * The lines that end a body with its marker: a blank line, then the marker.
+ * Nothing when there is no marker.
+ */
+export function markerTail(ids: {
+	review?: string;
+	verify?: string;
+}): string[] {
+	const marker = runMarker(ids);
+	return marker === undefined ? [] : ["", marker];
+}
+
+/**
+ * True when a body's last non-empty line is exactly the marker of this
+ * review, with or without a verify id. Seat text cannot make that line:
+ * posted text escapes `<`, and a code span starts with a backtick.
+ */
+export function isRunMarkerFor(body: string, reviewRunId: string): boolean {
+	const review = markerId(reviewRunId);
+	if (review === undefined) {
+		return false;
+	}
+	const last = body
+		.split(/\r?\n/u)
+		.filter((line) => line.trim() !== "")
+		.at(-1);
+	if (last === undefined) {
+		return false;
+	}
+	const found = /^<!-- review-panel review=(\S+)(?: verify=(\S+))? -->$/u.exec(
+		last,
+	);
+	return (
+		found !== null &&
+		found[1] === review &&
+		(found[2] === undefined || markerId(found[2]) !== undefined)
+	);
 }

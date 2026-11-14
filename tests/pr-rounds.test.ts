@@ -386,7 +386,7 @@ function verifyRun(
 const REVIEW_ID = "20261113-review";
 
 describe("a review round posts to the PR whose head it reviewed", () => {
-	it("posts exactly one new review comment with the run id and no local path", async () => {
+	it("posts exactly one new review comment with the run id in its hidden marker and no local path", async () => {
 		await withRepository(async (repo, head) => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await reviewAction(
@@ -410,9 +410,9 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			expect(posted[0]?.args.join(" ")).not.toContain("Review panel");
 			const body = bodyOf(posted[0]);
 			expect(body.split("\n")[0]).toBe("## Review panel · review");
-			expect(body).toContain("r-1");
+			expect(body.split("\n").at(-1)).toBe("<!-- review-panel review=r-1 -->");
 			expect(body).toContain("F-1");
-			expect(body).toContain("Seats: holistic (terra, claude)");
+			expect(body).toContain("**Seats:** holistic (terra, claude)");
 			expect(body).not.toContain(repo);
 			expect(body).not.toContain("Record:");
 			// No call edits or deletes a comment.
@@ -700,11 +700,11 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			expect(body.split("\n")[0]).toBe("## Review panel · verify 2");
 			expect(body).toContain("v-2");
 			expect(body).toContain(REVIEW_ID);
-			expect(body).toMatch(/F-1 resolved .*the guard now checks null/);
+			expect(body).toMatch(/F-1 resolved\*\* .*the guard now checks null/);
 			expect(body).toMatch(/F-2 still present/);
-			expect(body).toMatch(/F-3 .*by design, see ADR 4/);
-			expect(body).toMatch(/### Low \/ advisory \(not kept\)\n- F-4/);
-			expect(body).toMatch(/R-1 .*new crash on empty input/);
+			expect(body).toMatch(/F-3\*\* .*by design, see ADR 4/);
+			expect(body).toMatch(/### Low \/ advisory \(not kept\)\n- \*\*F-4\*\*/);
+			expect(body).toMatch(/R-1\*\* .*new crash on empty input/);
 			expect(body).not.toContain(repo);
 			expect(textOf(result)).toContain("PR comment: posted to #12");
 			// Not every kept id is resolved: no close-out, and the reply says why.
@@ -844,7 +844,7 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 					{
 						id: 9,
 						user: { login: "saeed" },
-						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					},
 				],
 			});
@@ -985,7 +985,11 @@ describe("posted text is safe", () => {
 			expect(body).not.toMatch(/[\u202E\u202C\u2066\u2069\u200B]/);
 			expect(body).not.toContain("\u0007");
 			expect(body.replace(/[@#]\u200D/g, "")).not.toMatch(/\p{Cf}/u);
-			expect(body).not.toContain("<!--");
+			// The one HTML comment is the tool's own hidden marker, last.
+			expect(body.split("\n").at(-1)).toBe("<!-- review-panel review=r-1 -->");
+			expect(body.split("\n").slice(0, -1).join("\n")).not.toMatch(
+				/(?<!\\)<!--/,
+			);
 			// Only our own heading line looks like a Review panel heading.
 			expect(
 				body
@@ -1015,12 +1019,14 @@ describe("posted text is safe", () => {
 				body,
 			);
 			expect(cut).not.toBeNull();
-			const shown = body.split("\n").filter((line) => /^- F-\d+ /.test(line));
+			const shown = body
+				.split("\n")
+				.filter((line) => /^- \*\*F-\d+ /.test(line));
 			expect(shown.length + Number(cut?.[1])).toBe(400);
 			// Every shown finding row keeps its evidence line: rows are whole.
 			const lines = body.split("\n");
 			for (const [index, line] of lines.entries()) {
-				if (/^- F-\d+ /.test(line)) {
+				if (/^- \*\*F-\d+ /.test(line)) {
 					expect(lines[index + 1]?.startsWith("  ")).toBe(true);
 				}
 			}
@@ -1212,7 +1218,7 @@ describe("edge cases of the lookup and the run", () => {
 	it("escapes & so no HTML entity reaches GitHub", () => {
 		const safe = githubSafe("&#64;octocat &lt;x");
 		expect(safe).not.toMatch(/(?<!\\)&/);
-		expect(safe.startsWith("\\&\\#\u200D64;")).toBe(true);
+		expect(safe.startsWith("\\&#\u200D64;")).toBe(true);
 	});
 });
 
@@ -1314,7 +1320,17 @@ function outsideCodeSpans(line: string): string {
  * followed by a joiner, and no line our own renderer did not start.
  */
 function expectInert(body: string): void {
-	for (const line of body.split("\n")) {
+	for (const raw of body.split("\n")) {
+		if (
+			/^<!-- review-panel( (review|verify)=[A-Za-z0-9._-]+)+ -->$/.test(raw)
+		) {
+			// The tool's own hidden run marker.
+			continue;
+		}
+		// The tool's own bold labels: `**Seats:**` and the `- **F-1 …**` id.
+		const line = raw
+			.replace(/^(\s*)\*\*([A-Z][A-Za-z ]*:)\*\*/, "$1$2")
+			.replace(/^- \*\*((?:[^*\\]|\\.)*?)\*\*/, "- $1");
 		if (/^#{2,3} [A-Z]/.test(line)) {
 			// Our own headings: `## Review panel · …` and `### Kept` and so on.
 			expect(line).toMatch(
@@ -1326,7 +1342,8 @@ function expectInert(body: string): void {
 		const outside = outsideCodeSpans(line);
 		// An escaped backslash escapes nothing after it: drop `\\` pairs first.
 		const unpaired = outside.replace(/\\\\/g, "");
-		expect(unpaired).not.toMatch(/(?<!\\)[<>!*_~|&`$]/);
+		expect(unpaired).not.toMatch(/(?<!\\)[<>*_~|&`]/);
+		expect(unpaired).not.toMatch(/(?<!\\)!\\?\[/);
 		expect(outside).not.toMatch(/www\./i);
 		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low)\])/);
 		expect(outside).not.toMatch(/(?<!\\)\]\(/);
@@ -1548,8 +1565,8 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			expect(lines).toContain(
 				"2 findings submitted · 2 fixed · 0 dismissed · 0 left as low/advisory",
 			);
-			expect(lines.some((line) => line.startsWith("Seats: terra"))).toBe(true);
-			expect(lines).toContain("Lost: none");
+			expect(lines).toContain("**Seats:** holistic (terra)");
+			expect(lines).toContain("**Lost:** none");
 			expect(
 				lines.some((line) => /^`main` \(`aaaaaaa`\) → `HEAD` \(`/.test(line)),
 			).toBe(true);
@@ -1707,7 +1724,7 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 			lowAdvisory: [],
 		});
 		expect(card.split("\n")).toContain(
-			"Lost: glm/holistic, claude/fix-verification (verify)",
+			"**Lost:** glm/holistic, claude/fix-verification (verify)",
 		);
 	});
 });
@@ -1717,7 +1734,7 @@ describe("fix round 1: the comment listing is read across pages (F-2)", () => {
 	const existing = {
 		id: 9,
 		user: { login: "saeed" },
-		body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+		body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 	};
 	const filler = Array.from({ length: 30 }, (_, index) => ({
 		id: 200 + index,
@@ -2074,7 +2091,7 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			{
 				id: 9,
 				user: { login: "mallory" },
-				body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+				body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 			},
 		],
 		[
@@ -2082,7 +2099,7 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			{
 				id: 9,
 				user: { login: "saeed" },
-				body: "## Review panel · close-out\nReview `other-review`",
+				body: "## Review panel · close-out\n\n<!-- review-panel review=other-review -->",
 			},
 		],
 		[
@@ -2090,7 +2107,7 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			{
 				id: 9,
 				user: { login: "saeed" },
-				body: `## Review panel · verify 1\nReview \`${REVIEW_ID}\``,
+				body: `## Review panel · verify 1\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 			},
 		],
 	] as const) {
@@ -2508,7 +2525,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 					{
 						id: 9,
 						user: { login: "saeed" },
-						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					},
 				],
 			});
@@ -2532,7 +2549,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 					{
 						id: 9,
 						user: { login: "saeed" },
-						body: `## Review panel · close-out\nReview \`${REVIEW_ID}\``,
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					},
 				],
 			});
@@ -2797,7 +2814,7 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 			"see www\\.evil.example/p",
 		);
 		expect(postedText("_www.e.example")).toBe("\\_www\\.e.example");
-		expect(postedText("(WWW.x.example)")).toBe("\\(WWW\\.x.example\\)");
+		expect(postedText("(WWW.x.example)")).toBe("(WWW\\.x.example)");
 		expect(postedText("www.e")).not.toMatch(/‍/);
 	});
 
@@ -2806,8 +2823,8 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 		expect(postedText("trail\\")).toBe("trail\\\\");
 	});
 
-	it("escapes $ so no math renders", () => {
-		expect(postedText("$x$ and $$y$$")).toBe("\\$x\\$ and \\$\\$y\\$\\$");
+	it("leaves $ plain (T498): GitHub math forms no link, mention or hidden text", () => {
+		expect(postedText("$x$ and $$y$$")).toBe("$x$ and $$y$$");
 	});
 
 	it("puts no joiner inside a code span, so copied paths still work", () => {
@@ -3082,7 +3099,7 @@ describe("T498: readable PR comments", () => {
 					"2/2 voted · 1 finding",
 					"**Seats:** holistic (terra, claude)",
 					"",
-					"- **F-1 [high]** \\*\\*not bold\\*\\* (really) (`src/a.ts:3`) — terra/holistic, claude/holistic",
+					"- **F-1 [high]** \\*\\*not bold\\*\\* (really) (`src/a.ts:3`) — terra/holistic",
 					"  **Evidence:** calls f(x) for $5",
 					"",
 					`<!-- review-panel review=${REVIEW_RUN} -->`,
@@ -3109,9 +3126,13 @@ describe("T498: readable PR comments", () => {
 				},
 				{
 					deps: deps(gh.runGh, {
-						runVerify: verifyRunSeats(repo, VERIFY_RUN, REVIEW_RUN, [
-							rows[0] as Row,
-						], [{ rosterId: "terra", items: [resolved("F-1")] }]),
+						runVerify: verifyRunSeats(
+							repo,
+							VERIFY_RUN,
+							REVIEW_RUN,
+							[rows[0] as Row],
+							[{ rosterId: "terra", items: [resolved("F-1")] }],
+						),
 					}),
 				},
 			);
@@ -3149,12 +3170,12 @@ describe("T498: readable PR comments", () => {
 				].join("\n"),
 			);
 			for (const body of [verify, card]) {
-				expect(
-					(body ?? "").split("\n").slice(0, -1).join("\n"),
-				).not.toContain(REVIEW_RUN);
-				expect(
-					(body ?? "").split("\n").slice(0, -1).join("\n"),
-				).not.toContain(VERIFY_RUN);
+				expect((body ?? "").split("\n").slice(0, -1).join("\n")).not.toContain(
+					REVIEW_RUN,
+				);
+				expect((body ?? "").split("\n").slice(0, -1).join("\n")).not.toContain(
+					VERIFY_RUN,
+				);
 			}
 		});
 	});

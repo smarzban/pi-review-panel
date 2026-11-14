@@ -248,8 +248,23 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 `gh api repos/{owner}/{repo}/commits/<head-oid>/pulls`, keeping open PRs whose head is that commit;
 `pr` (CLI `--pr`) names one instead. The same rule holds for public and private repositories.
 
-- A review posts `## Review panel · review`: the reply's summary, `Seats:`, `Lost:`, findings and
-  `Suggest:`, with the run id instead of the local record path.
+- A review posts `## Review panel · review`: the commit range, the reply's summary, `Seats:`,
+  `Lost:`, findings and `Suggest:`, without the local record path. Labels the tool writes are bold;
+  seat text never is. No run id appears in visible text: every posted body (review, verify, the
+  automatic close-out and the manual `comment` card) ends with one hidden HTML comment carrying the
+  ids that apply, such as `<!-- review-panel review=<review run id> verify=<verify run id> -->`.
+  An id outside the run-id characters (`A-Z a-z 0-9 . _ -`), or one holding `--` (a base ref such
+  as `HEAD^` can make one), is left out of the marker. A review comment starts like this:
+
+  ```
+  ## Review panel · review
+  `origin/main` (`b89f012`) → `0a68179`
+  6/6 voted · 8 findings · 1m 58s · $1.1017
+  **Seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus)
+
+  - **F-1 [high]** Sanitize the audit Areas line (`src/tool/review-presentation.ts:511`) — sol/holistic
+    **Evidence:** renderAuditResult splits finding.file on "/" …
+  ```
 - Each verify posts `## Review panel · verify N`. N starts one past the earlier verifies of the
   same review whose comment reached the PR (each records that in its run record). The number is
   then claimed in the review's run record, by these rules:
@@ -296,7 +311,10 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
     round claim, and checks `closeout.posted` again after the create. Only the creator of a claim
     posts. Before posting it checks the PR's comments for a close-out of this review by the same
-    author (the manual card does not count; its heading differs). If one is there it writes
+    author: the first line is `## Review panel · close-out` and the last non-empty line is exactly
+    that review's hidden marker (the manual card does not count; its heading differs). Seat text
+    cannot make that line, because posted text escapes `<`. A review whose id cannot be in a marker
+    is never found this way. If one is there it writes
     `closeout.posted` and posts nothing: `PR close-out: not posted (a close-out for this review is
     already on PR #12)`.
   - A posted card writes `closeout.posted` exclusively, then deletes the claim. A failed post
@@ -327,8 +345,12 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   failed post never fails the run and never changes an exit code.
 - Every posted body (the review and verify comments, the automatic close-out and the manual
   `comment` card) uses one sanitizer. Text a seat wrote, dismissed reasons, record fields and refs
-  become one line of plain text: line breaks fold to spaces; `` \ ` * _ [ ] ( ) # ! < > | ~ & $ ``
-  are backslash-escaped, so no HTML, image, Markdown link, emphasis or heading forms; a zero-width
+  become one line of plain text: line breaks fold to spaces; only what can form Markdown or HTML is
+  backslash-escaped: `` \ ` * _ [ ] < > | ~ & ``, `!` before `[`, and at the start of the text
+  `#`, `-`, `+`, `=` and the `.` or `)` of a list number, so no HTML, image, Markdown link,
+  emphasis, list or heading forms. `&` stays escaped because GitHub decodes an entity such as
+  `&commat;` or `&num;` after the text is parsed, which would bring back the `@` or `#` the joiners
+  broke. Parentheses, braces, `$`, quotes and dots stay plain; a zero-width
   joiner follows every `@` and `＠`, every `#` (so `#123` and `owner/repo#123` do not link), the
   `-` in `GH-123`, and the `:` of `://`; the dot of every `www.` is backslash-escaped, so neither a
   URL nor a `www.` address becomes a link (checked with cmark-gfm, GitHub's Markdown engine).
@@ -347,7 +369,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 
 The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
 or updates its own card with the heading `## Review panel`, separate from the automatic
-`## Review panel · close-out` comment. Its card is cut by whole rows below the same limit.
+`## Review panel · close-out` comment. Both cards show `**Seats:**` in the reply's format
+(`holistic (sol, opus), tests (sol, opus)`) and end with the hidden run marker. Its card is cut by whole rows below the same limit.
 
 ## Snapshot cleanup
 
