@@ -21,6 +21,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { PrCommentMode } from "../config/schema.js";
+import {
+	GROUP_SEVERITY_LABEL,
+	type GroupView,
+	groupedView,
+	groupingLostLine,
+} from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
 import { renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
@@ -505,16 +511,50 @@ async function postOne(
 	return { line: posted("PR comment", target, url), target, gh };
 }
 
-function findingRow(entry: StampedFinding, panel: PlannedSeat[]): string[] {
+function findingRow(
+	entry: StampedFinding,
+	panel: PlannedSeat[],
+	label = githubSafe(entry.id, 40),
+): string[] {
 	const where = safeCode(`${entry.finding.file}:${entry.finding.line}`);
 	const row = [
-		`- **${githubSafe(entry.id, 40)} [${entry.finding.severity}]** ${githubSafe(entry.finding.title)} (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
+		`- **${label} [${entry.finding.severity}]** ${githubSafe(entry.finding.title)} (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
 	];
 	const evidence = githubSafe(entry.finding.evidence, EVIDENCE_CHARS);
 	if (evidence !== "") {
 		row.push(`  **Evidence:** ${evidence}`);
 	}
 	return row;
+}
+
+/**
+ * One group as one unit of the comment: a group of one is its finding's
+ * row with both ids; a larger group is a header, then each member's own id,
+ * severity, place, seat and evidence. The member count is never shown.
+ */
+function groupRow(group: GroupView, panel: PlannedSeat[]): string[] {
+	const [only] = group.members;
+	if (group.members.length === 1 && only !== undefined) {
+		return findingRow(
+			only,
+			panel,
+			`${githubSafe(group.id, 40)} / ${githubSafe(only.id, 40)}`,
+		);
+	}
+	const rows = [
+		`- **${githubSafe(group.id, 40)} [${group.severity}, ${GROUP_SEVERITY_LABEL}]** ${githubSafe(group.lead.finding.title)}`,
+	];
+	for (const entry of group.members) {
+		const where = safeCode(`${entry.finding.file}:${entry.finding.line}`);
+		rows.push(
+			`  - **${githubSafe(entry.id, 40)} [${entry.finding.severity}]** (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
+		);
+		const evidence = githubSafe(entry.finding.evidence, EVIDENCE_CHARS);
+		if (evidence !== "") {
+			rows.push(`    **Evidence:** ${evidence}`);
+		}
+	}
+	return rows;
 }
 
 export type ReviewRoundFacts = {
@@ -540,11 +580,17 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 	if (facts.result.outcomes.some((row) => row.outcome.kind === "failed")) {
 		head.push(boldLabel(ownLine(reviewLostLine(facts.result))));
 	}
+	const groupingLost = groupingLostLine(facts.result.grouping);
+	if (groupingLost !== undefined) {
+		head.push(boldLabel(ownLine(groupingLost)));
+	}
 	head.push("");
 	const findings = facts.findings ?? [];
-	const rows = orderFindings(findings).map((entry) =>
-		findingRow(entry, facts.panel),
-	);
+	const groups = groupedView(findings, facts.result.grouping);
+	const rows =
+		groups === undefined
+			? orderFindings(findings).map((entry) => findingRow(entry, facts.panel))
+			: groups.map((group) => groupRow(group, facts.panel));
 	if (rows.length === 0) {
 		head.push("None submitted.");
 	}
@@ -568,7 +614,12 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 		}
 	}
 	tail.push(...markerTail({ review: facts.runId }));
-	return fitCommentBody(head, rows, tail, "finding");
+	return fitCommentBody(
+		head,
+		rows,
+		tail,
+		groups === undefined ? "finding" : "group",
+	);
 }
 
 /** Posts the review round. Returns the reply lines; never throws. */

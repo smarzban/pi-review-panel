@@ -1,4 +1,10 @@
 import type { ReadinessReport } from "../config/readiness.js";
+import {
+	GROUP_SEVERITY_LABEL,
+	type GroupView,
+	groupedView,
+	groupingLostLine,
+} from "../run/grouping.js";
 import { inert, inertLine } from "../run/inert-text.js";
 import { inlineCode, renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
@@ -319,7 +325,11 @@ function formatCost(cost: number): string {
 	return `$${cost.toFixed(4)}`;
 }
 
-function rollupLifecycle(outcomes: RunReviewResult["outcomes"]):
+function rollupLifecycle(
+	outcomes: ReadonlyArray<
+		Pick<RunReviewResult["outcomes"][number], "lifecycle">
+	>,
+):
 	| {
 			durationMs: number;
 			cost: number;
@@ -382,18 +392,21 @@ export function renderReviewResult(input: {
 	if (failed.length > 0) {
 		lines.push(reviewLostLine(input.result));
 	}
+	const groupingLost = groupingLostLine(input.result.grouping);
+	if (groupingLost !== undefined) {
+		lines.push(groupingLost);
+	}
 	lines.push(`Record: \`${input.recordPath}\``, "");
+	const groups = groupedView(findings, input.result.grouping);
 	if (findings.length === 0) {
 		lines.push("None submitted.");
+	} else if (groups !== undefined) {
+		for (const group of groups) {
+			lines.push(...groupReplyRows(group, input.panel));
+		}
 	} else {
 		for (const entry of orderFindings(findings)) {
-			lines.push(
-				`- ${entry.id} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, input.panel)}`,
-			);
-			const evidence = inertLine(entry.finding.evidence.trim());
-			if (evidence.length > 0) {
-				lines.push(`  ${truncateCodePoints(evidence, EVIDENCE_CHARS)}`);
-			}
+			lines.push(...findingReplyRows(entry, input.panel));
 		}
 	}
 	// A lens that ran shows in the seats line; only untaken ones are suggested.
@@ -415,6 +428,55 @@ export function renderReviewResult(input: {
 		lines.push("", input.result.cleanupError);
 	}
 	return fitPresentation(lines, input.reserveBytes);
+}
+
+function evidenceText(entry: StampedFinding): string {
+	return truncateCodePoints(
+		inertLine(entry.finding.evidence.trim()),
+		EVIDENCE_CHARS,
+	);
+}
+
+/** One flat finding: its row, then its evidence. `label` replaces the id. */
+function findingReplyRows(
+	entry: StampedFinding,
+	panel: PlannedSeat[],
+	label = entry.id,
+): string[] {
+	const rows = [
+		`- ${label} [${entry.finding.severity}] ${inertLine(entry.finding.title)} (${inertLine(entry.finding.file)}:${entry.finding.line}) — ${findingAttribution(entry, panel)}`,
+	];
+	const evidence = evidenceText(entry);
+	if (evidence.length > 0) {
+		rows.push(`  ${evidence}`);
+	}
+	return rows;
+}
+
+/**
+ * One group: a group of one is its finding's row with both ids; a larger
+ * group is a header (id, the highest severity a seat stated, the lowest
+ * member's title), then each member's own id, severity, seat, place and
+ * evidence. The member count is never shown.
+ */
+function groupReplyRows(group: GroupView, panel: PlannedSeat[]): string[] {
+	const [only] = group.members;
+	if (group.members.length === 1 && only !== undefined) {
+		return findingReplyRows(only, panel, `${group.id} / ${only.id}`);
+	}
+	const rows = [
+		`- ${group.id} [${group.severity}, ${GROUP_SEVERITY_LABEL}] ${inertLine(group.lead.finding.title)}`,
+	];
+	for (const entry of group.members) {
+		rows.push(
+			`  - ${entry.id} [${entry.finding.severity}] ${findingAttribution(entry, panel)} (${inertLine(entry.finding.file)}:${entry.finding.line})`,
+		);
+		const evidence = evidenceText(entry);
+		if (evidence.length > 0) {
+			rows.push(`    ${evidence}`);
+		}
+	}
+	return rows;
 }
 
 /** Findings by severity, then id, as the review reply lists them. */
@@ -448,15 +510,31 @@ export function reviewHeadLines(
 	}, 0);
 	const findings = input.findings ?? [];
 	const shownCount = findings.length > 0 ? findings.length : findingCount;
+	const groups = groupedView(findings, input.result.grouping);
 	const summary = [
 		`${voted.length}/${input.result.outcomes.length} voted`,
-		`${shownCount} finding${shownCount === 1 ? "" : "s"}`,
+		`${shownCount} finding${shownCount === 1 ? "" : "s"}${
+			groups === undefined
+				? ""
+				: ` in ${groups.length} group${groups.length === 1 ? "" : "s"}`
+		}`,
 	];
-	const totals = rollupLifecycle(input.result.outcomes);
+	// The grouping seat's time and cost count too; it is never a vote.
+	const totals = rollupLifecycle([
+		...input.result.outcomes,
+		...(input.result.grouping === undefined ? [] : [input.result.grouping]),
+	]);
 	if (totals !== undefined) {
 		summary.push(formatDuration(totals.durationMs), formatCost(totals.cost));
 	}
-	return [heading, summary.join(" · "), renderSeatsLine(input.panel)];
+	const grouping = input.result.grouping;
+	return [
+		heading,
+		summary.join(" · "),
+		renderSeatsLine(
+			grouping === undefined ? input.panel : [...input.panel, grouping.seat],
+		),
+	];
 }
 
 /** `Lost: seat/lens (class), …` for the seats that failed. */

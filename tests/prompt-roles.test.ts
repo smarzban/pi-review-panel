@@ -32,6 +32,7 @@ const EXPECTED_ROLES: Array<{
 	{ name: "infrastructure", kind: "specialist" },
 	{ name: "specification-conformance", kind: "specialist" },
 	{ name: "fix-verification", kind: "check" },
+	{ name: "grouping", kind: "check" },
 ];
 
 /** The domain keyword each prompt must stay within (semantic oracle, AC-2). */
@@ -49,6 +50,7 @@ const ROLE_KEYWORDS: Record<PromptRole, string> = {
 	infrastructure: "infrastructure",
 	"specification-conformance": "specification",
 	"fix-verification": "fix",
+	grouping: "group",
 };
 
 /**

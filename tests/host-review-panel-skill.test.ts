@@ -220,6 +220,14 @@ describe("host review-panel skill", () => {
 		expect(body).toContain("no new high/medium regression on the fix");
 	});
 
+	it("judges grouped findings group by group and verifies with G-ids or F-ids (T495)", () => {
+		const body = flat(splitFrontmatter(readSkill()).body);
+		expect(body).toContain("Findings may arrive grouped");
+		expect(body).toContain("Judge each group");
+		expect(body).toContain("G-ids or F-ids");
+		expect(body).toContain("not agreement");
+	});
+
 	it("keeps the same lens triggers as the Pi-side skill", () => {
 		const host = triggerTable(splitFrontmatter(readSkill()).body);
 		const piText = readFileSync(PI_SKILL_PATH, "utf8")

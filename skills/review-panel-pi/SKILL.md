@@ -70,6 +70,8 @@ Large diffs (tens of files or thousands of lines): pass a `scopingNote` naming t
 
 Seat severity is an opinion.
 
+Findings may arrive grouped. When the owner names a grouping seat, findings that describe the same defect share a group (`G-1`, `G-2`, …): a header with the highest severity a seat stated, then each member with its own F-id, seat, severity and evidence. Judge each group once, as one defect, but read its members: they may differ on place or severity. Group size is not agreement and not a reason to keep. To keep, dismiss or leave a whole group as advisory, pass its G-id; pass F-ids to treat members apart. `keptFindingIds`, `dismissed` and `lowAdvisory` take G-ids or F-ids, and verify and the comments report F-ids. A `Lost: grouping` line means the list is not grouped; judge it as usual.
+
 - Default keep: highs, and mediums you agree are real.
 - Default skip: low / advisory / nits. They stay visible in the report.
 - You may promote a low to a kept blocker if you opened the code and it is real. Say why in one line.

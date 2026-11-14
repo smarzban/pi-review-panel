@@ -46,11 +46,21 @@ export type VerificationProfile = {
 	noSubmitNudge: string;
 };
 
+export type GroupingProfile = {
+	kind: "grouping";
+	tools: readonly ["read", "grep", "find", "ls", "git_diff", "submit_groups"];
+	submitTool: "submit_groups";
+	systemPrompt: string;
+	outputChannelInstruction: string;
+	noSubmitNudge: string;
+};
+
 export type FindingsSeatProfile = FindingsProfile | RepoAuditProfile;
 export type SeatProfile =
 	| FindingsSeatProfile
 	| AuditProfile
-	| VerificationProfile;
+	| VerificationProfile
+	| GroupingProfile;
 
 export const SEAT_PROFILES = {
 	findings: {
@@ -96,6 +106,17 @@ export const SEAT_PROFILES = {
 			"Verification results are recorded ONLY via the submit_verification tool. Call it exactly once at the end with one disposition row for every expected id and any direct regressions. Inspect the code with the read-only tools.",
 		noSubmitNudge:
 			"you ended without calling submit_verification; verification results are only recorded via that tool; call submit_verification now covering every expected id; do not reply with prose",
+	},
+	grouping: {
+		kind: "grouping",
+		tools: ["read", "grep", "find", "ls", "git_diff", "submit_groups"],
+		submitTool: "submit_groups",
+		systemPrompt:
+			"You are a Review panel grouping seat. Use only the supplied tools and record groups only through submit_groups.",
+		outputChannelInstruction:
+			"Groups are recorded ONLY via the submit_groups tool. Call it exactly once at the end with every listed finding id in exactly one group. Inspect the code with the read-only tools when the records alone do not settle whether two findings describe the same defect.",
+		noSubmitNudge:
+			"you ended without calling submit_groups; groups are only recorded via that tool; call submit_groups now with every listed finding id in exactly one group; do not reply with prose",
 	},
 } as const satisfies Record<SeatProfile["kind"], SeatProfile>;
 

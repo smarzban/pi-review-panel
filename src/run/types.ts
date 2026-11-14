@@ -52,6 +52,11 @@ export type RunConfig = {
 	 * them (T-18); absent means no flags and no notices (AC-17).
 	 */
 	priorRecordPaths?: string[];
+	/**
+	 * The owner's grouping seat (`defaults.consolidator`). Absent means no
+	 * grouping step: the review keeps its flat list.
+	 */
+	consolidator?: PlannedSeat;
 };
 
 /** What one seat's run produced. */

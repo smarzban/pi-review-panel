@@ -14,6 +14,7 @@ import {
 } from "../config/lenses.js";
 import { MAX_REVIEW_SEATS } from "../config/panel.js";
 import type { Config } from "../config/schema.js";
+import { planConsolidator } from "./grouping.js";
 import { isProcessAlive } from "./liveness.js";
 import { discoverPriorRecords } from "./prior-records.js";
 import { resolvePriorRunId } from "./prior-run.js";
@@ -295,6 +296,8 @@ export async function resumeRun(
 			seal,
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
+		const consolidator =
+			plan.kind === "review" ? planConsolidator(config) : undefined;
 		const priorRecordPaths =
 			plan.kind === "review"
 				? discoverPriorRecords(run.repoDir).map((entry) => entry.path)
@@ -316,6 +319,9 @@ export async function resumeRun(
 							seats,
 							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
 							priorRecordPaths,
+							// The grouping step always runs again over the final list,
+							// so its groups match the F-ids this resume stamps.
+							...(consolidator === undefined ? {} : { consolidator }),
 						},
 						runOptions,
 						resume,

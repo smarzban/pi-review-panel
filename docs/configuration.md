@@ -19,6 +19,7 @@ Save these exact bytes as your config file (the entry below names the file locat
   "defaults": {
     "seats":["terra","claude","glm"],
     "verifySeats":["claude"],
+    "consolidator":"claude",
     "lenses":["tests"],
     "seatBudgetMs":1200000
   }
@@ -60,6 +61,11 @@ Save these exact bytes as your config file (the entry below names the file locat
     must name a roster row; it need not be in `seats`. Omitted runs verify on the first `seats`
     entry only. A caller's `seats` (CLI `--seats`) still wins over it. An invalid value refuses the
     config, and `diagnose` names the field and the problem.
+  - `consolidator` (optional): one roster id, the grouping seat. It must name a roster row; it need
+    not be in `seats`. When it is set and a review submits two or more findings, one more seat runs
+    after every reviewer has settled and groups the findings that describe the same defect. See
+    [Grouped findings](#grouped-findings). Omitted means no grouping step and today's flat list.
+    An invalid value refuses the config, and `diagnose` names the field and the problem.
   - `prComment` (optional): how review and verify rounds reach the open pull request. `"auto"`,
     the default when the field is absent, posts each round. `"ownerApproved"` posts a round only
     when the call also passes `ownerApproved: true` (CLI `--owner-approved`); without it the reply
@@ -127,6 +133,46 @@ records `runId`, `baseRef`, the optional `scopingNote` verbatim, and the ordered
 to exactly `rosterId`, `lens`, `provider`, `model`. It contains no prompt text, extension paths,
 credentials, or endpoints. Because it is written before the work begins, an aborted run retains it.
 
+## Grouped findings
+
+Several seats often report one defect, at lines a few apart or in different words, so matching on
+file and line misses them. When the owner names a grouping seat in `defaults.consolidator` and a
+review submits two or more findings, one more seat runs after every reviewer has settled: an
+in-process seat on the same pinned snapshot with only the read-only tools, the package-owned
+`grouping` role prompt, and one submit tool, `submit_groups`. It reads every stamped finding (id,
+seat, severity, file, line, title, evidence), given as data, not instructions, and submits groups:
+lists of F-ids, with every F-id in exactly one group. A finding with no duplicate is a group of one.
+A submission with an unknown, missing or repeated id is refused, and the seat may submit again. It
+runs within the same per-seat budget (`seatBudgetMs`).
+
+Grouping only groups. It never drops a finding, never edits its text and never changes its
+severity: every member keeps its F-id, its seat, its stated severity and its evidence. Groups are
+numbered `G-1`, `G-2`, … by the highest severity a seat stated in the group, then by the lowest
+member F-id. A group shows that highest severity, labelled as stated by a seat, and the title of its
+lowest member F-id. Group size is never shown as agreement or used to rank.
+
+The reply, `report.md` and the PR review comment show the grouped list: one header row per group,
+then a row per member with its F-id, severity, seat, `file:line` and evidence. A group of one shows
+as one row with both ids. The summary line counts both (`8 findings in 5 groups`), and the Seats
+line names the grouping seat (`grouping (claude)`). `findings.json` stays the flat stamped list.
+The groups go in `groups.json` beside it: `version`, `runId`, the grouping seat (`rosterId`,
+`provider`, `model`) and `groups`, each `{ "id": "G-1", "findingIds": ["F-1", "F-3"] }`. A review
+signed with the record key also writes `groups.mac`, the MAC of the exact `groups.json` bytes.
+`execution.json` records the grouping seat's timing and outcome under `grouping`, and the reply's
+time and cost include it.
+
+If the grouping seat fails, times out, runs out of budget or never submits a valid grouping, the
+review keeps the flat list and adds one line, `Lost: grouping (<roster id>, <failure class>)`. No
+`groups.json` is written.
+
+`verify` (`keptFindingIds`, `dismissed`, `lowAdvisory`) and `comment` (`dismissed`, `lowAdvisory`)
+accept G-ids as well as F-ids. A G-id stands for all of its member F-ids, and a G-id in `dismissed`
+gives its reason to each member. The G-ids are checked against `groups.json` before any seat runs:
+it must carry a valid `groups.mac` from the owner's record key and group exactly the F-ids in
+`findings.json`, or G-ids are refused and the message asks for F-ids. An id that names neither a
+finding nor a group is refused as before. Verify itself still checks F-ids, so the verify comment
+and the close-out card list F-ids.
+
 ## Interrupted runs and `resume`
 
 A review or audit also writes `plan.json` before pinning: its kind, the frozen base and head
@@ -146,6 +192,8 @@ with a key only the owner holds:
   `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
   It never lives in the reviewed repository, and nothing secret is written to the record.
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
+- It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`) and a review's grouping
+  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id).
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
   needs it. So is a key folder that other users can write, sticky bit or not: whoever can write the
@@ -221,12 +269,16 @@ from `plan.json`. What resume trusts, and what it rebuilds:
   not written through. A symlinked `.review-panel`, `runs` or `seats` folder, or a folder where an
   output file belongs, is refused before any seat runs.
 
-The signatures cover what resume reads. `verify` and `comment` still read a complete record
-without checking a signature.
+The signatures cover what resume reads, and the grouping that G-ids are read from. `verify` and
+`comment` read a complete record without checking a signature, except when a call names a G-id:
+then they read the record key (never creating it) and check `groups.mac`, and refuse G-ids, asking
+for F-ids, when the key or the signature does not check out.
 
 Resume takes the run lock before it re-reads the record, pins the recorded head commit, runs only
 the planned seats with no settled outcome, then writes `execution.json`, `report.md`,
-`findings.json`, `meta.json`, and `COMPLETE` as a first run would. The report has a "Resumed run"
+`findings.json`, `meta.json`, and `COMPLETE` as a first run would. With a `consolidator` set, the
+grouping step runs again at the end over the finished list, so `groups.json` always matches the
+final F-ids. The report has a "Resumed run"
 section naming the seats kept, the seats run again and the seats lost, and `execution.json` lists
 the re-run seats under `resumedSeats`. Resume refuses a complete record, an unknown run, a record
 whose `run.lock` names a live process, a record with no `plan.json` (a run that stopped before its

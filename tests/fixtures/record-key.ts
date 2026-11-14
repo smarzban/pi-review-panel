@@ -70,3 +70,30 @@ export function signSeat(
 		testSeatMac(runId, planMac, index, readFileSync(seatPath, "utf8"), key),
 	);
 }
+
+/** The MAC of a review's `groups.json` bytes, bound to its run id. */
+export function testGroupsMac(
+	runId: string,
+	groupsBytes: string,
+	key: Buffer = TEST_RECORD_KEY,
+): string {
+	return createHmac("sha256", key)
+		.update(`pi-review-panel/groups/v1\0${runId}\0`)
+		.update(groupsBytes)
+		.digest("hex");
+}
+
+/** Signs the record's current `groups.json` bytes, as the package would. */
+export function signGroups(
+	recordPath: string,
+	key: Buffer = TEST_RECORD_KEY,
+): void {
+	writeFileSync(
+		path.join(recordPath, "groups.mac"),
+		testGroupsMac(
+			path.basename(recordPath),
+			readFileSync(path.join(recordPath, "groups.json"), "utf8"),
+			key,
+		),
+	);
+}

@@ -125,6 +125,7 @@ describe("config lens registry", () => {
 			"prompts/infrastructure.md",
 			"prompts/specification-conformance.md",
 			"prompts/fix-verification.md",
+			"prompts/grouping.md",
 			"prompts/audit-code-health.md",
 			"prompts/audit-docs.md",
 			"prompts/audit-tests.md",
