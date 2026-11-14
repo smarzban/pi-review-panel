@@ -185,4 +185,50 @@ describe("resume and the grouping step", () => {
 			readFileSync(path.join(recordPath, "report.md"), "utf8"),
 		).not.toContain("G-1");
 	});
+
+	it("removes a grouping made before the interruption when the configured grouping seat fails, and reports the flat list (panel P-3)", async () => {
+		const repo = createHostRepo();
+		const runId = await interruptedReviewRecord(repo, SEATS);
+		const recordPath = path.join(repo, ".review-panel", "runs", runId);
+		writeFileSync(
+			path.join(recordPath, GROUPS_FILE),
+			JSON.stringify({
+				version: 1,
+				runId,
+				groups: [{ id: "G-1", findingIds: ["F-1", "F-2"] }],
+			}),
+		);
+		signGroups(recordPath);
+		const fake = createSdkSeatFake(
+			[{ kind: "default" }],
+			[{ kind: "failure", message: "provider down" }],
+		);
+		const result = await resumeRun(
+			loadResumable(repo, runId, TEST_RECORD_KEY),
+			{
+				recordKey: TEST_RECORD_KEY,
+				config: ownerConfig("opus"),
+				sessionFactory: fake.factory,
+			},
+		);
+		expect(fake.runs.map((run) => run.input.spec.profile?.kind)).toEqual([
+			undefined,
+			"grouping",
+		]);
+		expect((result as RunReviewResult).grouping?.outcome).toMatchObject({
+			kind: "lost",
+			class: "provider-error",
+		});
+		expect(existsSync(path.join(recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(recordPath, GROUPS_MAC_FILE))).toBe(false);
+		expect(readSignedGroups(recordPath, TEST_RECORD_KEY)).toBeUndefined();
+		const report = readFileSync(path.join(recordPath, "report.md"), "utf8");
+		expect(report).toContain(
+			"Lost: grouping (opus, provider-error). The list below is not grouped.",
+		);
+		expect(report).not.toContain("G-1");
+		expect(report).toMatch(/^### F-1 \[/m);
+		expect(report).toMatch(/^### F-2 \[/m);
+		expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(true);
+	});
 });
