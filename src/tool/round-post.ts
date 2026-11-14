@@ -28,6 +28,7 @@ import {
 	groupingLostLine,
 } from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
+import type { PriorRun } from "../run/prior-run.js";
 import { renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type { RunVerifyResult } from "../run/run-verify.js";
@@ -38,7 +39,7 @@ import {
 	assembleCloseoutParts,
 	type CloseoutJudgmentRow,
 } from "./closeout-comment.js";
-import { loadCloseoutRun } from "./closeout-from-run.js";
+import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
 import {
 	type CommentGroupRow,
@@ -680,10 +681,11 @@ export type VerifyRoundFacts = {
 	/** The review record's findings, for titles; absent when unreadable. */
 	reviewFindings?: readonly StampedFinding[];
 	/**
-	 * The owner's record key: the close-out card is built only from a review
-	 * record signed with it.
+	 * The review record as verify loaded and authenticated it before any seat
+	 * ran. The close-out card is built from these signed bytes, never from the
+	 * record folder again, which may have changed while the seats ran.
 	 */
-	recordKey: Buffer;
+	review: PriorRun;
 };
 
 function runIdOf(recordPath: string): string {
@@ -873,9 +875,14 @@ function buildCloseout(
 	facts: VerifyRoundFacts,
 ): CloseoutCard | { reason: string } {
 	const { result } = facts;
-	let review: ReturnType<typeof loadCloseoutRun>;
+	let review: CloseoutRunFacts;
 	try {
-		review = loadCloseoutRun(ctx.repoDir, result.priorRunId, facts.recordKey);
+		if (result.priorRunId !== facts.review.runId) {
+			throw new Error(
+				`comment refused: verify ran against "${result.priorRunId}", not the loaded review "${facts.review.runId}"`,
+			);
+		}
+		review = closeoutFactsOf(facts.review);
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}

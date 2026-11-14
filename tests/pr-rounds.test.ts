@@ -902,6 +902,74 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 		});
 	});
 
+	it("builds the close-out card from the review bytes verify authenticated first, not files swapped while it ran (panel P-3)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const recordPath = path.join(repo, ".review-panel", "runs", REVIEW_ID);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW_ID,
+					head: "HEAD",
+					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-2", reason: "out of scope for this PR" }],
+					lowAdvisory: ["F-3"],
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRun(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							[ROWS[0] as Row],
+							[resolvedF1],
+							[],
+							() => {
+								// After verify's authenticated read of the review record.
+								writeFileSync(
+									path.join(recordPath, "panel.json"),
+									JSON.stringify({
+										runId: REVIEW_ID,
+										baseRef: "main",
+										seats: [
+											{
+												rosterId: "planted",
+												lens: "plantedlens",
+												provider: "evil",
+												model: "evil",
+											},
+										],
+									}),
+								);
+								writeFileSync(
+									path.join(recordPath, "execution.json"),
+									JSON.stringify({
+										cancelled: false,
+										lostCoverage: [],
+										outcomes: [
+											{
+												seat: { rosterId: "planted", lens: "plantedlens" },
+												outcome: { kind: "failed" },
+											},
+										],
+									}),
+								);
+							},
+						),
+					}),
+				},
+			);
+			const posted = posts(gh.calls);
+			expect(posted).toHaveLength(2);
+			const card = bodyOf(posted[1]);
+			expect(card.split("\n")[0]).toBe("## Review panel · close-out");
+			expect(card).toContain("**Seats:** holistic (terra)");
+			expect(card).toContain("**Lost:** none");
+			expect(card).not.toContain("planted");
+		});
+	});
+
 	it("does not post a second close-out for the same review", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);

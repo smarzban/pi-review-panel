@@ -85,6 +85,14 @@ export function loadCloseoutRun(
 	} catch (error) {
 		throw asCommentError(error);
 	}
+	return closeoutFactsOf(run);
+}
+
+/**
+ * The close-out facts of a review record already loaded and authenticated by
+ * `loadPriorRun`, parsed from its signed bytes, never read again from disk.
+ */
+export function closeoutFactsOf(run: PriorRun): CloseoutRunFacts {
 	const panelRaw = parseJson(run.panelText, "panel.json");
 	if (
 		panelRaw === null ||

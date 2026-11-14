@@ -1032,7 +1032,7 @@ export async function verifyAction(
 			dismissed,
 			lowAdvisory,
 			...(reviewFindings === undefined ? {} : { reviewFindings }),
-			recordKey: verifyKey,
+			review: prior,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));
