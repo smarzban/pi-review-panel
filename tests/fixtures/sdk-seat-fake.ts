@@ -31,6 +31,15 @@ type FakeResponse =
 			disposition?: "resolved" | "still present" | "inconclusive";
 			afterNudge?: boolean;
 	  }
+	| {
+			kind: "grouping";
+			/**
+			 * Arguments for each submit_groups call, in order. A refused call is
+			 * kept in `refusals` and the next one is tried, as a model would
+			 * after a tool error. Absent: every id in a group of its own.
+			 */
+			attempts?: unknown[];
+	  }
 	| { kind: "failure"; message?: string }
 	| { kind: "silent" }
 	| { kind: "pending" };
@@ -49,6 +58,8 @@ type SubmissionTool = {
 export type FakeSdkRun = {
 	input: SdkSeatSessionInput;
 	prompts: string[];
+	/** Tool errors a submission got before one was accepted. */
+	refusals: string[];
 	aborted: boolean;
 	disposed: boolean;
 };
@@ -82,6 +93,13 @@ function responseForProfile(
 				id,
 				holds: response.kind === "audit" ? (response.holds ?? true) : true,
 				rationale: "verified against the code",
+			})),
+		};
+	}
+	if (profile === "grouping") {
+		return {
+			groups: (input.spec.expectedIds ?? []).map((id) => ({
+				findingIds: [id],
 			})),
 		};
 	}
@@ -132,15 +150,26 @@ function waitsForNudge(response: FakeResponse): boolean {
  */
 export function createSdkSeatFake(
 	responses: FakeResponse[] = [{ kind: "default" }],
+	/** Responses for grouping seats, which take their own queue. */
+	groupingResponses: FakeResponse[] = [{ kind: "default" }],
 ): { factory: SdkSessionFactory; runs: FakeSdkRun[] } {
 	const runs: FakeSdkRun[] = [];
 	let nextResponse = 0;
+	let nextGrouping = 0;
 	const factory: SdkSessionFactory = async (input) => {
-		const response = responses[Math.min(nextResponse, responses.length - 1)];
-		nextResponse += 1;
+		let response: FakeResponse;
+		if (input.spec.profile?.kind === "grouping") {
+			response =
+				groupingResponses[Math.min(nextGrouping, groupingResponses.length - 1)];
+			nextGrouping += 1;
+		} else {
+			response = responses[Math.min(nextResponse, responses.length - 1)];
+			nextResponse += 1;
+		}
 		const run: FakeSdkRun = {
 			input,
 			prompts: [],
+			refusals: [],
 			aborted: false,
 			disposed: false,
 		};
@@ -171,11 +200,31 @@ export function createSdkSeatFake(
 					) {
 						return;
 					}
-					const args = responseForProfile(input, response);
 					const tool = input.tools.find(
 						(value): value is SubmissionTool =>
 							isSubmissionTool(value) && value.name.startsWith("submit_"),
 					);
+					if (response.kind === "grouping" && response.attempts !== undefined) {
+						for (const attempt of response.attempts) {
+							try {
+								await tool?.execute(
+									"injected-sdk-seat",
+									attempt as Record<string, unknown>,
+									new AbortController().signal,
+									() => undefined,
+									{},
+								);
+								submitted = true;
+								return;
+							} catch (error) {
+								run.refusals.push(
+									error instanceof Error ? error.message : String(error),
+								);
+							}
+						}
+						return;
+					}
+					const args = responseForProfile(input, response);
 					if (args === undefined || tool === undefined) {
 						return;
 					}

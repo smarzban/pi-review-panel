@@ -16,6 +16,7 @@ import {
 import path from "node:path";
 
 import { validateFindings } from "../seat/schema.js";
+import type { GroupingFacts } from "./grouping.js";
 import { isProcessAlive } from "./liveness.js";
 import { macMatches, planMac, seatMac } from "./record-key.js";
 import type {
@@ -73,6 +74,8 @@ export const RECORD_OUTPUT_FILES = [
 	"findings.json",
 	"meta.json",
 	"cleanup-error.txt",
+	"groups.json",
+	"groups.mac",
 ] as const;
 
 /** Injectable clock: tests pin the run-id timestamp without sleeping. */
@@ -192,6 +195,8 @@ export function writeExecution(
 		outcomes: SeatOutcomeFacts[];
 		/** Seats a resume ran again; the key is absent on a first run. */
 		resumedSeats?: PlannedSeat[];
+		/** The grouping step, when it ran; the key is absent otherwise. */
+		grouping?: GroupingFacts;
 	},
 ): void {
 	const lostCoverage = input.outcomes
@@ -215,6 +220,7 @@ export function writeExecution(
 							),
 						}),
 				outcomes: input.outcomes,
+				...(input.grouping === undefined ? {} : { grouping: input.grouping }),
 			},
 			null,
 			2,
