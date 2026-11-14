@@ -95,8 +95,12 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   zero-width joiner after every `@`, `＠` and `#`, in `GH-123` and in `://`, the dot of `www.`
   backslash-escaped, and control, bidi and invisible characters replaced (an emoji keeps its
   U+FE0F and in-sequence joiners); every `$` posts as `<span>$</span>`, because GitHub runs
-  math (which can colour, hide or resize text) on `\$` and `&#36;` too; parentheses, braces,
-  quotes and dots stay plain. File
+  math (which can colour, hide or resize text) on `\$` and `&#36;` too, with a zero-width
+  joiner between adjacent dollar spans, because a paragraph of only `<span>$</span><span>$</span>
+  … <span>$</span><span>$</span>` still renders as display math; parentheses, braces,
+  quotes and dots stay plain. A text field is cut by code points before escaping and to at most
+  twice its length once escaped (`POSTED_TEXT_GROWTH`), never inside an escape or a dollar span,
+  so its posted size has a fixed cap. File
   names and ids are code spans with a fence longer than any backtick run inside, with nothing
   escaped or joined in them, and a value with nothing visible renders as `(empty)`. Labels the
   tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in
@@ -105,6 +109,10 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   `HEAD^`, is safe: the marker is its own HTML block, which only `-->` ends), and the close-out
   duplicate check matches author, first-line heading and that exact marker as the last non-empty
   line, or, for a card posted before the marker, ``Review `<id>` `` on line 2.
+  Bodies are cut by rows in order (`fitCommentBody`): a group that does not fit whole posts its
+  header, first member and a cut line, later rows are still tried, and what is left then goes to
+  that group's further members; a plain row, or a group that cannot fit even its first member,
+  ends the list, so the cut rows are always the last ones.
   Bodies are capped under 65,536 characters and sent to `gh` on stdin; `gh` runs asynchronously
   within one deadline per round, and an interrupt kills it.
 - Posting claims (`src/tool/round-claim.ts`) are fresh exclusive creates (`wx`) in the review's
