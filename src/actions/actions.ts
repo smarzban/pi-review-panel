@@ -157,7 +157,7 @@ export type ActionDependencies = {
 	suggestLenses?: typeof suggestLenses;
 	runVerify?: (
 		input: RunVerifyInput,
-		options?: RunVerifyOptions,
+		options: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
 	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
 	/**
@@ -770,19 +770,17 @@ type JudgedIds = {
 
 /**
  * Expands every G-id to its member F-ids, from the review's signed
- * grouping. Calls with F-ids only are returned as they are, without
- * reading the record key. A G-id needs `groups.json` with a valid
- * `groups.mac` from the owner's record key that places every F-id of
- * `findings.json` exactly once; otherwise G-ids are refused and the caller
- * is asked for F-ids. A dismissed G-id gives its reason to each member. An
- * F-id named in one list both by itself and through its group, or through
- * two groups, is refused.
+ * grouping. Calls with F-ids only are returned as they are. A G-id needs
+ * `groups.json` with a valid `groups.mac` from the owner's record key that
+ * places every F-id of `findings.json` exactly once; otherwise G-ids are
+ * refused and the caller is asked for F-ids. A dismissed G-id gives its
+ * reason to each member. An F-id named in one list both by itself and
+ * through its group, or through two groups, is refused.
  */
 function expandGroupIds(
-	resolved: Resolved,
-	repoDir: string,
-	/** The review record; read only when a G-id is named. */
-	recordPathOf: () => string,
+	/** The review record, already checked as signed by `key`. */
+	recordPath: string,
+	key: Buffer,
 	ids: JudgedIds,
 	refusal: string,
 ): JudgedIds {
@@ -793,20 +791,6 @@ function expandGroupIds(
 	];
 	if (!named.some(isGroupId)) {
 		return ids;
-	}
-	const recordPath = recordPathOf();
-	let key: Buffer;
-	try {
-		key = resolved.keyOf({
-			repoDir,
-			env: resolved.env,
-			home: resolved.home,
-			create: false,
-		});
-	} catch (error) {
-		throw new Error(
-			`${refusal}: G-ids need the review's signed grouping, and the record key cannot be read: ${error instanceof Error ? error.message : String(error)}; pass F-ids instead`,
-		);
 	}
 	const groups = readSignedGroups(recordPath, key);
 	if (groups === undefined) {
@@ -966,12 +950,16 @@ export async function verifyAction(
 	const { priorRunId, head, seats, scopingNote } = valid;
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
+	// The review record lives in the reviewed repository: it is taken only
+	// when it is signed with the owner's record key, checked here before any
+	// seat runs. Verify never creates the key.
+	const verifyKey = ownerKey(resolved, repoDir, false, "Verify refused");
+	const prior = loadPriorRun(repoDir, priorRunId, verifyKey);
 	// G-ids become F-ids here, before anything else reads them: verify
 	// itself checks F-ids only.
 	const judged = expandGroupIds(
-		resolved,
-		repoDir,
-		() => loadPriorRun(repoDir, priorRunId).recordPath,
+		prior.recordPath,
+		verifyKey,
 		{
 			kept: valid.keptFindingIds,
 			dismissed: valid.dismissed ?? [],
@@ -988,7 +976,7 @@ export async function verifyAction(
 	const reviewFindings =
 		dismissed.length === 0 && lowAdvisory.length === 0
 			? undefined
-			: loadPriorRun(repoDir, priorRunId).findings;
+			: prior.findings;
 	if (reviewFindings !== undefined) {
 		assertVerifyJudgment(
 			reviewFindings,
@@ -1021,6 +1009,7 @@ export async function verifyAction(
 				: { seatBudgetMs: config.defaults.seatBudgetMs }),
 		},
 		{
+			recordKey: verifyKey,
 			...(context.signal === undefined ? {} : { abortSignal: context.signal }),
 			onProgress: (event) =>
 				emit({ ...progressFromVerifyEvent(event, elapsed()), roster }),
@@ -1043,6 +1032,7 @@ export async function verifyAction(
 			dismissed,
 			lowAdvisory,
 			...(reviewFindings === undefined ? {} : { reviewFindings }),
+			recordKey: verifyKey,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));
@@ -1075,11 +1065,13 @@ export async function commentAction(
 	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateCommentInput(input);
 	const { priorRunId } = valid;
-	const facts = loadCloseoutRun(repoDir, priorRunId);
+	// Comment never creates the key, and takes the review (and any verify)
+	// record only when it is signed with it.
+	const commentKey = ownerKey(resolved, repoDir, false, "comment refused");
+	const facts = loadCloseoutRun(repoDir, priorRunId, commentKey);
 	const { dismissed, lowAdvisory } = expandGroupIds(
-		resolved,
-		repoDir,
-		() => facts.run.recordPath,
+		facts.run.recordPath,
+		commentKey,
 		{ kept: [], dismissed: valid.dismissed, lowAdvisory: valid.lowAdvisory },
 		"comment refused",
 	);
@@ -1099,6 +1091,7 @@ export async function commentAction(
 			valid.verifyRunId,
 			accounted.fixed.map((row) => row.id),
 			facts.run.runId,
+			commentKey,
 		);
 	}
 	const verifyRunId = markerVerifyId(repoDir, valid.verifyRunId);

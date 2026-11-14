@@ -18,7 +18,7 @@ import path from "node:path";
 import { validateFindings } from "../seat/schema.js";
 import type { GroupingFacts } from "./grouping.js";
 import { isProcessAlive } from "./liveness.js";
-import { macMatches, planMac, seatMac } from "./record-key.js";
+import { macMatches, planMac, recordMac, seatMac } from "./record-key.js";
 import type {
 	PanelRecord,
 	PanelRecordInput,
@@ -54,6 +54,28 @@ export const PLAN_MAC_FILE = "plan.mac";
  */
 export const SEATS_DIR = "seats";
 
+/**
+ * The record's completion MAC (see `recordMac` in `record-key.ts`), written
+ * just before `COMPLETE` over the files verify and comment read.
+ */
+export const RECORD_MAC_FILE = "record.mac";
+
+/** What a review record's completion MAC covers, in MAC order. */
+export const REVIEW_SIGNED_FILES = [
+	PLAN_FILE,
+	PANEL_FILE,
+	"meta.json",
+	"findings.json",
+	EXECUTION_FILE,
+] as const;
+
+/** What a verify record's completion MAC covers, in MAC order. */
+export const VERIFY_SIGNED_FILES = [
+	PANEL_FILE,
+	"meta.json",
+	"verification.json",
+] as const;
+
 /** Held by the process running the record; removed when the run ends. */
 export const RUN_LOCK_FILE = "run.lock";
 
@@ -76,6 +98,7 @@ export const RECORD_OUTPUT_FILES = [
 	"cleanup-error.txt",
 	"groups.json",
 	"groups.mac",
+	RECORD_MAC_FILE,
 ] as const;
 
 /** Injectable clock: tests pin the run-id timestamp without sleeping. */
@@ -721,6 +744,115 @@ function lockToken(text: string): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Signs a finished record: writes `record.mac` over the exact bytes now in
+ * the files its kind covers, bound to the run id and, for a review, to the
+ * plan's MAC. Called last before {@link complete}. A covered file that is
+ * missing or not a regular file throws: the run never completes unsigned.
+ */
+export function sealRecord(
+	record: ReservedRecord,
+	kind: "review" | "verify",
+	key: Buffer,
+	planMacHex: string,
+): void {
+	const names = kind === "review" ? REVIEW_SIGNED_FILES : VERIFY_SIGNED_FILES;
+	const files = names.map((name): [string, string] => {
+		const text = readRegularFile(path.join(record.recordPath, name));
+		if (text === undefined) {
+			throw new Error(
+				`${path.join(record.recordPath, name)} cannot be signed: it is missing or not a regular file`,
+			);
+		}
+		return [name, text];
+	});
+	writeRecordFile(
+		path.join(record.recordPath, RECORD_MAC_FILE),
+		recordMac(key, record.runId, kind, planMacHex, files),
+	);
+}
+
+/**
+ * Why a record is not taken as the owner's own. The message says what is
+ * wrong with it and to run a new review.
+ */
+export class UnsignedRecordError extends Error {
+	constructor(label: string, cause: string, fix: string) {
+		super(
+			`${label} is not signed by this owner's record key (${cause}); ${fix}`,
+		);
+		this.name = "UnsignedRecordError";
+	}
+}
+
+/**
+ * Reads the files a finished record's kind covers, once each, and returns
+ * their exact bytes only when they carry this owner's signature: for a review,
+ * a `plan.json` of kind `review` with a valid `plan.mac`; for either kind, a
+ * `record.mac` over those bytes bound to the record's own run id (its folder
+ * name) and the plan's MAC. Callers parse the returned bytes, never the files
+ * again. Anything else throws an {@link UnsignedRecordError} naming `label`
+ * and `fix`: the record lives in the reviewed repository, and an unsigned
+ * record (including one written before records were signed) cannot be told
+ * apart from a planted one.
+ */
+export function readSignedRecord(
+	recordPath: string,
+	kind: "review" | "verify",
+	key: Buffer,
+	label: string,
+	fix: string,
+): ReadonlyMap<string, string> {
+	const runId = path.basename(recordPath);
+	const refuse = (cause: string): never => {
+		throw new UnsignedRecordError(label, cause, fix);
+	};
+	const names = kind === "review" ? REVIEW_SIGNED_FILES : VERIFY_SIGNED_FILES;
+	const files = new Map<string, string>();
+	for (const name of names) {
+		const text = readRegularFile(path.join(recordPath, name));
+		if (text === undefined) {
+			refuse(`${name} is missing or not a regular file`);
+		}
+		files.set(name, text as string);
+	}
+	let planMacHex = "";
+	if (kind === "review") {
+		const planText = files.get(PLAN_FILE) as string;
+		planMacHex = planMac(key, runId, planText);
+		if (
+			!macMatches(
+				planMacHex,
+				readRegularFile(path.join(recordPath, PLAN_MAC_FILE)),
+			)
+		) {
+			refuse(`${PLAN_MAC_FILE} is missing or does not match`);
+		}
+		let planKind: unknown;
+		try {
+			const parsed: unknown = JSON.parse(planText);
+			planKind = isRecord(parsed) ? parsed.kind : undefined;
+		} catch {
+			planKind = undefined;
+		}
+		if (planKind !== "review") {
+			refuse(`${PLAN_FILE} is not a review plan`);
+		}
+	}
+	const expected = recordMac(key, runId, kind, planMacHex, [
+		...files.entries(),
+	]);
+	if (
+		!macMatches(
+			expected,
+			readRegularFile(path.join(recordPath, RECORD_MAC_FILE)),
+		)
+	) {
+		refuse(`${RECORD_MAC_FILE} is missing or does not match`);
+	}
+	return files;
 }
 
 /**

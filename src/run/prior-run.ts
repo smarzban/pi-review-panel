@@ -1,7 +1,12 @@
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-import { COMPLETE_MARKER } from "./record.js";
+import {
+	COMPLETE_MARKER,
+	EXECUTION_FILE,
+	PANEL_FILE,
+	readSignedRecord,
+} from "./record.js";
 import type { StampedFinding } from "./types.js";
 
 export type PriorRunMeta = {
@@ -16,7 +21,15 @@ export type PriorRun = {
 	recordPath: string;
 	meta: PriorRunMeta;
 	findings: StampedFinding[];
+	/** The exact signed bytes of the record's `panel.json`. */
+	panelText: string;
+	/** The exact signed bytes of the record's `execution.json`. */
+	executionText: string;
 };
+
+/** What to do about a record verify or comment will not take as the owner's. */
+export const NEW_REVIEW_FIX =
+	"run a new review; records written before signing, or by anyone without this owner's record key, cannot be used";
 
 function isRealDirectory(target: string): boolean {
 	try {
@@ -88,7 +101,19 @@ export function resolvePriorRunId(repoDir: string, priorRunId: string): string {
 	return assertSafeRunId(path.basename(candidate));
 }
 
-export function loadPriorRun(repoDir: string, priorRunId: string): PriorRun {
+/**
+ * Loads a complete review record as the owner's own. The record lives in the
+ * reviewed repository, so it is taken only when it carries this owner's
+ * signature (see `readSignedRecord`): `plan.json` with a valid `plan.mac`,
+ * and `record.mac` over the plan, panel, meta, findings and execution bytes,
+ * bound to this run id. Everything returned is parsed from those signed
+ * bytes. Anything else is refused with the fix: run a new review.
+ */
+export function loadPriorRun(
+	repoDir: string,
+	priorRunId: string,
+	recordKey: Buffer,
+): PriorRun {
 	const runId = resolvePriorRunId(repoDir, priorRunId);
 	const recordPath = path.join(repoDir, ".review-panel", "runs", runId);
 	if (!isRealDirectory(recordPath)) {
@@ -97,19 +122,25 @@ export function loadPriorRun(repoDir: string, priorRunId: string): PriorRun {
 	if (!isRealFile(path.join(recordPath, COMPLETE_MARKER))) {
 		throw new Error(`Verify refused: prior run "${runId}" is not complete`);
 	}
-	const metaPath = path.join(recordPath, "meta.json");
-	if (!isRealFile(metaPath)) {
-		throw new Error(`Verify refused: prior run "${runId}" has no meta.json`);
-	}
-	const findingsPath = path.join(recordPath, "findings.json");
-	if (!isRealFile(findingsPath)) {
+	let signed: ReadonlyMap<string, string>;
+	try {
+		signed = readSignedRecord(
+			recordPath,
+			"review",
+			recordKey,
+			`prior run "${runId}"`,
+			NEW_REVIEW_FIX,
+		);
+	} catch (error) {
 		throw new Error(
-			`Verify refused: prior run "${runId}" has no findings.json`,
+			`Verify refused: ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
-	const meta = JSON.parse(readFileSync(metaPath, "utf8")) as PriorRunMeta;
+	const meta = parseSigned(signed, "meta.json", runId) as PriorRunMeta;
 	if (
-		typeof meta.runId !== "string" ||
+		meta === null ||
+		typeof meta !== "object" ||
+		meta.runId !== runId ||
 		typeof meta.baseOid !== "string" ||
 		typeof meta.headOid !== "string"
 	) {
@@ -117,15 +148,32 @@ export function loadPriorRun(repoDir: string, priorRunId: string): PriorRun {
 			`Verify refused: prior run "${runId}" meta.json is invalid`,
 		);
 	}
-	const findings = JSON.parse(
-		readFileSync(findingsPath, "utf8"),
-	) as StampedFinding[];
+	const findings = parseSigned(signed, "findings.json", runId);
 	if (!Array.isArray(findings)) {
 		throw new Error(
 			`Verify refused: prior run "${runId}" findings.json is invalid`,
 		);
 	}
-	return { runId, recordPath, meta, findings };
+	return {
+		runId,
+		recordPath,
+		meta,
+		findings: findings as StampedFinding[],
+		panelText: signed.get(PANEL_FILE) as string,
+		executionText: signed.get(EXECUTION_FILE) as string,
+	};
+}
+
+function parseSigned(
+	signed: ReadonlyMap<string, string>,
+	name: string,
+	runId: string,
+): unknown {
+	try {
+		return JSON.parse(signed.get(name) as string);
+	} catch {
+		throw new Error(`Verify refused: prior run "${runId}" ${name} is invalid`);
+	}
 }
 
 export function selectKeptFindings(

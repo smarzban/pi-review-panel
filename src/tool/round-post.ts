@@ -679,6 +679,11 @@ export type VerifyRoundFacts = {
 	lowAdvisory: readonly string[];
 	/** The review record's findings, for titles; absent when unreadable. */
 	reviewFindings?: readonly StampedFinding[];
+	/**
+	 * The owner's record key: the close-out card is built only from a review
+	 * record signed with it.
+	 */
+	recordKey: Buffer;
 };
 
 function runIdOf(recordPath: string): string {
@@ -870,7 +875,7 @@ function buildCloseout(
 	const { result } = facts;
 	let review: ReturnType<typeof loadCloseoutRun>;
 	try {
-		review = loadCloseoutRun(ctx.repoDir, result.priorRunId);
+		review = loadCloseoutRun(ctx.repoDir, result.priorRunId, facts.recordKey);
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}

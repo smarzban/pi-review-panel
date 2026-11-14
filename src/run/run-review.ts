@@ -15,6 +15,7 @@ import {
 	projectSeat,
 	type RecordSeal,
 	reserve,
+	sealRecord,
 	writeExecution,
 	writePanel,
 	writePlan,
@@ -227,16 +228,19 @@ export async function executeReview(
 	try {
 		// The planned panel is durable before any pinning or scheduling, so a
 		// run that reaches reservation retains it even if it aborts (AC-25).
+		// A resume writes the panel again too, from the seats and note its
+		// signed plan gave it: the record's panel.json is signed at
+		// completion, so it must be this run's, never what is in the folder.
+		const panelWrite = options.writePanel ?? writePanel;
+		panelWrite(record, {
+			runId: record.runId,
+			baseRef: config.baseRef,
+			...(config.scopingNote === undefined
+				? {}
+				: { scopingNote: config.scopingNote }),
+			seats: config.seats,
+		});
 		if (resume === undefined) {
-			const panelWrite = options.writePanel ?? writePanel;
-			panelWrite(record, {
-				runId: record.runId,
-				baseRef: config.baseRef,
-				...(config.scopingNote === undefined
-					? {}
-					: { scopingNote: config.scopingNote }),
-				seats: config.seats,
-			});
 			seal = writePlan(
 				record,
 				{
@@ -384,6 +388,11 @@ export async function executeReview(
 			);
 		}
 		stage = "complete";
+		// Signed last, over the files verify and comment read; a record
+		// without the owner's key stays unsigned, and they refuse it.
+		if (seal !== undefined) {
+			sealRecord(record, "review", seal.key, seal.planMac);
+		}
 		complete(record);
 		return {
 			recordPath: record.recordPath,

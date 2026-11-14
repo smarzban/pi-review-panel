@@ -1,4 +1,9 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	randomBytes,
+	timingSafeEqual,
+} from "node:crypto";
 import {
 	accessSync,
 	closeSync,
@@ -20,8 +25,9 @@ import path from "node:path";
  * owner config (`~/.pi-review-panel/` by default, or the folder of
  * `$PI_REVIEW_PANEL_CONFIG`). Never inside the reviewed repository. Run
  * records live in the repository, so anyone who can put files there can plant
- * one; only a record whose plan and seat files carry this key's MAC is taken
- * as this owner's own.
+ * one; only a record whose plan, seat files and (once finished) `record.mac`
+ * carry this key's MAC is taken as this owner's own by resume, verify and
+ * comment.
  */
 export const RECORD_KEY_FILE = "record-key";
 
@@ -385,6 +391,33 @@ export function groupsMac(
 		.update(`pi-review-panel/groups/v1\0${runId}\0`)
 		.update(groupsBytes)
 		.digest("hex");
+}
+
+/**
+ * The completion MAC of a record (`record.mac`), written last before
+ * `COMPLETE`: bound to the run id, the record kind and the plan's MAC (empty
+ * for a verify record, which has no plan), over each covered file's name and
+ * the SHA-256 of its exact bytes, in the given order. Verify and comment take
+ * a record as this owner's own only when it matches, so a planted record, a
+ * record signed with another key, a signed record copied to another run id,
+ * or one file swapped in from another signed run is refused.
+ */
+export function recordMac(
+	key: Buffer,
+	runId: string,
+	kind: "review" | "verify",
+	planMac: string,
+	files: ReadonlyArray<readonly [string, string]>,
+): string {
+	const mac = createHmac("sha256", key).update(
+		`pi-review-panel/record/v1\0${runId}\0${kind}\0${planMac}\0`,
+	);
+	for (const [name, bytes] of files) {
+		mac.update(
+			`${name}\0${createHash("sha256").update(bytes).digest("hex")}\0`,
+		);
+	}
+	return mac.digest("hex");
 }
 
 /** True only when `given` is a well-formed MAC equal to `expected`. */

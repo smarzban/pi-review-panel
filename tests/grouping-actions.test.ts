@@ -22,7 +22,11 @@ import type { Config } from "../src/config/schema.js";
 import type { RunVerifyInput } from "../src/run/run-verify.js";
 import type { RunConfig } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
-import { signGroups, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import {
+	signGroups,
+	signReviewRecord,
+	TEST_RECORD_KEY,
+} from "./fixtures/record-key.js";
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -166,6 +170,8 @@ function writeReviewRecord(
 		}
 	}
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	// The review record itself is the owner's; `sign` is about the grouping.
+	signReviewRecord(recordPath);
 	return recordPath;
 }
 
@@ -285,7 +291,7 @@ describe("verify takes G-ids as well as F-ids", () => {
 		});
 	});
 
-	it("takes F-ids and G-ids together, and F-ids alone without reading the key", async () => {
+	it("takes F-ids and G-ids together, and F-ids alone", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "review-1");
 			const capture = verifyCapture(repo);
@@ -305,14 +311,7 @@ describe("verify takes G-ids as well as F-ids", () => {
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
-				{
-					deps: deps({
-						runVerify: capture.runVerify,
-						recordKey: () => {
-							throw new Error("the key is not needed for F-ids");
-						},
-					}),
-				},
+				{ deps: deps({ runVerify: capture.runVerify }) },
 			);
 			expect(capture.seen.map((input) => input.keptFindingIds)).toEqual([
 				["F-1", "F-3", "F-4"],
@@ -373,38 +372,40 @@ describe("verify takes G-ids as well as F-ids", () => {
 		});
 	});
 
-	it("asks for F-ids when the record key cannot be read, for verify and comment", async () => {
+	it("refuses verify and comment when the record key cannot be read, F-ids or G-ids (T492)", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "review-1");
 			const capture = verifyCapture(repo);
 			const noKey = () => {
 				throw new Error("there is no record key at /k");
 			};
-			await expect(
-				verifyAction(
-					{
-						repoDir: repo,
-						priorRunId: "review-1",
-						head: "HEAD",
-						keptFindingIds: ["G-1"],
-					},
-					{ deps: deps({ runVerify: capture.runVerify, recordKey: noKey }) },
-				),
-			).rejects.toThrow(
-				/Verify refused: G-ids need .*record key cannot be read: there is no record key at \/k.*pass F-ids instead/,
-			);
-			await expect(
-				commentAction(
-					{
-						repoDir: repo,
-						ownerApproved: true,
-						priorRunId: "review-1",
-						dismissed: [{ id: "G-1", reason: "x" }],
-						lowAdvisory: [],
-					},
-					{ deps: deps({ recordKey: noKey }) },
-				),
-			).rejects.toThrow(/comment refused: G-ids need .*pass F-ids instead/);
+			for (const keptFindingIds of [["G-1"], ["F-1"]]) {
+				await expect(
+					verifyAction(
+						{
+							repoDir: repo,
+							priorRunId: "review-1",
+							head: "HEAD",
+							keptFindingIds,
+						},
+						{ deps: deps({ runVerify: capture.runVerify, recordKey: noKey }) },
+					),
+				).rejects.toThrow(/^Verify refused: there is no record key at \/k/);
+			}
+			for (const id of ["G-1", "F-1"]) {
+				await expect(
+					commentAction(
+						{
+							repoDir: repo,
+							ownerApproved: true,
+							priorRunId: "review-1",
+							dismissed: [{ id, reason: "x" }],
+							lowAdvisory: [],
+						},
+						{ deps: deps({ recordKey: noKey }) },
+					),
+				).rejects.toThrow(/^comment refused: there is no record key at \/k/);
+			}
 			expect(capture.seen).toHaveLength(0);
 		});
 	});

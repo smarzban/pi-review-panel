@@ -39,7 +39,11 @@ import {
 	ROUND_DEADLINE_MS,
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
-import { signGroups, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import {
+	signGroups,
+	signReviewRecord,
+	TEST_RECORD_KEY,
+} from "./fixtures/record-key.js";
 
 /**
  * Each review and verify round posts to the open PR whose head is the run's
@@ -301,6 +305,7 @@ function writeReviewRecord(repo: string, runId: string, rows: Row[]): void {
 		JSON.stringify({ cancelled: false, lostCoverage: [], outcomes: [] }),
 	);
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
+	signReviewRecord(recordPath);
 }
 
 /** A complete earlier verify record for `priorRunId`. */
