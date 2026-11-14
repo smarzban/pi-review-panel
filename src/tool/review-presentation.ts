@@ -19,8 +19,16 @@ import type { PlannedSeat, StampedFinding } from "../run/types.js";
 /** The public boundary never sends more than this many UTF-8 bytes. */
 export const MAX_PRESENTATION_BYTES = 16 * 1024;
 
-/** `reserveBytes` keeps room for lines the caller appends after the report. */
-function fitPresentation(lines: string[], reserveBytes = 0): string {
+/**
+ * `reserveBytes` keeps room for lines the caller appends after the report.
+ * `memberOf` maps the index of each line inside a group of two or more to
+ * that group's id: a cut that falls inside a group says so there.
+ */
+function fitPresentation(
+	lines: string[],
+	reserveBytes = 0,
+	memberOf: ReadonlyMap<number, string> = new Map(),
+): string {
 	const encoder = new TextEncoder();
 	const limit = MAX_PRESENTATION_BYTES - reserveBytes;
 	const joined = lines.join("\n");
@@ -31,15 +39,26 @@ function fitPresentation(lines: string[], reserveBytes = 0): string {
 	const keepThrough = recordIndex >= 0 ? recordIndex + 1 : 1;
 	const head = lines.slice(0, keepThrough);
 	const rest = lines.slice(keepThrough);
+	const omitted = "- additional row(s) omitted.";
 	while (rest.length > 0) {
 		rest.pop();
-		const omitted = "- additional row(s) omitted.";
-		const candidate = [...head, ...rest, omitted].join("\n");
+		// The first line cut: when it belongs to a group, that group is cut.
+		const group = memberOf.get(keepThrough + rest.length);
+		const candidate = [
+			...head,
+			...rest,
+			...(group === undefined
+				? []
+				: [
+						`  - more of ${group} omitted; the full group is in the run record's report.md.`,
+					]),
+			omitted,
+		].join("\n");
 		if (encoder.encode(candidate).length <= limit) {
 			return candidate;
 		}
 	}
-	return [...head, "- additional row(s) omitted."].join("\n");
+	return [...head, omitted].join("\n");
 }
 
 /** Cuts by whole code points, so a multibyte character is never split. */
@@ -398,11 +417,19 @@ export function renderReviewResult(input: {
 	}
 	lines.push(`Record: \`${input.recordPath}\``, "");
 	const groups = groupedView(findings, input.result.grouping);
+	const memberOf = new Map<number, string>();
 	if (findings.length === 0) {
 		lines.push("None submitted.");
 	} else if (groups !== undefined) {
 		for (const group of groups) {
-			lines.push(...groupReplyRows(group, input.panel));
+			const rows = groupReplyRows(group, input.panel);
+			if (group.members.length > 1) {
+				// Every line after the header is the group's.
+				for (let index = 1; index < rows.length; index += 1) {
+					memberOf.set(lines.length + index, group.id);
+				}
+			}
+			lines.push(...rows);
 		}
 	} else {
 		for (const entry of orderFindings(findings)) {
@@ -427,7 +454,7 @@ export function renderReviewResult(input: {
 	if (input.result.cleanupError !== undefined) {
 		lines.push("", input.result.cleanupError);
 	}
-	return fitPresentation(lines, input.reserveBytes);
+	return fitPresentation(lines, input.reserveBytes, memberOf);
 }
 
 function evidenceText(entry: StampedFinding): string {

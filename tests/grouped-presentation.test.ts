@@ -260,6 +260,72 @@ describe("the grouped review reply", () => {
 		expect(text).toContain("2/2 voted · 4 findings ·");
 	});
 
+	it("marks a group the reply cuts partway (review R-3)", () => {
+		const members: StampedFinding[] = Array.from({ length: 80 }, (_, index) =>
+			finding(`F-${index + 1}`, index % 2, {
+				file: "src/cache.ts",
+				line: index + 1,
+				severity: "medium",
+				title: `Leak ${index + 1}`,
+				evidence: "e".repeat(400),
+			}),
+		);
+		const grouping: GroupingFacts = {
+			...GROUPED,
+			outcome: {
+				kind: "grouped",
+				groups: [{ id: "G-1", findingIds: members.map((row) => row.id) }],
+			},
+		};
+		const text = renderReviewResult({
+			recordPath: "/r",
+			panel: PANEL,
+			result: result(grouping),
+			findings: members,
+		});
+		const lines = text.split("\n");
+		expect(lines).toContain("- G-1 [medium, stated by a seat] Leak 1");
+		expect(
+			lines.filter((line) => /^ {2}- F-\d+ /.test(line)).length,
+		).toBeLessThan(80);
+		const marker = lines.indexOf(
+			"  - more of G-1 omitted; the full group is in the run record's report.md.",
+		);
+		expect(marker).toBeGreaterThan(0);
+		expect(lines.at(-1)).toBe("- additional row(s) omitted.");
+		expect(marker).toBe(lines.length - 2);
+	});
+
+	it("adds no group marker when the cut falls between groups", () => {
+		const findings: StampedFinding[] = Array.from({ length: 80 }, (_, index) =>
+			finding(`F-${index + 1}`, index % 2, {
+				file: "src/cache.ts",
+				line: index + 1,
+				severity: "medium",
+				title: `Leak ${index + 1}`,
+				evidence: "e".repeat(400),
+			}),
+		);
+		const grouping: GroupingFacts = {
+			...GROUPED,
+			outcome: {
+				kind: "grouped",
+				groups: findings.map((row, index) => ({
+					id: `G-${index + 1}`,
+					findingIds: [row.id],
+				})),
+			},
+		};
+		const text = renderReviewResult({
+			recordPath: "/r",
+			panel: PANEL,
+			result: result(grouping),
+			findings,
+		});
+		expect(text).toContain("- additional row(s) omitted.");
+		expect(text).not.toContain("more of G-");
+	});
+
 	it("cleans seat text in a group header like any other seat text", () => {
 		const hostile = FINDINGS.map((row) =>
 			row.id === "F-1"
