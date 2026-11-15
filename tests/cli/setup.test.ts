@@ -17,6 +17,7 @@ import {
 	run,
 } from "../../src/cli/run.js";
 import {
+	carriesCredential,
 	type InstalledExtension,
 	type ModelGroup,
 	redactSecrets,
@@ -662,38 +663,82 @@ describe("credentials in an extension source are never printed (F-2, F-7)", () =
 		expect(redactSecrets("/home/user/my ext")).toBe("/home/user/my ext");
 	});
 
-	it.each(CREDENTIAL_SOURCES)("install: %s", async (source) => {
-		const given: string[] = [];
-		const { sdk } = fakeSdk({
-			installExtension: async (input) => {
-				given.push(input.source);
-				input.progress(`Installing ${input.source}...`);
-				return {
-					source: input.source,
-					installedPath: "/agent/git/git.example.com/o/r",
-					filtered: false,
-					entries: ["/agent/git/git.example.com/o/r/index.ts"],
-				};
-			},
-		});
-		const h = harness({ sdk });
-		expect(await h.run(["extension", "install", source])).toBe(EXIT_OK);
-		expect(h.out() + h.err()).not.toContain(SECRET);
-		expect(h.out()).toContain("***");
-		// The package manager still gets the source it needs.
-		expect(given).toEqual([source]);
+	it("redactSecrets hides scheme-less git: user info and the token in an install path (N-1)", () => {
+		expect(redactSecrets(`git:user:${SECRET}@git.example.com/o/r`)).toBe(
+			"git:***@git.example.com/o/r",
+		);
+		expect(redactSecrets(`git:${SECRET}@git.example.com/o/r`)).toBe(
+			"git:***@git.example.com/o/r",
+		);
+		expect(
+			redactSecrets(
+				`/home/u/.pi-review-panel/agent/git/user:${SECRET}@git.example.com/o/r/extensions/index.ts`,
+			),
+		).toBe(
+			"/home/u/.pi-review-panel/agent/git/***@git.example.com/o/r/extensions/index.ts",
+		);
+		expect(
+			redactSecrets(
+				`/agent/git/git.example.com/o/r?private_token=${SECRET}/index.ts`,
+			),
+		).toBe("/agent/git/git.example.com/o/r?private_token=***/index.ts");
+		// An scp-style SSH source names a user, not a secret.
+		expect(redactSecrets("git:git@github.com:o/r")).toBe(
+			"git:git@github.com:o/r",
+		);
 	});
 
-	it.each(CREDENTIAL_SOURCES)("a failed install: %s", async (source) => {
+	it("carriesCredential finds a credential in every form, and passes the plain ones (N-1)", () => {
+		for (const source of [
+			`https://${SECRET}@git.example.com/o/r.git`,
+			`https://user:${SECRET}@git.example.com/o/r.git`,
+			`git:https://user:${SECRET}@git.example.com/o/r`,
+			`git:user:${SECRET}@git.example.com/o/r`,
+			`git:${SECRET}@git.example.com/o/r`,
+			`git:git.example.com/o/r?private_token=${SECRET}`,
+			`git:github.com/o/r?token=${SECRET}`,
+			`ssh://git:${SECRET}@git.example.com/o/r`,
+			`npm:https://user:${SECRET}@registry.example.com/x.tgz`,
+		]) {
+			expect(carriesCredential(source), source).toBe(true);
+		}
+		for (const source of [
+			"git:github.com/earendil-works/pi-claude-code",
+			"git:git@github.com:o/r",
+			"ssh://git@github.com/o/r",
+			"https://github.com/o/r",
+			"git:github.com/o/r@v1.2.0",
+			"npm:@scope/name@1.2.3",
+			"/home/user/my-ext",
+		]) {
+			expect(carriesCredential(source), source).toBe(false);
+		}
+	});
+
+	it.each(CREDENTIAL_SOURCES)(
+		"install refuses %s before the package manager runs (N-1)",
+		async (source) => {
+			const { sdk, installs } = fakeSdk();
+			const h = harness({ sdk });
+			expect(await h.run(["extension", "install", source])).toBe(EXIT_FAILED);
+			expect(installs).toEqual([]);
+			expect(h.err()).toContain("credential helper");
+			expect(h.out() + h.err()).not.toContain(SECRET);
+		},
+	);
+
+	it("a failed install's error is redacted", async () => {
 		const { sdk } = fakeSdk({
-			installExtension: async (input) => {
+			installExtension: async () => {
 				throw new Error(
-					`git clone ${input.source} /agent/x failed with code 128`,
+					`git clone https://someone:${SECRET}@git.example.com/o/r /agent/x failed with code 128`,
 				);
 			},
 		});
 		const h = harness({ sdk });
-		expect(await h.run(["extension", "install", source])).toBe(EXIT_FAILED);
+		expect(
+			await h.run(["extension", "install", "git:git.example.com/o/r"]),
+		).toBe(EXIT_FAILED);
 		expect(h.err()).toContain("failed with code 128");
 		expect(h.out() + h.err()).not.toContain(SECRET);
 	});
@@ -948,5 +993,71 @@ describe("--extension is a path, never a list (R-7)", () => {
 			"c.ts",
 		]);
 		expect(modelCalls).toEqual([[], ["/ext/a,b.ts"], ["/work/c.ts"]]);
+	});
+});
+
+describe("extension remove takes the source as list prints it (regression-1-1)", () => {
+	const raw = `git:user:${SECRET}@git.example.com/o/r`;
+
+	it("a redacted source that matches one installed source removes that source", async () => {
+		const removed: string[] = [];
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{ source: raw, installedPath: "/x", filtered: false, entries: [] },
+				{
+					source: "git:github.com/o/other",
+					installedPath: "/y",
+					filtered: false,
+					entries: [],
+				},
+			],
+			removeExtension: async (input) => {
+				removed.push(input.source);
+				return true;
+			},
+		});
+		const list = harness({ sdk });
+		await list.run(["extension", "list"]);
+		const printed = list
+			.out()
+			.split("\n")
+			.find((line) => line.startsWith("git:") && line.includes("example.com"));
+		expect(printed).toBe("git:***@git.example.com/o/r");
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "remove", printed ?? ""])).toBe(EXIT_OK);
+		expect(removed).toEqual([raw]);
+		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+
+	it("a redacted source that matches two installed sources is refused, naming the settings file", async () => {
+		const { sdk, removals } = fakeSdk({
+			listExtensions: async () => [
+				{ source: raw, installedPath: "/x", filtered: false, entries: [] },
+				{
+					source: `git:other:${SECRET}@git.example.com/o/r`,
+					installedPath: "/z",
+					filtered: false,
+					entries: [],
+				},
+			],
+		});
+		const h = harness({ sdk });
+		expect(
+			await h.run(["extension", "remove", "git:***@git.example.com/o/r"]),
+		).toBe(EXIT_FAILED);
+		expect(removals).toEqual([]);
+		expect(h.err()).toContain("settings.json");
+		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+});
+
+describe("an aborted install says what was recorded (N-3)", () => {
+	it("says the source was not recorded, and starts no install after the abort", async () => {
+		const { sdk, installs } = fakeSdk();
+		const h = harness({ sdk });
+		h.controller.abort(new Error("interrupted"));
+		expect(await h.run(["extension", "install", "npm:late"])).toBe(EXIT_FAILED);
+		expect(installs).toEqual([]);
+		expect(h.err()).toContain("npm:late was not recorded");
 	});
 });

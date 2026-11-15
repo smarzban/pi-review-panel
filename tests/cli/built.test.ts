@@ -102,7 +102,12 @@ function tempRepo(): string {
 function interrupted(
 	home: string,
 	args: string[],
-	options: { cwd?: string; env?: Record<string, string> } = {},
+	options: {
+		cwd?: string;
+		env?: Record<string, string>;
+		/** Press Ctrl-C only once stderr also holds this text. */
+		after?: string;
+	} = {},
 ): Promise<{
 	code: number | null;
 	signal: NodeJS.Signals | null;
@@ -128,7 +133,11 @@ function interrupted(
 	});
 	child.stderr.on("data", (chunk) => {
 		stderr += chunk;
-		if (!sent && stderr.includes("<sigint-handler-ready>")) {
+		if (
+			!sent &&
+			stderr.includes("<sigint-handler-ready>") &&
+			(options.after === undefined || stderr.includes(options.after))
+		) {
 			sent = true;
 			child.kill("SIGINT");
 		}
@@ -634,6 +643,145 @@ describe("an installed extension that never finishes loading", () => {
 		expect(result.stderr).toContain("aborted");
 		expect(result.ms).toBeLessThan(20_000);
 	}, 120_000);
+});
+
+describe("credentials in an extension source (N-1, regression-1-1)", () => {
+	const SECRET = "tok-SECRET-5678";
+	// Scheme-less git: forms that Pi's own parser keeps the token in: in the
+	// clone URL and in the install path it computes.
+	const FORMS = [
+		`git:user:${SECRET}@example.invalid/fixture/pi-ext`,
+		`git:${SECRET}@example.invalid/fixture/pi-ext`,
+		`git:example.invalid/fixture/pi-ext?private_token=${SECRET}`,
+	];
+
+	/** Each form clones from the local fixture repository if it ever reaches git. */
+	function formEnv(repo: string): Record<string, string> {
+		const urls = [
+			`https://user:${SECRET}@example.invalid/fixture/pi-ext`,
+			`https://${SECRET}@example.invalid/fixture/pi-ext`,
+		];
+		return {
+			...gitSourceEnv(repo),
+			GIT_CONFIG_COUNT: String(urls.length + 1),
+			...Object.fromEntries(
+				urls.flatMap((url, index) => [
+					[`GIT_CONFIG_KEY_${index + 1}`, `url.${repo}.insteadOf`],
+					[`GIT_CONFIG_VALUE_${index + 1}`, url],
+				]),
+			),
+		};
+	}
+
+	it.each(FORMS)(
+		"install refuses %s: no clone, nothing in settings.json",
+		(source) => {
+			const home = tempHome();
+			const repo = realpathSync(
+				mkdtempSync(path.join(tmpdir(), "rp-ext-cred-")),
+			);
+			writeExtensionPackage(repo, { git: true });
+			const agent = path.join(home, "agent");
+			const result = cli(home, ["extension", "install", source], {
+				env: { ...formEnv(repo), PI_CODING_AGENT_DIR: agent },
+			});
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain("credential helper");
+			expect(result.stdout + result.stderr).not.toContain(SECRET);
+			expect(existsSync(path.join(agent, "git"))).toBe(false);
+			expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+		},
+		120_000,
+	);
+
+	it("a source Pi installed earlier with a token is listed redacted, and removed by the printed source", () => {
+		const home = tempHome();
+		const agent = path.join(home, "agent");
+		const source = FORMS[0] as string;
+		// The folder Pi's own parser computes for this source (host keeps the user info).
+		const clone = path.join(
+			agent,
+			"git",
+			`user:${SECRET}@example.invalid`,
+			"fixture",
+			"pi-ext",
+		);
+		const entry = writeExtensionPackage(clone);
+		writeFileSync(
+			path.join(agent, "settings.json"),
+			JSON.stringify({ packages: [source] }),
+		);
+		const env = { PI_CODING_AGENT_DIR: agent };
+
+		const listed = cli(home, ["extension", "list", "--json"], { env });
+		expect(listed.code).toBe(0);
+		expect(listed.stdout).not.toContain(SECRET);
+		const [extension] = JSON.parse(listed.stdout).extensions;
+		expect(extension.source).toBe("git:***@example.invalid/fixture/pi-ext");
+		expect(extension.entries).toEqual([
+			entry.replace(`user:${SECRET}@`, "***@"),
+		]);
+		const text = cli(home, ["extension", "list"], { env });
+		expect(text.stdout).not.toContain(SECRET);
+		const models = cli(home, ["models", "--all", "--json"], { env });
+		expect(models.code).toBe(0);
+		expect(models.stdout).not.toContain(SECRET);
+		expect(models.stdout).toContain("review-panel-fixture");
+
+		const removed = cli(home, ["extension", "remove", extension.source], {
+			env,
+		});
+		expect(removed.code).toBe(0);
+		expect(removed.stdout + removed.stderr).not.toContain(SECRET);
+		expect(existsSync(clone)).toBe(false);
+		expect(
+			JSON.parse(readFileSync(path.join(agent, "settings.json"), "utf8"))
+				.packages,
+		).toEqual([]);
+	}, 120_000);
+});
+
+describe("an install stopped by Ctrl-C (N-3)", () => {
+	it("exits at once and never records the source afterwards", async () => {
+		const home = tempHome();
+		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-slow-")));
+		writeExtensionPackage(repo, { git: true });
+		// A git that takes 4 s, so the clone is still running at Ctrl-C.
+		const bin = path.join(home, "slow-bin");
+		mkdirSync(bin);
+		const realGit = execFileSync("sh", ["-c", "command -v git"], {
+			encoding: "utf8",
+		}).trim();
+		writeFileSync(
+			path.join(bin, "git"),
+			`#!/bin/sh\nsleep 4\nexec "${realGit}" "$@"\n`,
+			{ mode: 0o755 },
+		);
+		const agent = path.join(home, "agent");
+		const result = await interrupted(
+			home,
+			["extension", "install", FIXTURE_GIT_SOURCE],
+			{
+				env: {
+					...gitSourceEnv(repo),
+					PI_CODING_AGENT_DIR: agent,
+					PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+				},
+				// Ctrl-C while the slowed git clone runs.
+				after: `Installing ${FIXTURE_GIT_SOURCE}...`,
+			},
+		);
+		expect(result.code).toBe(1);
+		expect(result.ms).toBeLessThan(3_000);
+		expect(result.stderr).toContain(`${FIXTURE_GIT_SOURCE} was not recorded`);
+		// Long after the slowed clone would have finished.
+		await new Promise((resolve) => setTimeout(resolve, 7_000));
+		const settings = path.join(agent, "settings.json");
+		const packages = existsSync(settings)
+			? (JSON.parse(readFileSync(settings, "utf8")).packages ?? [])
+			: [];
+		expect(packages).toEqual([]);
+	}, 60_000);
 });
 
 describe("setup commands run from a hostile working folder", () => {

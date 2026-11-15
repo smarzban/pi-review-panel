@@ -417,3 +417,37 @@ describe("one provider's failing check does not hide the others (R-5)", () => {
 		]);
 	});
 });
+
+describe("auth providers is bounded (N-4)", () => {
+	it("a check that never settles marks its own row, and the others still answer", async () => {
+		const providers = ["a", "slow", "b"].map((id) => ({
+			id,
+			name: id,
+			auth: { apiKey: { login: () => {} } },
+		}));
+		const runtime = {
+			getProviders: () => providers,
+			listCredentials: async () => [],
+			getAvailable: async () => [],
+			getProviderAuthStatus: () => ({ configured: false }),
+			checkAuth: (id: string) =>
+				id === "slow"
+					? new Promise(() => {})
+					: Promise.resolve({
+							type: "api_key",
+							source: `${id.toUpperCase()}_KEY`,
+						}),
+		};
+		const started = Date.now();
+		const rows = await providerRows(
+			runtime as unknown as Parameters<typeof providerRows>[0],
+			{ checkTimeoutMs: 50 },
+		);
+		expect(Date.now() - started).toBeLessThan(2_000);
+		expect(rows.map((row) => [row.id, row.loggedIn, row.checkError])).toEqual([
+			["a", true, undefined],
+			["b", true, undefined],
+			["slow", false, "the login check did not finish within 0.05 s"],
+		]);
+	}, 5_000);
+});
