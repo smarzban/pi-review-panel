@@ -7,8 +7,10 @@ import path from "node:path";
 
 import type { ActionContext, ActionResult } from "../actions/actions.js";
 import {
-	ACTION_PARSERS,
 	type ActionFunctions,
+	CallArgumentError,
+	CallRepositoryError,
+	callAction,
 	coerceCallArguments,
 } from "../actions/call.js";
 import {
@@ -140,8 +142,8 @@ async function diagnoseHeader(io: RunIo, deps: RunDeps): Promise<string> {
 }
 
 /**
- * Finds the repository. When diagnose cannot (outside a Git repository), it
- * still prints the install's own state first, then fails as before.
+ * Finds the `--repo` repository. When diagnose cannot (not a Git repository),
+ * it still prints the install's own state first, then fails as before.
  */
 async function repositoryFor(
 	action: string,
@@ -154,22 +156,34 @@ async function repositoryFor(
 		return find();
 	} catch (error) {
 		if (action === "diagnose") {
-			io.stdout(
-				render(
-					{ content: [{ type: "text", text: await diagnoseHeader(io, deps) }] },
-					json,
-				),
-			);
+			await printDiagnoseHeader(io, deps, json);
 		}
 		throw error;
 	}
 }
 
-/** Validates one argument record and runs its action. */
+async function printDiagnoseHeader(
+	io: RunIo,
+	deps: RunDeps,
+	json: boolean,
+): Promise<void> {
+	io.stdout(
+		render(
+			{ content: [{ type: "text", text: await diagnoseHeader(io, deps) }] },
+			json,
+		),
+	);
+}
+
+/**
+ * Validates one argument record and runs its action through `callAction`.
+ * `repoDir` is the `--repo` repository when given; otherwise `callAction`
+ * finds it from the record's `repository` or the working folder.
+ */
 async function runAction(
 	action: ActionName,
 	args: Record<string, unknown>,
-	repoDir: string,
+	repoDir: string | undefined,
 	io: RunIo,
 	deps: RunDeps,
 	json: boolean,
@@ -179,25 +193,34 @@ async function runAction(
 			"comment refused: pass --owner-approved (ownerApproved: true) only after the owner asked to post",
 		);
 	}
-	let input: Record<string, unknown>;
-	try {
-		input = ACTION_PARSERS[action](args);
-	} catch (error) {
-		// A `call` object's unknown argument name may be a key pasted there.
-		throw new UsageError(
-			withoutKeyLikeNames(message(error), Object.keys(args)),
-		);
-	}
 	const context: ActionContext = {
 		signal: io.signal,
 		startedAt: Date.now(),
 		onProgress: (view) => io.stderr(`${renderReviewProgress(view)}\n`),
 	};
-	const run = deps.actions[action] as (
-		input: Record<string, unknown>,
-		context: ActionContext,
-	) => Promise<ActionResult>;
-	let result = await run({ repoDir, ...input }, context);
+	let result: ActionResult;
+	try {
+		result = await callAction(
+			{ ...args, action },
+			{
+				cwd: io.cwd,
+				...(repoDir === undefined ? {} : { repoDir }),
+				context,
+				actions: deps.actions,
+			},
+		);
+	} catch (error) {
+		if (error instanceof CallArgumentError) {
+			// A `call` object's unknown argument name may be a key pasted there.
+			throw new UsageError(
+				withoutKeyLikeNames(message(error), Object.keys(args)),
+			);
+		}
+		if (error instanceof CallRepositoryError && action === "diagnose") {
+			await printDiagnoseHeader(io, deps, json);
+		}
+		throw error;
+	}
 	if (io.signal.aborted) {
 		// A run that still returned after Ctrl-C is printed, but did not
 		// complete as asked.
@@ -247,13 +270,17 @@ async function execute(
 			if (command.dismissed !== undefined) {
 				args.dismissed = await dismissedText(command.dismissed, io);
 			}
-			const repoDir = await repositoryFor(
-				command.action,
-				() => resolveRepo(io, command.repo),
-				io,
-				deps,
-				command.json,
-			);
+			const repo = command.repo;
+			const repoDir =
+				repo === undefined
+					? undefined
+					: await repositoryFor(
+							command.action,
+							() => resolveRepo(io, repo),
+							io,
+							deps,
+							command.json,
+						);
 			return runAction(command.action, args, repoDir, io, deps, command.json);
 		}
 		case "call": {
@@ -276,16 +303,17 @@ async function execute(
 					'call: give the repository either as --repo or as "repository", not both',
 				);
 			}
-			const repoDir = await repositoryFor(
-				action,
-				() =>
-					command.repo === undefined
-						? resolveReviewRepository(args.repository, io.cwd)
-						: resolveRepo(io, command.repo),
-				io,
-				deps,
-				command.json,
-			);
+			const repo = command.repo;
+			const repoDir =
+				repo === undefined
+					? undefined
+					: await repositoryFor(
+							action,
+							() => resolveRepo(io, repo),
+							io,
+							deps,
+							command.json,
+						);
 			return runAction(
 				action as ActionName,
 				args,

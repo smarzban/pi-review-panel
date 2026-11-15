@@ -15,6 +15,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "../../src/actions/actions.js";
 import * as actionsModule from "../../src/actions/actions.js";
+import { REPOSITORY_EXAMPLE } from "../../src/actions/repository.js";
 import type { AuthSdk, AuthTerminal } from "../../src/cli/auth.js";
 import {
 	type ActionFunctions,
@@ -355,6 +356,49 @@ describe("call takes one argument object", () => {
 			JSON.stringify({ action: "diagnose", repository: REPO }),
 		]);
 		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
+	});
+
+	it("uses the working folder's Git top-level when repository is omitted or a placeholder (P-4)", async () => {
+		for (const repository of [undefined, "/", REPOSITORY_EXAMPLE]) {
+			const h = harness({ cwd: path.join(REPO, "src", "cli") });
+			const object =
+				repository === undefined
+					? { action: "diagnose" }
+					: { action: "diagnose", repository };
+			expect(await h.run(["call", JSON.stringify(object)])).toBe(EXIT_OK);
+			expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
+		}
+	});
+
+	it("an explicit repository wins over the working folder (P-4)", async () => {
+		const other = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-other-")));
+		execFileSync("git", ["init", "-q"], { cwd: other });
+		const h = harness({ cwd: other });
+		await h.run([
+			"call",
+			JSON.stringify({ action: "diagnose", repository: REPO }),
+		]);
+		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
+	});
+
+	it("refuses a placeholder when the working folder is not a Git repository (P-4)", async () => {
+		const loose = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-loose-")));
+		for (const repository of ["/", REPOSITORY_EXAMPLE]) {
+			const h = harness({ cwd: loose });
+			expect(
+				await h.run([
+					"call",
+					JSON.stringify({
+						action: "suggest",
+						base: "a",
+						head: "b",
+						repository,
+					}),
+				]),
+			).toBe(EXIT_FAILED);
+			expect(h.err()).toMatch(/not a Git repository/i);
+			expect(h.calls.suggest).toBeUndefined();
+		}
 	});
 
 	it('coerces leniently: a string list, JSON-text dismissed, ownerApproved "true"', async () => {

@@ -4,6 +4,8 @@
  * `review-panel call` takes. The CLI's own flags map onto the same names.
  */
 import {
+	type ActionContext,
+	type ActionResult,
 	auditAction,
 	coerceJsonValue,
 	coerceStringList,
@@ -21,6 +23,7 @@ import {
 	suggestAction,
 	verifyAction,
 } from "./actions.js";
+import { resolveReviewRepository } from "./repository.js";
 
 export const ACTION_NAMES = [
 	"diagnose",
@@ -106,4 +109,60 @@ export function coerceCallArguments(
 		}
 	}
 	return next;
+}
+
+/** The argument object is wrong: no such action, or an argument it does not take. */
+export class CallArgumentError extends Error {}
+
+/** No repository could be found for the call. */
+export class CallRepositoryError extends Error {}
+
+export type CallOptions = {
+	/** Where to find the repository when `repository` is omitted or a placeholder. */
+	cwd: string;
+	/** A repository the caller already resolved (the CLI's `--repo`); wins. */
+	repoDir?: string;
+	context: ActionContext;
+	actions?: ActionFunctions;
+};
+
+/**
+ * Runs one action from its argument object (already coerced): checks the
+ * action, finds the repository (`repoDir`, else `repository` when it is a real
+ * path, else the Git top-level of `cwd`), validates the arguments with the
+ * action's own parser, and runs it. The CLI runs every action through here.
+ */
+export async function callAction(
+	args: Record<string, unknown>,
+	options: CallOptions,
+): Promise<ActionResult> {
+	const action = args.action;
+	if (!isActionName(action)) {
+		throw new CallArgumentError(
+			`"action" must be one of ${ACTION_NAMES.join(", ")}`,
+		);
+	}
+	let repoDir = options.repoDir;
+	if (repoDir === undefined) {
+		try {
+			repoDir = resolveReviewRepository(args.repository, options.cwd);
+		} catch (error) {
+			throw new CallRepositoryError(
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+	}
+	let input: Record<string, unknown>;
+	try {
+		input = ACTION_PARSERS[action](args);
+	} catch (error) {
+		throw new CallArgumentError(
+			error instanceof Error ? error.message : String(error),
+		);
+	}
+	const run = (options.actions ?? realActions)[action] as (
+		input: Record<string, unknown>,
+		context: ActionContext,
+	) => Promise<ActionResult>;
+	return run({ repoDir, ...input }, options.context);
 }
