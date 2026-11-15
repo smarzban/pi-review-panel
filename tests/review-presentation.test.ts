@@ -419,6 +419,7 @@ describe("seats line", () => {
 				"2/3 voted · 0 findings",
 				"Seats: holistic (terra, glm), tests (terra)",
 				"Lost: glm/holistic (provider-error)",
+				"- glm/holistic: quota",
 				"Record: `/tmp/run-seats`",
 				"",
 				"None submitted.",
