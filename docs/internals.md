@@ -73,8 +73,8 @@ cannot be made is one reply line, never a run failure.
 open PR whose head is the commit the card is about: the one `--pr` names, or the one open PR at
 that head. Both cards are built from the review and its whole verify chain (`comment` reads it
 itself; a `verifyRunId` it is given must be the latest link) and list each id as “resolved in
-verify N” (N the posted round of the link that resolved it, round numbers only from the review
-record's signed `round-<N>.posted` file names; plain “resolved” for a link that never posted),
+verify N” (N the place in the chain of the link that resolved it, the same `verify N` its comment
+posts as, whether or not it posted),
 dismissed, low/advisory, or under `### Open (not resolved)` (still open in the chain; the first
 verify places every finding, and `comment` with no verify refuses a high or medium it is not told
 to dismiss): presentation only, never the word “fixed”, no “ready to
@@ -214,23 +214,21 @@ within one deadline per round, and an interrupt kills it.
 Posting claims (`src/tool/round-claim.ts`) are fresh exclusive creates (`wx`) in the review's
 run record, and nothing else: no claim is ever taken over, renamed or put back. A verify claims
 `round-<N>.claim`, checks `round-<N>.posted` again after the create, and on a post writes
-`round-<N>.posted` (`wx`) and then deletes its claim. A stale claim (older than the round
-deadline plus 5 s, or made on this host by a process that is gone) stays where it is and is
-skipped, so a crash can leave a gap in the verify numbering, never a duplicate (a POST `gh`
-reports as failed after GitHub accepted it gives its number back; that repeat is set aside). The
+`round-<N>.posted` (`wx`) and then deletes its claim. N is the verify's chain link, never chosen
+by the claim: the claim and the marker only stop a second post of that round. A stale claim
+(older than the round deadline plus 5 s, or made on this host by a process that is gone) stays
+where it is and leaves that round unposted; the reply says to delete it (a POST `gh` reports as
+failed after GitHub accepted it gives its claim back; that repeat is set aside). The
 close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
 to the PR's comments, then to the next generation; only a generation's creator posts, and a
 posted card writes `closeout.posted` (`wx`), which stops every later verify. Every posted marker
-(`round-<N>.posted`, `closeout.posted`, a verify's own `round.posted`) holds a MAC from the
-owner's record key over the record's run id, the marker's file name and the verify that wrote
-it; an unsigned or copied marker is no marker, and the verify that posts replaces it. `verify N`
-counts only complete verify records signed with that key (`record.mac`) whose signed meta names
-the review and that hold a signed `round.posted`. Claims are not signed: a planted stale-looking
-`round-<N>.claim` is skipped and bumps `verify N`, a planted live-looking claim can stop a
-post, as can five planted stale-looking close-out claims (`comment` still works; never
-forge one or post a second card), deleting genuine markers can repeat a `verify N`, and markers
-written before signing count as none, so a PR reviewed before this change can see its `verify N`
-numbering start again; these are documented limits. The close-out posts
+(`round-<N>.posted`, `closeout.posted`) holds a MAC from the owner's record key over the
+record's run id, the marker's file name and the verify that wrote it; an unsigned or copied
+marker, or one signed for another verify, is no marker for this verify, and the verify that
+posts replaces it. Claims are not signed: a planted claim can stop a post, as can five planted
+stale-looking close-out claims (`comment` still works; never forge one or post a second card),
+and deleting a genuine `round-<N>.posted` changes nothing, because a verify posts its round only
+during its own run; these are documented limits. The close-out posts
 at most once per review, with two exceptions set aside: a crash between GitHub accepting the
 card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
 whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a

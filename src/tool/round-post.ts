@@ -26,9 +26,7 @@ import {
 	groupedView,
 	groupingLostLine,
 } from "../run/grouping.js";
-import { discoverPriorRecords } from "../run/prior-records.js";
-import { NEW_REVIEW_FIX, type PriorRun } from "../run/prior-run.js";
-import { readSignedRecord } from "../run/record.js";
+import type { PriorRun } from "../run/prior-run.js";
 import { renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type { RunVerifyResult } from "../run/run-verify.js";
@@ -51,7 +49,6 @@ import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
 import {
 	chainRounds,
-	postedVerifyRounds,
 	REVIEW_ROUND_HEADING,
 	roundCommentLinks,
 } from "./closeout-rounds.js";
@@ -70,12 +67,10 @@ import {
 	claimCloseout,
 	claimRound,
 	type HeldClaim,
-	isSignedMarker,
 	ROUND_DEADLINE_MS,
 	type RoundClaim,
 	settleCloseout,
 	settleRound,
-	writeSignedMarker,
 } from "./round-claim.js";
 
 export { fitCommentBody, GITHUB_COMMENT_LIMIT } from "./posted-text.js";
@@ -115,12 +110,6 @@ export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
  * first with `closeout.claim-<g>` (see `round-claim.ts`).
  */
 export const CLOSEOUT_POSTED_MARKER = CLOSEOUT_POSTED_FILE;
-/**
- * Written in a verify's run record once its comment is on the PR, signed
- * with the owner's record key like every posted marker (see
- * `round-claim.ts`). The review's record also gets `round-<N>.posted`.
- */
-export const ROUND_POSTED_MARKER = "round.posted";
 
 /**
  * Runs `gh`. It may answer synchronously or with a promise; the round awaits
@@ -652,53 +641,6 @@ export async function postReviewRound(
 	];
 }
 
-/**
- * Which verify of this review a run is: 1 + the other verify runs of the
- * same review whose comment reached the PR. Only the owner's own records
- * count: a complete verify record signed with `key` (`record.mac`, kind
- * verify), whose signed `meta.json` names this review, holding a
- * {@link ROUND_POSTED_MARKER} signed with `key` for that record. The run
- * records live in the reviewed repository, so a planted or unsigned record
- * or marker changes nothing. A verify that posted nothing is not a round on
- * the PR, so the PR never shows `verify 2` without a `verify 1`.
- */
-export function verifyRoundNumber(
-	repoDir: string,
-	reviewRunId: string,
-	verifyRunId: string,
-	key: Buffer,
-): number {
-	let earlier = 0;
-	for (const record of discoverPriorRecords(repoDir)) {
-		const name = path.basename(record.path);
-		if (
-			name === verifyRunId ||
-			!isSignedMarker(path.join(record.path, ROUND_POSTED_MARKER), key)
-		) {
-			continue;
-		}
-		try {
-			const signed = readSignedRecord(
-				record.path,
-				"verify",
-				key,
-				`run "${name}"`,
-				NEW_REVIEW_FIX,
-			);
-			const meta = JSON.parse(signed.get("meta.json") as string) as {
-				kind?: unknown;
-				priorRunId?: unknown;
-			} | null;
-			if (meta?.kind === "verify" && meta.priorRunId === reviewRunId) {
-				earlier += 1;
-			}
-		} catch {
-			// Not the owner's verify record: it is not a round of this review.
-		}
-	}
-	return earlier + 1;
-}
-
 export type VerifyRoundFacts = {
 	result: RunVerifyResult;
 	panel: readonly PlannedSeat[];
@@ -737,6 +679,11 @@ function runIdOf(recordPath: string): string {
 	return path.basename(recordPath);
 }
 
+/** This verify's round number: its place in the review's chain. */
+function roundOf(facts: VerifyRoundFacts): number {
+	return facts.result.link ?? (facts.chain?.length ?? 0) + 1;
+}
+
 /** The chain with this verify as its last link. */
 function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
 	const { result } = facts;
@@ -745,7 +692,7 @@ function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
 		...chain,
 		makeLink({
 			runId: runIdOf(result.recordPath),
-			link: result.link ?? chain.length + 1,
+			link: roundOf(facts),
 			previousRunId:
 				result.previousRunId ?? chain.at(-1)?.runId ?? result.priorRunId,
 			headOid: result.headOid,
@@ -959,8 +906,6 @@ type CloseoutCard = {
  */
 function buildCloseout(
 	facts: VerifyRoundFacts,
-	repoDir: string,
-	round: number,
 ): CloseoutCard | { reason: string } {
 	const { result } = facts;
 	let review: CloseoutRunFacts;
@@ -977,11 +922,7 @@ function buildCloseout(
 	const verifyRunId = runIdOf(result.recordPath);
 	const links = chainWithOwn(facts);
 	const state = chainState(review.run.findings, links);
-	const rounds = chainRounds(
-		links,
-		postedVerifyRounds(repoDir, review.run, facts.recordKey),
-		{ runId: verifyRunId, round },
-	);
+	const rounds = chainRounds(links);
 	let accounted: ReturnType<typeof accountCloseoutFindings>;
 	try {
 		accounted = accountCloseoutFindings({
@@ -1150,25 +1091,6 @@ async function claimReviewCloseout(
 	}
 }
 
-/** Records in the verify's run record, signed, that its comment is on the PR. */
-function recordPosted(
-	recordPath: string,
-	target: PrTarget,
-	round: number,
-	key: Buffer,
-): void {
-	try {
-		writeSignedMarker(
-			path.join(recordPath, ROUND_POSTED_MARKER),
-			key,
-			runIdOf(recordPath),
-			{ pr: target.pr, round },
-		);
-	} catch {
-		// Without it the review's round-<N>.posted still moves the next verify on.
-	}
-}
-
 /**
  * Posts the verify round and, when the caller asked for it (`closeOut`) and
  * nothing is open after a clean verify, the close-out card as a separate
@@ -1180,28 +1102,21 @@ export async function postVerifyRound(
 ): Promise<string[]> {
 	const { result } = facts;
 	const verifyRunId = runIdOf(result.recordPath);
-	let round = 1;
-	const verify = await postOne(ctx, async (gh) => {
-		const floor = verifyRoundNumber(
-			ctx.repoDir,
-			result.priorRunId,
-			verifyRunId,
-			facts.recordKey,
-		);
+	// One number per round: the verify's place in the review's chain.
+	const round = roundOf(facts);
+	const verify = await postOne(ctx, async () => {
 		const claim: RoundClaim | { reason: string } = await claimRound(
 			path.join(ctx.repoDir, ".review-panel", "runs", result.priorRunId),
-			floor,
+			round,
 			verifyRunId,
 			{
 				key: facts.recordKey,
-				deadline: gh.deadline,
 				...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
 			},
 		);
 		if ("reason" in claim) {
 			throw new RoundSkip(claim.reason);
 		}
-		round = claim.round;
 		let body: string;
 		try {
 			body = renderVerifyRound(facts, round);
@@ -1212,15 +1127,8 @@ export async function postVerifyRound(
 		return {
 			body,
 			settle: (postedTo) => {
-				if (postedTo !== undefined) {
-					// The verify's own marker first, then the review's: a
-					// verify counting rounds meanwhile sees one or the other.
-					recordPosted(result.recordPath, postedTo, round, facts.recordKey);
-					settleRound(claim, true);
-					return undefined;
-				}
-				settleRound(claim, false);
-				return `verify ${round} is left for the next verify`;
+				settleRound(claim, postedTo !== undefined);
+				return undefined;
 			},
 		};
 	});
@@ -1246,7 +1154,7 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", blocker));
 		return lines;
 	}
-	const card = buildCloseout(facts, ctx.repoDir, round);
+	const card = buildCloseout(facts);
 	if ("reason" in card) {
 		lines.push(notPosted("PR close-out", card.reason));
 		return lines;

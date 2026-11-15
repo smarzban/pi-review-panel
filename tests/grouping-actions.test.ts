@@ -621,8 +621,8 @@ describe("comment takes G-ids as well as F-ids", () => {
 			expect(
 				body.split("\n").filter((line) => line.includes("· resolved")),
 			).toEqual([
-				"- **F-1 [high]** F-1 title · resolved",
-				"- **F-3 [medium]** F-3 title · resolved",
+				"- **F-1 [high]** F-1 title · resolved in verify 1",
+				"- **F-3 [medium]** F-3 title · resolved in verify 1",
 			]);
 			expect(body).toContain("**2 resolved** in 1 verify round");
 			expect(body).toContain("**Verified by:** fix-verification (terra)");

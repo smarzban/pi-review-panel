@@ -101,11 +101,7 @@ import {
 	type PostCloseoutResult,
 	postCloseoutComment,
 } from "../tool/closeout-post.js";
-import {
-	chainRounds,
-	postedVerifyRounds,
-	roundCommentLinks,
-} from "../tool/closeout-rounds.js";
+import { chainRounds, roundCommentLinks } from "../tool/closeout-rounds.js";
 import {
 	compactPanelRoster,
 	formatSuggestion,
@@ -1035,10 +1031,7 @@ export async function commentAction(
 	const state = chainState(facts.run.findings, links);
 	// The rounds and the head come from signed records only: the chain's
 	// links, numbered by the posted rounds the review record names.
-	const rounds = chainRounds(
-		links,
-		postedVerifyRounds(repoDir, facts.run, commentKey),
-	);
+	const rounds = chainRounds(links);
 	const headOid =
 		tip !== undefined && isOid(tip.headOid)
 			? tip.headOid

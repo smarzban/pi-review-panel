@@ -1,7 +1,7 @@
 /**
- * Exclusive claims in a review's run record, so concurrent verifies of one
- * review never post the same thing twice: `round-<N>.claim` for the number
- * of a verify round, and `closeout.claim-<g>` for the review's one
+ * Exclusive claims in a review's run record, so nothing is posted twice:
+ * `round-<N>.claim` for the post of verify round N (N is the verify's place
+ * in the review's chain), and `closeout.claim-<g>` for the review's one
  * close-out.
  *
  * Every claim is a fresh file created with `O_EXCL` (`wx`), holding who
@@ -9,17 +9,18 @@
  * exclusion comes only from that create: no claim is ever taken over,
  * renamed or put back. A claim older than the round deadline, or one made
  * on this host whose process is gone, was left by a crash. It is stale and
- * stays where it is; the next verify moves past it, to round N+1 or to
- * close-out generation g+1. A crash can therefore leave a gap in the verify
- * numbering, never a duplicate.
+ * stays where it is: a round whose claim was left stale is not posted, and
+ * the next close-out moves past it to generation g+1. A crash can leave a
+ * round unposted, never posted twice.
  *
- * The posted markers (`round-<N>.posted`, `closeout.posted`, and a verify's
- * own `round.posted`) carry a MAC from the owner's record key, bound to the
- * record's run id, the marker's file name and the verify that wrote it. The
- * record lives in the reviewed repository, so a marker without a valid MAC
- * (planted, copied from another record or round, or written before
- * markers were signed) counts as no marker: it neither skips a round
- * nor stops a close-out, and the verify that posts replaces it.
+ * The posted markers (`round-<N>.posted`, `closeout.posted`) carry a MAC
+ * from the owner's record key, bound to the record's run id, the marker's
+ * file name and the verify that wrote it. The record lives in the reviewed
+ * repository, so a marker without a valid MAC (planted, copied from another
+ * record or round, or written before markers were signed), or a round
+ * marker signed for another verify, counts as no marker: it neither stops
+ * this verify's round nor a close-out, and the verify that posts replaces
+ * it.
  *
  * Only node builtins are imported here, so a plain `node` child process can
  * load this module directly (the tests race real processes over it).
@@ -38,17 +39,10 @@ import path from "node:path";
 
 /** Every `gh` call of one round together gets at most this long. */
 export const ROUND_DEADLINE_MS = 60_000;
-/**
- * A verify waiting on another's round claim stops waiting while this much
- * of its round deadline is left, so a claim it wins always has time for
- * its POST (one `gh` call's own limit).
- */
-export const POST_RESERVE_MS = 30_000;
 /** A claim older than this was left by a verify that is no longer posting. */
 const CLAIM_STALE_MS = ROUND_DEADLINE_MS + 5_000;
 /** Close-out claims tried before the verify gives up: `closeout.claim-1` … `-5`. */
 export const CLOSEOUT_GENERATIONS = 5;
-const POLL_MS = 100;
 
 export const CLOSEOUT_POSTED_FILE = "closeout.posted";
 
@@ -116,7 +110,7 @@ export function isSignedMarker(file: string, key: Buffer): boolean {
  * is not one (see {@link isSignedMarker}). The verify id is under the MAC;
  * any other field in the marker is not.
  */
-export function signedMarkerVerifyRunId(
+function signedMarkerVerifyRunId(
 	file: string,
 	key: Buffer,
 ): string | undefined {
@@ -156,9 +150,10 @@ export function signedMarkerVerifyRunId(
 
 /**
  * Writes a signed posted marker exclusively. When something is already at
- * `file` that is not a signed marker (planted, or left half-written), it is
- * removed (a symlink itself, never its target) and the create is tried once
- * more. True when a signed marker is there afterwards.
+ * `file` that is not a marker signed for this verify (planted, left
+ * half-written, or another verify's), it is removed (a symlink itself,
+ * never its target) and the create is tried once more. True when a signed
+ * marker is there afterwards.
  */
 export function writeSignedMarker(
 	file: string,
@@ -170,7 +165,7 @@ export function writeSignedMarker(
 	if (createExclusive(file, text())) {
 		return true;
 	}
-	if (isSignedMarker(file, key)) {
+	if (signedMarkerVerifyRunId(file, key) === verifyRunId) {
 		return true;
 	}
 	rmSync(file, { force: true });
@@ -178,7 +173,7 @@ export function writeSignedMarker(
 }
 
 /** Records are untrusted: never follow a symlink or open a FIFO in one. */
-export function isRealFile(target: string): boolean {
+function isRealFile(target: string): boolean {
 	try {
 		return lstatSync(target).isFile();
 	} catch {
@@ -345,96 +340,61 @@ export function closeoutPostedFile(recordDir: string): string {
 
 export type RoundClaim = HeldClaim & { round: number };
 
-const sleep = (ms: number) =>
-	new Promise<void>((resolve) => {
-		setTimeout(resolve, ms);
-	});
-
 /**
- * Allocates the next verify round number of a review, from `floor` up.
+ * Claims the post of verify round `round`: the round number is the verify's
+ * place in its review's chain, so only that verify posts it.
  *
- * - A posted round (a signed `round-<N>.posted`) is skipped; an unsigned
- *   marker is no marker.
+ * - A `round-<N>.posted` signed for this verify: the round is already on
+ *   the PR. An unsigned marker, or one signed for another verify (left by
+ *   a chain that is gone), is no marker for it.
  * - `round-<N>.claim` is created exclusively; after the create, the posted
- *   marker is checked again, because another verify can post N and settle
- *   between the first check and the create. If it is there, the claim is
- *   given back and N+1 is tried.
- * - A stale claim stays where it is and N+1 is tried.
- * - A live claim is waited on, so a failed post gives its number back and
- *   no round is skipped. Waiting stops on an interrupt, or once less than
- *   `reserveMs` (default {@link POST_RESERVE_MS}) of `deadline` is left,
- *   and a verify that has waited takes no claim after that point; it then
- *   posts no round, and the reason says so. A verify that never waited
- *   takes a free number whatever time is left.
- *
- * `beforeCreate` runs just before each create (tests park there).
+ *   marker is checked again.
+ * - A claim already there is never taken over: a live one means the round
+ *   is being posted, a stale one that a post of it stopped.
  */
 export async function claimRound(
 	recordDir: string,
-	floor: number,
+	round: number,
 	verifyRunId: string,
 	options: {
 		/** The owner's record key: posted markers are read and signed with it. */
 		key: Buffer;
-		deadline: number;
 		signal?: AbortSignal;
-		pollMs?: number;
-		reserveMs?: number;
-		beforeCreate?: (round: number) => void;
 	},
 ): Promise<RoundClaim | { reason: string }> {
 	if (!isRealDirectory(recordDir)) {
 		return { reason: "the review's run record is missing" };
 	}
-	const reserve = options.reserveMs ?? POST_RESERVE_MS;
-	let round = Math.max(1, floor);
-	let waited = false;
-	for (;;) {
-		if (options.signal?.aborted) {
-			return { reason: "the run was interrupted" };
-		}
-		if (waited && Date.now() >= options.deadline - reserve) {
-			// Not even a claim freed just now is taken this late.
-			return { reason: `another verify is still posting verify ${round}` };
-		}
-		const posted = roundPostedFile(recordDir, round);
-		if (isSignedMarker(posted, options.key)) {
-			round += 1;
-			continue;
-		}
-		const file = roundClaimFile(recordDir, round);
-		options.beforeCreate?.(round);
-		let claim: HeldClaim | undefined;
-		try {
-			claim = createClaim(file, verifyRunId, options.key);
-		} catch (error) {
-			return {
-				reason: `verify ${round} could not be claimed: ${errorMessage(error)}`,
-			};
-		}
-		if (claim !== undefined) {
-			if (isSignedMarker(posted, options.key)) {
-				releaseClaim(claim);
-				round += 1;
-				continue;
-			}
-			return { ...claim, round };
-		}
-		const stale = claimIsStale(file, Date.now());
-		if (stale === undefined) {
-			// Given back between the create and the look: try it again.
-			continue;
-		}
-		if (stale) {
-			round += 1;
-			continue;
-		}
-		if (Date.now() >= options.deadline - reserve) {
-			return { reason: `another verify is still posting verify ${round}` };
-		}
-		await sleep(options.pollMs ?? POLL_MS);
-		waited = true;
+	if (options.signal?.aborted) {
+		return { reason: "the run was interrupted" };
 	}
+	const posted = roundPostedFile(recordDir, round);
+	const postedHere = () =>
+		signedMarkerVerifyRunId(posted, options.key) === verifyRunId;
+	if (postedHere()) {
+		return { reason: `verify ${round} is already on the PR` };
+	}
+	const file = roundClaimFile(recordDir, round);
+	let claim: HeldClaim | undefined;
+	try {
+		claim = createClaim(file, verifyRunId, options.key);
+	} catch (error) {
+		return {
+			reason: `verify ${round} could not be claimed: ${errorMessage(error)}`,
+		};
+	}
+	if (claim === undefined) {
+		return {
+			reason: claimIsStale(file, Date.now())
+				? `round-${round}.claim was left by a post of verify ${round} that stopped; delete it from the review's run record to post it`
+				: `another process is posting verify ${round}`,
+		};
+	}
+	if (postedHere()) {
+		releaseClaim(claim);
+		return { reason: `verify ${round} is already on the PR` };
+	}
+	return { ...claim, round };
 }
 
 /**

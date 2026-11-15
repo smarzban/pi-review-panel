@@ -45,7 +45,6 @@ import {
 	GITHUB_COMMENT_LIMIT,
 	githubSafe,
 	ROUND_DEADLINE_MS,
-	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
 import {
 	signReviewRecord,
@@ -340,10 +339,8 @@ function writeVerifyRecord(
 	runId: string,
 	priorRunId: string,
 	options: {
-		posted?: boolean;
 		kind?: string;
 		signed?: boolean;
-		markerSigned?: boolean;
 		/** One voting seat's dispositions, recorded in verification.json. */
 		items?: Item[];
 		/** The verify seat that voted, recorded in panel.json. */
@@ -422,17 +419,6 @@ function writeVerifyRecord(
 			})),
 		}),
 	);
-	if (options.posted !== false) {
-		// An earlier verify whose comment reached the PR.
-		if (options.markerSigned === false || options.signed === false) {
-			writeFileSync(
-				path.join(recordPath, ROUND_POSTED_MARKER),
-				JSON.stringify({ verifyRunId: runId, pr: 12 }),
-			);
-		} else {
-			writeSignedMarker(recordPath, ROUND_POSTED_MARKER, runId, { pr: 12 });
-		}
-	}
 	if (options.signed !== false) {
 		signVerifyRecord(recordPath);
 	}
@@ -1526,20 +1512,17 @@ function verifyRunSeats(
 	priorRunId: string,
 	kept: Row[],
 	votes: SeatVote[],
-	options: { ownRecord?: { posted?: boolean } } = {},
 ) {
 	return async (input: { headRevision: string }) => {
 		const recordPath = path.join(repo, ".review-panel", "runs", runId);
 		mkdirSync(recordPath, { recursive: true });
-		if (options.ownRecord !== undefined) {
-			writeVerifyRecord(repo, runId, priorRunId, {
-				posted: options.ownRecord.posted ?? false,
-			});
-		}
+		// `v-2` is the second link of its chain: its round is verify 2.
+		const link = Number(/-(\d+)$/u.exec(runId)?.[1]);
 		return {
 			recordPath,
 			priorRunId,
 			priorHeadOid: "b".repeat(40),
+			...(Number.isSafeInteger(link) && link > 0 ? { link } : {}),
 			headOid: input.headRevision,
 			kept: kept.map(stamped),
 			outcomes: votes.map((vote) => {
@@ -2182,7 +2165,7 @@ describe("fix round 1: gh does not block the event loop (L2)", () => {
 describe("fix round 1: one close-out per review, even across concurrent verifies (L3)", () => {
 	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
 
-	it("two concurrent clean verifies post one close-out between them", async () => {
+	it("two clean verifies racing for the close-out post one card between them", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
 			const gh = fakeGh({ pulls: [openPr(12, head)], delayMs: 5 });
@@ -2285,129 +2268,6 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 				},
 			);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
-		});
-	});
-});
-
-describe("fix round 1: verify N counts only verifies that posted (L4, L7)", () => {
-	const ROWS: Row[] = [{ id: "F-1", severity: "high" }];
-
-	async function roundOf(
-		setup: (repo: string) => void,
-		ownRecord?: { posted?: boolean },
-	): Promise<string> {
-		let heading = "";
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			setup(repo);
-			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyAction(
-				{
-					closeOut: true,
-					repoDir: repo,
-					priorRunId: latest(repo, REVIEW_ID),
-					head: "HEAD",
-					keptFindingIds: ["F-1"],
-				},
-				{
-					deps: deps(gh.runGh, {
-						runVerify: verifyRunSeats(
-							repo,
-							"v-5",
-							REVIEW_ID,
-							ROWS,
-							[
-								{
-									rosterId: "terra",
-									items: [{ id: "F-1", disposition: "still present" }],
-								},
-							],
-							ownRecord === undefined ? {} : { ownRecord },
-						),
-					}),
-				},
-			);
-			heading = bodyOf(posts(gh.calls)[0]).split("\n")[0] ?? "";
-		});
-		return heading;
-	}
-
-	it("an earlier verify that did not post is not counted", async () => {
-		expect(
-			await roundOf((repo) =>
-				writeVerifyRecord(repo, "v-1", REVIEW_ID, { posted: false }),
-			),
-		).toBe("## Review panel · verify 1");
-	});
-
-	it("an earlier verify that posted is counted", async () => {
-		expect(
-			await roundOf((repo) => writeVerifyRecord(repo, "v-1", REVIEW_ID)),
-		).toBe("## Review panel · verify 2");
-	});
-
-	it("a record that is not a verify is not counted", async () => {
-		expect(
-			await roundOf((repo) =>
-				writeVerifyRecord(repo, "v-1", REVIEW_ID, { kind: "review" }),
-			),
-		).toBe("## Review panel · verify 1");
-	});
-
-	it("the verify does not count its own record", async () => {
-		expect(await roundOf(() => undefined, { posted: true })).toBe(
-			"## Review panel · verify 1",
-		);
-	});
-
-	it("a posted verify records it, and the next verify is numbered after it", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			const still = [
-				{
-					rosterId: "terra",
-					items: [{ id: "F-1", disposition: "still present" as const }],
-				},
-			];
-			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			const verify = (id: string, runGh: GhRunner) =>
-				verifyAction(
-					{
-						closeOut: true,
-						repoDir: repo,
-						priorRunId: latest(repo, REVIEW_ID),
-						head: "HEAD",
-						keptFindingIds: ["F-1"],
-					},
-					{
-						deps: deps(runGh, {
-							runVerify: async (input: { headRevision: string }) => {
-								const result = await verifyRunSeats(
-									repo,
-									id,
-									REVIEW_ID,
-									ROWS,
-									still,
-								)(input);
-								const link = Number(id.slice(2));
-								writeVerifyRecord(repo, id, REVIEW_ID, {
-									posted: false,
-									chain: {
-										previousRunId: link === 1 ? REVIEW_ID : `v-${link - 1}`,
-										link,
-									},
-								});
-								return result;
-							},
-						}),
-					},
-				);
-			await verify("v-1", fakeGh({ pulls: [] }).runGh);
-			await verify("v-2", gh.runGh);
-			await verify("v-3", gh.runGh);
-			expect(
-				posts(gh.calls).map((call) => bodyOf(call).split("\n")[0]),
-			).toEqual(["## Review panel · verify 1", "## Review panel · verify 2"]);
 		});
 	});
 });
@@ -2723,79 +2583,6 @@ const RENDER_FAILS_ROWS: Row[] = [
 	{ id: "F-1", severity: "high", title: 42 as unknown as string },
 ];
 
-describe("fix round 2: concurrent verifies get distinct, sequential round numbers (regression-1-1)", () => {
-	it("two concurrent verifies post verify 1 and verify 2 and leave no claim behind", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			const gh = fakeGh({ pulls: [openPr(12, head)], delayMs: 5 });
-			await Promise.all([
-				verifyOnce(repo, gh, "v-1"),
-				verifyOnce(repo, gh, "v-2"),
-			]);
-			expect(headingsOf(gh.calls).sort()).toEqual([
-				"## Review panel · verify 1",
-				"## Review panel · verify 2",
-			]);
-			expect(
-				readdirSync(reviewRecordDir(repo)).filter((name) =>
-					name.endsWith(".claim"),
-				),
-			).toEqual([]);
-			// The next verify follows them.
-			const next = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyOnce(repo, next, "v-3");
-			expect(headingsOf(next.calls)).toEqual(["## Review panel · verify 3"]);
-		});
-	});
-
-	it("a failed post gives its number back, so no later round skips it", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			const failing = fakeGh({
-				pulls: [openPr(12, head)],
-				failPost: { at: 1, error: new Error("boom") },
-			});
-			const first = await verifyOnce(repo, failing, "v-1");
-			expect(textOf(first).split("\n").at(-1)).toBe(
-				"PR comment: not posted (gh failed: boom; verify 1 is left for the next verify)",
-			);
-			const second = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyOnce(repo, second, "v-2");
-			expect(headingsOf(second.calls)).toEqual(["## Review panel · verify 1"]);
-		});
-	});
-
-	it("concurrent verifies where one post fails: the other is verify 1, never a lone verify 2", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			const gh = fakeGh({
-				pulls: [openPr(12, head)],
-				delayMs: 5,
-				failPost: { at: 1, error: new Error("boom") },
-			});
-			const replies = await Promise.all([
-				verifyOnce(repo, gh, "v-1"),
-				verifyOnce(repo, gh, "v-2"),
-			]);
-			expect(
-				replies
-					.flatMap((reply) => textOf(reply).split("\n"))
-					.filter((line) => line.startsWith("PR comment:"))
-					.sort(),
-			).toEqual([
-				"PR comment: not posted (gh failed: boom; verify 1 is left for the next verify)",
-				"PR comment: posted to #12 (https://github.com/smarzban/demo/pull/12#issuecomment-101)",
-			]);
-			const bodies = posts(gh.calls).map((call) => bodyOf(call).split("\n")[0]);
-			// The first POST failed; the one that reached the PR is verify 1.
-			expect(bodies).toEqual([
-				"## Review panel · verify 1",
-				"## Review panel · verify 1",
-			]);
-		});
-	});
-});
-
 describe("fix round 3: close-out claims are generations, never taken over", () => {
 	const clean: SeatVote[] = [{ rosterId: "terra", items: [resolved("F-1")] }];
 
@@ -3036,7 +2823,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 });
 
 describe("fix round 3: round markers and claims through the verify action", () => {
-	it("a posted verify writes round.posted in its own record and round-1.posted in the review's (L4)", async () => {
+	it("a posted verify writes a signed round-1.posted in the review's record, and gives its claim back (L4)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
@@ -3044,21 +2831,13 @@ describe("fix round 3: round markers and claims through the verify action", () =
 			expect(
 				JSON.parse(
 					readFileSync(
-						path.join(
-							repo,
-							".review-panel",
-							"runs",
-							"v-1",
-							ROUND_POSTED_MARKER,
-						),
+						path.join(reviewRecordDir(repo), "round-1.posted"),
 						"utf8",
 					),
 				),
 			).toMatchObject({
 				verifyRunId: "v-1",
-				pr: 12,
-				round: 1,
-				mac: testPostedMac("v-1", ROUND_POSTED_MARKER, "v-1"),
+				mac: testPostedMac(REVIEW_ID, "round-1.posted", "v-1"),
 			});
 			expect(
 				existsSync(path.join(reviewRecordDir(repo), "round-1.posted")),
@@ -3071,7 +2850,7 @@ describe("fix round 3: round markers and claims through the verify action", () =
 		});
 	});
 
-	it("a stale round-1.claim is skipped: the verify posts verify 2 and leaves the stale claim", async () => {
+	it("a stale round-1.claim is never taken over: verify 1 is not posted, the reply says why, and the claim stays", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
 			writeFileSync(
@@ -3084,8 +2863,11 @@ describe("fix round 3: round markers and claims through the verify action", () =
 				}),
 			);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyOnce(repo, gh, "v-1");
-			expect(headingsOf(gh.calls)).toEqual(["## Review panel · verify 2"]);
+			const reply = textOf(await verifyOnce(repo, gh, "v-1"));
+			expect(headingsOf(gh.calls)).toEqual([]);
+			expect(reply).toContain(
+				"PR comment: not posted (round-1.claim was left by a post of verify 1 that stopped; delete it from the review's run record to post it)",
+			);
 			expect(
 				existsSync(path.join(reviewRecordDir(repo), "round-1.claim")),
 			).toBe(true);
@@ -3423,7 +3205,7 @@ describe("fix round 2: nits", () => {
 });
 
 describe("fix round 3: the interrupt reply", () => {
-	it("an interrupt during a verify's POST gives its number back, and the reply says so exactly", async () => {
+	it("an interrupt during a verify's POST gives its claim back, and the reply says so exactly", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
@@ -3447,7 +3229,7 @@ describe("fix round 3: the interrupt reply", () => {
 				controller.signal,
 			);
 			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR comment: not posted (the run was interrupted; verify 1 is left for the next verify)",
+				"PR comment: not posted (the run was interrupted)",
 			);
 			expect(
 				readdirSync(reviewRecordDir(repo)).filter((name) =>
@@ -3787,60 +3569,6 @@ describe("T502: the round number and the close-out read only signed records and 
 		return headings;
 	}
 
-	it("a planted unsigned verify record with round.posted does not change N", async () => {
-		expect(
-			await headingAfter((repo) =>
-				writeVerifyRecord(repo, "v-1", REVIEW_ID, { signed: false }),
-			),
-		).toEqual(["## Review panel · verify 1"]);
-	});
-
-	it("a signed verify record with a planted unsigned round.posted does not change N", async () => {
-		expect(
-			await headingAfter((repo) =>
-				writeVerifyRecord(repo, "v-1", REVIEW_ID, { markerSigned: false }),
-			),
-		).toEqual(["## Review panel · verify 1"]);
-	});
-
-	it("a genuine round.posted copied into another signed verify record does not count there", async () => {
-		expect(
-			await headingAfter((repo) => {
-				writeVerifyRecord(repo, "v-1", "another-review");
-				writeVerifyRecord(repo, "v-2", REVIEW_ID, { posted: false });
-				const runs = path.join(repo, ".review-panel", "runs");
-				writeFileSync(
-					path.join(runs, "v-2", ROUND_POSTED_MARKER),
-					readFileSync(path.join(runs, "v-1", ROUND_POSTED_MARKER)),
-				);
-			}),
-		).toEqual(["## Review panel · verify 1"]);
-	});
-
-	it("counts a genuine signed, posted verify of this review (control for the edited-meta case)", async () => {
-		expect(
-			await headingAfter((repo) => writeVerifyRecord(repo, "v-1", REVIEW_ID)),
-		).toEqual(["## Review panel · verify 2"]);
-	});
-
-	it("a genuine signed verify of another review, its meta.json edited to name this review, does not change N", async () => {
-		// The record keeps its own signed round.posted, so only the record
-		// signature over meta.json can refuse it.
-		expect(
-			await headingAfter((repo) => {
-				writeVerifyRecord(repo, "v-1", "another-review");
-				writeFileSync(
-					path.join(repo, ".review-panel", "runs", "v-1", "meta.json"),
-					JSON.stringify({
-						runId: "v-1",
-						kind: "verify",
-						priorRunId: REVIEW_ID,
-					}),
-				);
-			}),
-		).toEqual(["## Review panel · verify 1"]);
-	});
-
 	it("a planted round-1.posted in the review record neither skips verify 1 nor stays, and the next verify is verify 2", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
@@ -4147,30 +3875,10 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			const card = bodyOf(posts(gh.calls)[1]);
 			expect(card).toContain("**2 resolved** in 1 verify round");
 			expect(card).toContain("**Verified by:** fix-verification (terra)\n");
-			expect(card).not.toContain("verify 1");
-			expect(card).not.toContain("glm");
-		});
-	});
-
-	it("an unsigned round-1.posted gives its verify no number: it is still a link of the chain, unnumbered and unlinked", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			earlierVerify(repo, { markerSigned: false });
-			const gh = fakeGh({
-				pulls: [openPr(12, head)],
-				comments: [reviewComment, verifyOneComment],
-			});
-			await cleanVerify(repo, gh);
-			const [verifyPost, card] = posts(gh.calls).map(bodyOf);
-			// v-0's own signed round.posted still counts it on the PR, but the
-			// review's unsigned round-1.posted gives it no number on the card.
-			expect(verifyPost?.split("\n")[0]).toBe("## Review panel · verify 2");
-			expect(card).toContain("**2 resolved** in 2 verify rounds");
-			expect(card).toContain("- **F-2 [medium]** missing timeout · resolved\n");
-			expect(card).toContain(
-				"- **F-1 [high]** auth bypass · resolved in verify 2",
-			);
+			// This verify is verify 1; the planted record's comment is no round.
+			expect(card).toContain(`[verify 1](${PR}#issuecomment-101)`);
 			expect(card).not.toContain(`${PR}#issuecomment-6`);
+			expect(card).not.toContain("glm");
 		});
 	});
 
@@ -4229,7 +3937,6 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] },
 					{ seat: OPUS },
 				],
-				posted: false,
 				headOid: git(repo, ["rev-parse", "HEAD"]),
 			});
 			const gh = fakeGh({
@@ -4268,52 +3975,11 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		});
 	});
 
-	it("a round's number is its signed file name's N, never the marker's unsigned round field (P-2)", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			const reviewDir = reviewRecordDir(repo);
-			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
-				items: [resolved("F-2"), { id: "F-1", disposition: "still present" }],
-			});
-			// Signed, but the JSON round disagrees with the file name.
-			writeSignedMarker(reviewDir, "round-2.posted", "v-0", {
-				pr: 12,
-				round: 7,
-			});
-			// The next link of the chain, after v-0.
-			writeVerifyRecord(repo, "v-a", REVIEW_ID, {
-				items: [],
-				chain: { previousRunId: "v-0", link: 2 },
-			});
-			// Signed, with no round field at all.
-			writeSignedMarker(reviewDir, "round-3.posted", "v-a", { pr: 12 });
-			const gh = fakeGh({
-				pulls: [openPr(12, head)],
-				comments: [
-					comment(
-						6,
-						"saeed",
-						`## Review panel · verify 7\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
-					),
-				],
-			});
-			await cleanVerify(repo, gh);
-			const card = bodyOf(closeoutPosts(gh.calls)[0]);
-			expect(card).toContain("**2 resolved** in 3 verify rounds");
-			expect(card).toContain(
-				"- **F-2 [medium]** missing timeout · resolved in verify 2",
-			);
-			expect(card).toContain(`[verify 2](${PR}#issuecomment-6)`);
-			expect(card).not.toContain("verify 7");
-		});
-	});
-
 	it("a signed round marker naming another review's verify is not a round of this one", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
 			writeVerifyRecord(repo, "v-other", "another-review", {
 				items: [resolved("F-2")],
-				posted: false,
 			});
 			writeSignedMarker(reviewRecordDir(repo), "round-1.posted", "v-other", {
 				pr: 12,
@@ -4376,7 +4042,6 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
 					items: [],
 					headOid: VERIFY_HEAD,
-					posted: false,
 				});
 				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				const { body } = await manual(repo, gh, { dismissed: ALL_DISMISSED });
@@ -4400,7 +4065,6 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
 					items: [],
 					headOid: VERIFY_HEAD,
-					posted: false,
 					signed: false,
 				});
 				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
@@ -4418,7 +4082,6 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				const LATE = "2026-11-14T19-00-00-000Z-main-e52d7adb77ca8882";
 				writeVerifyRecord(repo, NAMED, REVIEW_ID, {
 					votes: [{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] }],
-					posted: false,
 				});
 				writeVerifyRecord(repo, LATE, REVIEW_ID, {
 					votes: [{ seat: OPUS, items: [resolved("F-1")] }],
@@ -4477,18 +4140,19 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			});
 		});
 
-		it("a verify that never posted counts as a round with no number, and nothing is linked", async () => {
+		it("a verify that never posted still has its number, and nothing is linked (S-4)", async () => {
 			await withRepository(async (repo) => {
 				writeReviewRecord(repo, REVIEW_ID, ROWS);
 				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
 					items: [resolved("F-1"), resolved("F-2")],
 					headOid: VERIFY_HEAD,
-					posted: false,
 				});
 				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				const { body } = await manual(repo, gh);
 				expect(body).toContain("**2 resolved** in 1 verify round");
-				expect(body).toContain("- **F-1 [high]** auth bypass · resolved\n");
+				expect(body).toContain(
+					"- **F-1 [high]** auth bypass · resolved in verify 1\n",
+				);
 				expect(body).not.toContain("](");
 				expect(body).not.toMatch(/fixed/i);
 			});

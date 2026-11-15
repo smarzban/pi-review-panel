@@ -430,8 +430,8 @@ it, against the diff from that verify's head:
 4. Regressions get ids `V<link>-R<n>`: the link is the verify's place in the chain (1 for the
    first verify), and n counts the regressions its voting seats reported, in seat order. A later
    round takes them in `keptFindingIds` and `dismissed`. A regression has no severity, so it
-   cannot be left as low/advisory. `V<link>` is the chain place, which matches the PR's
-   `verify N` unless a round did not post.
+   cannot be left as low/advisory. `V<link>` is the chain place, the same number as the
+   round's `verify N` heading.
 5. The undo guard: a verify after the first is given every id an earlier round resolved, with
    its title, file and the verifier's note, and asked whether the new commits touch or undo any
    of those fixes. A hit is a regression whose `undoes` names that id; the seat's channel
@@ -478,40 +478,33 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   - **F-1 [high]** Escape the Seats line (`src/tool/review-presentation.ts:511`) — sol/holistic
     **Evidence:** renderSeatsLine joins roster ids without escaping …
   ```
-- Each verify posts `## Review panel · verify N`. N starts one past the earlier verifies of the
-  same review whose comment reached the PR: complete verify records signed with the owner's record
-  key (`record.mac`) whose signed `meta.json` names this review, each holding a signed
-  `round.posted`. The number is then claimed in the review's run record, by these rules:
-  - Every posted marker (`round-<N>.posted` and `closeout.posted` in the review's record,
-    `round.posted` in a verify's) holds the verify run id and a MAC from the owner's record key
-    bound to the record's run id, the marker's file name and that verify. A marker without a valid
-    MAC (planted in the repository, copied from another record or round, or written before markers
-    were signed) counts as no marker, and the verify that posts that round or card replaces it
-    with a signed one.
-  - The verify skips every N with a signed `round-<N>.posted`, then creates `round-<N>.claim`
-    exclusively (`wx`), holding the verify run id, its process id, the host name and when.
-  - After the create it checks `round-<N>.posted` again: another verify can post N and settle
-    between the first check and the create. If it is there now, the verify deletes its claim and
-    tries N+1.
+- Each verify posts `## Review panel · verify N`. N is the verify's place in its review's chain
+  (see [Verify rounds chain](#verify-rounds-chain)): the same number as its regression ids
+  (`V<N>-R<k>`) and as "resolved in verify N" on the card. A round that did not post keeps its
+  number, so the next heading can skip one. The post is claimed in the review's run record so it
+  happens at most once:
+  - Every posted marker (`round-<N>.posted` and `closeout.posted` in the review's record) holds
+    the verify run id and a MAC from the owner's record key bound to the record's run id, the
+    marker's file name and that verify. A marker without a valid MAC (planted in the repository,
+    copied from another record or round, or written before markers were signed), or one signed
+    for another verify, counts as no marker for this verify, and the verify that posts that
+    round or card replaces it with a signed one.
+  - A `round-<N>.posted` signed for this verify means the round is on the PR already: nothing is
+    posted, and the reply says so. Otherwise the verify creates `round-<N>.claim` exclusively
+    (`wx`), holding the verify run id, its process id, the host name and when, and checks
+    `round-<N>.posted` again after the create.
   - Once the comment is on the PR, the verify writes `round-<N>.posted` exclusively and then
-    deletes its claim. If the post fails, it deletes its claim and the reply says so
-    (`… ; verify 1 is left for the next verify`), so a waiting or later verify takes that number.
-  - A claim another verify still holds is waited on. The verify stops waiting while 30 s of the
-    round's 60 s deadline are still left, and once it has waited it takes no claim after that
-    point, so a claim it wins after waiting always has time for its POST. When it gives up it
-    posts no comment for that round, and the reply says
-    `PR comment: not posted (another verify is still posting verify N)`.
-  - A stale claim, left by a verify that crashed, is never taken over, renamed or removed. It
-    stays where it is and the verify tries N+1. A claim is stale when it is older than the round
-    deadline plus 5 s (65 s), or when it was made on this host and its process is gone. A claim
-    from another host (a shared network folder, a container and its host) is judged by age
-    alone. A folder synced by Dropbox, iCloud or Syncthing is not supported: an exclusive create
-    does not exclude anything across a sync. A claim with unreadable content is judged by its age on disk.
-  - Mutual exclusion comes only from the exclusive create, so two verifies never hold the same
-    number at once. A crash can leave a gap in the numbering (`verify 3` after `verify 1`), never a
-    duplicate. One case is set aside: when `gh` reports a POST as failed (it timed out or was
-    interrupted) after GitHub had already accepted it, the number is given back and the next
-    verify posts it again.
+    deletes its claim. If the post fails, it deletes its claim.
+  - A claim already there is never taken over, renamed or removed. A live one means the round is
+    being posted (`PR comment: not posted (another process is posting verify N)`); a stale one,
+    left by a post that stopped, leaves the round unposted, and the reply says to delete it to
+    post it. A claim is stale when it is older than the round deadline plus 5 s (65 s), or when
+    it was made on this host and its process is gone. A claim from another host (a shared
+    network folder, a container and its host) is judged by age alone. A folder synced by
+    Dropbox, iCloud or Syncthing is not supported: an exclusive create does not exclude anything
+    across a sync. A claim with unreadable content is judged by its age on disk.
+  - One case is set aside: when `gh` reports a POST as failed (it timed out or was interrupted)
+    after GitHub had already accepted it, the claim is given back and no marker is written.
   It is a short delta: an `Open after this round:` line naming every id still open after this
   verify (or `none`), each kept id as resolved, still present or inconclusive with the panel's
   one-line evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept,
@@ -563,19 +556,16 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     its machine's clock runs over 65 s behind the other's, or when it runs in a container that
     shares the host's hostname in its own process namespace.
 - What someone who can write files into the checkout can still do, and what they cannot:
-  - Planting a record or a marker changes nothing: only signed ones count toward `verify N`, skip
-    a round or stop the close-out.
-  - Claims are not signed, so planted claims still act as claims. A planted `round-<N>.claim` that
-    looks stale is skipped, so planting `round-1.claim` to `round-K.claim` makes the next verify
-    post `verify K+1`. One that looks live (a `claimedAt` in the future, or another host's
-    process) holds that round: the verify waits and then posts no comment for it. A planted
+  - Planting a record or a marker changes nothing: only signed ones are links of the chain, mark
+    a round posted or stop the close-out.
+  - Claims are not signed, so planted claims still act as claims. A planted `round-<N>.claim`
+    stops verify N's post, and the reply says why. A planted
     `closeout.claim-<g>` that looks live makes the verify say another verify is posting the
     close-out; five that look stale end as "all left by verifies that stopped". A planted claim
-    can bump the number or stop a post, never forge a post or post a second card; the
+    can stop a post, never forge a post or post a second card; the
     reply says why, and `comment` still posts the card on the owner's yes.
   - Deleting a genuine marker undoes it: a deleted `closeout.posted` is caught by the PR-comment
-    check, so no second card posts, but with both a review's `round-<N>.posted` and the verify's
-    `round.posted` deleted, the next verify can post `verify N` again.
+    check, so no second card posts.
   - Markers written before markers were signed are ignored in the same way.
 - When the card cannot be built (for example a high or medium finding that was neither kept nor
   dismissed with a reason), the reply says why.
@@ -620,10 +610,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   and a lower row never posts in place of a higher one that was cut.
 - `gh` runs asynchronously, so a slow call never blocks Pi; each call has a 30 s limit and one
   round's calls share a 60 s deadline. Interrupting the run (Esc in Pi, Ctrl-C in the CLI) kills a
-  running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`. When
-  the interrupt comes after a verify claimed its round number, the claim is given back and the
-  reply says so: `PR comment: not posted (the run was interrupted; verify N is left for the next
-  verify)`. Comment listings read every page.
+  running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`, and
+  a claim the verify held is given back. Comment listings read every page.
 
 The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
 or updates its own card with the heading `## Review panel`, separate from the
@@ -665,11 +653,9 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
   `comment`'s `head` (`--head`) is still accepted and no longer shown.
 - Each resolved id is listed, review findings by severity and then regressions (tagged
   `[regression]`, with `(undoes F-1)` when one undid an earlier fix), as
-  `resolved in verify N`: N is the round of the chain that resolved it, the `verify N` its
-  comment posted as, read only from the file name of the review record's signed
-  `round-<N>.posted` (never from a field inside it). Its voting seats and dispositions come from
-  its own signed verify record. A verify that never posted (for example, run with
-  `--no-pr-comment`) still counts as a round, with no number, and its ids read plain `resolved`.
+  `resolved in verify N`: N is the round of the chain that resolved it, its place in the chain,
+  whether or not its comment posted. Its voting seats and dispositions come from its own signed
+  verify record.
 - Open ids are listed under `### Open (not resolved)`: what the chain left still present,
   inconclusive or unanswered, and open regressions. With no verify at all, `comment` refuses a
   high or medium it is not told to dismiss (never verified), and lists a low it is not told

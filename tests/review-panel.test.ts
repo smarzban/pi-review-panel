@@ -1187,8 +1187,10 @@ describe("the comment action", () => {
 			);
 			expect(body).not.toContain("### Dismissed");
 			expect(body).toContain("- **F-2** nit");
-			// verify-1 posted no round, so it has no number.
-			expect(body).toMatch(/^- \*\*F-1 \[high\]\*\* auth bypass · resolved$/m);
+			// verify-1 posted no round, and is still verify 1: its chain link.
+			expect(body).toMatch(
+				/^- \*\*F-1 \[high\]\*\* auth bypass · resolved in verify 1$/m,
+			);
 			expect(body).not.toMatch(/fixed/i);
 			// A verify run given as its record path is named by its id.
 			expect(body.split("\n").at(-1)).toBe(

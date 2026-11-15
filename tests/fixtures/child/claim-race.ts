@@ -6,15 +6,13 @@ import {
 } from "node:fs";
 import {
 	claimCloseout,
-	claimRound,
 	settleCloseout,
-	settleRound,
 } from "../../../src/tool/round-claim.js";
 import { TEST_RECORD_KEY } from "../record-key.js";
 
 /**
  * One verify, as its own process, racing others over one review record for
- * a round number or the close-out. "Posting" appends `<id> <what>` to the
+ * the close-out. "Posting" appends `<id> <what>` to the
  * shared `posts` file, which also stands in for the PR's comments. Barrier
  * files order the processes exactly where a test needs it. Prints one JSON
  * line: what this process got.
@@ -22,7 +20,7 @@ import { TEST_RECORD_KEY } from "../record-key.js";
  * Run with `node --import source-hooks.ts claim-race.ts <spec-json>`.
  */
 type Spec = {
-	kind: "round" | "closeout";
+	kind: "closeout";
 	dir: string;
 	id: string;
 	posts: string;
@@ -34,7 +32,7 @@ type Spec = {
 	postAfter?: string;
 	/** Touch this file once the post is settled. */
 	settled?: string;
-	/** Before creating this round's (or generation's) claim, park once. */
+	/** Before creating this generation's claim, park once. */
 	parkAt?: number;
 	/** Touch this file when parked. */
 	parked?: string;
@@ -44,10 +42,6 @@ type Spec = {
 	parkInCardCheck?: boolean;
 	/** Milliseconds the post takes. */
 	postMs?: number;
-	/** Claim and post this many rounds, one after another. */
-	rounds?: number;
-	/** Fail every post whose 1-based index is listed. */
-	failPosts?: number[];
 };
 
 const spec = JSON.parse(process.argv[2] as string) as Spec;
@@ -98,35 +92,6 @@ function cardOnPr(): Promise<boolean> {
 async function main(): Promise<unknown> {
 	if (spec.startAfter !== undefined) {
 		waitFor(spec.startAfter);
-	}
-	if (spec.kind === "round") {
-		const got: unknown[] = [];
-		for (let index = 1; index <= (spec.rounds ?? 1); index += 1) {
-			const claim = await claimRound(spec.dir, 1, spec.id, {
-				key: TEST_RECORD_KEY,
-				deadline: Date.now() + 20_000,
-				reserveMs: 0,
-				pollMs: 2,
-				beforeCreate,
-			});
-			if ("reason" in claim) {
-				got.push({ reason: claim.reason });
-				continue;
-			}
-			touch(spec.claimed);
-			if (spec.postAfter !== undefined) {
-				waitFor(spec.postAfter);
-			}
-			pause(spec.postMs ?? 0);
-			const fails = spec.failPosts?.includes(index) === true;
-			if (!fails) {
-				appendFileSync(spec.posts, `${spec.id} verify ${claim.round}\n`);
-			}
-			settleRound(claim, !fails);
-			touch(spec.settled);
-			got.push(fails ? { failed: claim.round } : { round: claim.round });
-		}
-		return got;
 	}
 	const claim = await claimCloseout(spec.dir, spec.id, cardOnPr, {
 		key: TEST_RECORD_KEY,
