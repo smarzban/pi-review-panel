@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ACTIONS, HELP, parseCommand } from "../cli/src/args.js";
+import { ACTIONS, HELP, parseCommand } from "../src/cli/args.js";
 
 const SKILL_PATH = new URL(
 	"../host-skills/review-panel/SKILL.md",

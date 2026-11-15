@@ -11,7 +11,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "../../src/actions/actions.js";
 import * as actionsModule from "../../src/actions/actions.js";
-import type { AuthSdk, AuthTerminal } from "../src/auth.js";
+import type { AuthSdk, AuthTerminal } from "../../src/cli/auth.js";
 import {
 	type ActionFunctions,
 	EXIT_FAILED,
@@ -21,7 +21,7 @@ import {
 	type RunIo,
 	realActions,
 	run,
-} from "../src/run.js";
+} from "../../src/cli/run.js";
 
 const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
 
@@ -121,7 +121,7 @@ function harness(
 	};
 }
 
-describe("action commands map flags onto the tool's arguments", () => {
+describe("action commands map flags onto the actions' arguments", () => {
 	it("review: --base, --head, --seats, --lenses, --scoping-note", async () => {
 		const h = harness();
 		const code = await h.run([
@@ -279,7 +279,7 @@ describe("action commands map flags onto the tool's arguments", () => {
 		});
 	});
 
-	it('call coerces prComment "false" like the tool', async () => {
+	it('call coerces prComment "false" like ownerApproved', async () => {
 		const h = harness();
 		await h.run([
 			"call",
@@ -304,8 +304,8 @@ describe("action commands map flags onto the tool's arguments", () => {
 	});
 
 	it("--repo resolves relative to the working folder and to its Git top-level", async () => {
-		const h = harness({ cwd: path.join(REPO, "cli") });
-		await h.run(["diagnose", "--repo", "src"]);
+		const h = harness({ cwd: path.join(REPO, "src") });
+		await h.run(["diagnose", "--repo", "cli"]);
 		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
 	});
 
@@ -318,7 +318,7 @@ describe("action commands map flags onto the tool's arguments", () => {
 	});
 });
 
-describe("call takes the tool's own object", () => {
+describe("call takes one argument object", () => {
 	it("runs the same action with the same validation", async () => {
 		const h = harness();
 		const code = await h.run([
@@ -349,7 +349,7 @@ describe("call takes the tool's own object", () => {
 		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
 	});
 
-	it('coerces like the tool: a string list, JSON-text dismissed, ownerApproved "true"', async () => {
+	it('coerces leniently: a string list, JSON-text dismissed, ownerApproved "true"', async () => {
 		const h = harness();
 		expect(
 			await h.run([
@@ -433,7 +433,7 @@ describe("exit codes never encode review content", () => {
 		expect(h.calls.diagnose).toBeUndefined();
 	});
 
-	it("exits 2 for a usage error, including the tool's own argument validation", async () => {
+	it("exits 2 for a usage error, including each action's own argument validation", async () => {
 		const h = harness();
 		expect(await h.run(["nonsense"])).toBe(EXIT_USAGE);
 		expect(await h.run(["review", "--model", "x"])).toBe(EXIT_USAGE);
@@ -768,7 +768,7 @@ describe("suggest", () => {
 		};
 	}
 
-	it("maps --base and --head onto the tool's arguments", async () => {
+	it("maps --base and --head onto the action's arguments", async () => {
 		const h = harness();
 		expect(await h.run(["suggest", "--base", "main", "--head", "HEAD"])).toBe(
 			EXIT_OK,

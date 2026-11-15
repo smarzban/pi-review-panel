@@ -87,13 +87,14 @@ describe("owner configuration guide", () => {
 		expect(existsSync(GUIDE_PATH), "the linked guide exists").toBe(true);
 	});
 
-	it("package.json carries the fields npm publish and Pi install need", () => {
+	it("package.json carries the fields npm publish and the install need", () => {
 		const pkg = JSON.parse(
 			readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8"),
 		) as {
 			name: string;
 			license?: string;
 			repository?: { url?: string };
+			bin?: Record<string, string>;
 			files?: string[];
 			pi?: { extensions?: string[]; skills?: string[] };
 		};
@@ -102,18 +103,19 @@ describe("owner configuration guide", () => {
 		expect(pkg.repository?.url).toContain(
 			"github.com/smarzban/pi-review-panel",
 		);
+		expect(pkg.bin?.["review-panel"]).toBe("dist/src/cli/main.js");
 		expect(pkg.files).toEqual(
 			expect.arrayContaining([
-				"src",
-				"prompts",
+				"dist",
 				"skills",
 				"docs/configuration.md",
-				"host-skills",
 				"LICENSE",
 			]),
 		);
-		expect(pkg.pi?.extensions).toContain("src/tool/review-panel.ts");
-		expect(pkg.pi?.skills).toContain("./skills");
+		expect(pkg.files).not.toContain("src");
+		// `pi install` still loads the skill; the package registers no Pi tool.
+		expect(pkg.pi?.extensions).toBeUndefined();
+		expect(pkg.pi?.skills).toEqual(["./skills"]);
 	});
 
 	it("the marked example runs the tests lens on every review", () => {

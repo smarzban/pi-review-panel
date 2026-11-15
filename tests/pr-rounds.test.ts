@@ -21,6 +21,7 @@ import {
 	reviewAction,
 	verifyAction,
 } from "../src/actions/actions.js";
+import { coerceCallArguments } from "../src/actions/call.js";
 import type { Config } from "../src/config/schema.js";
 import { validateConfig } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
@@ -28,7 +29,6 @@ import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import { parseJsonPages } from "../src/tool/closeout-post.js";
 import { postedCode, postedText } from "../src/tool/posted-text.js";
-import { createReviewPanelTool } from "../src/tool/review-panel.js";
 import {
 	assertVerifyJudgment,
 	CLOSEOUT_POSTED_MARKER,
@@ -1260,10 +1260,9 @@ describe("the tool and the parsers take the new arguments", () => {
 		).toThrow(/pr must be a positive integer/);
 	});
 
-	it('the tool coerces prComment "false" the way it coerces ownerApproved', () => {
-		const tool = createReviewPanelTool();
+	it('a call object\'s prComment "false" is coerced the way ownerApproved is', () => {
 		expect(
-			tool.prepareArguments({
+			coerceCallArguments({
 				action: "review",
 				prComment: "false",
 				ownerApproved: "true",

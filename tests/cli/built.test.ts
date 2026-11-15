@@ -18,17 +18,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const CLI_DIR = path.resolve(import.meta.dirname, "..");
-const REPO = realpathSync(path.resolve(CLI_DIR, ".."));
-const BIN = path.join(CLI_DIR, "dist", "cli", "src", "main.js");
+const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
+const BIN = path.join(REPO, "dist", "src", "cli", "main.js");
 const SIGINT_READY = path.join(
-	CLI_DIR,
+	REPO,
 	"tests",
+	"cli",
 	"fixtures",
 	"sigint-ready.mjs",
 );
 const CLI_VERSION = (
-	JSON.parse(readFileSync(path.join(CLI_DIR, "package.json"), "utf8")) as {
+	JSON.parse(readFileSync(path.join(REPO, "package.json"), "utf8")) as {
 		version: string;
 	}
 ).version;
@@ -42,7 +42,7 @@ const EXTENSION_FIXTURES = path.join(
 beforeAll(() => {
 	if (!existsSync(BIN)) {
 		throw new Error(
-			`${BIN} is missing: the global setup (tests/build-dist.ts) should have built it`,
+			`${BIN} is missing: the global setup (tests/cli/build-dist.ts) should have built it`,
 		);
 	}
 });
@@ -162,7 +162,7 @@ describe("the built bin", () => {
 		}
 	});
 
-	it("--version prints cli/package.json's version", () => {
+	it("--version prints the package.json version", () => {
 		const { code, stdout } = cli(tempHome(), ["--version"]);
 		expect(code).toBe(0);
 		expect(stdout).toBe(`${CLI_VERSION}\n`);
@@ -482,26 +482,43 @@ describe("a provider registered by an extension", () => {
 });
 
 describe("the packed tarball", () => {
-	it("is private, so npm refuses to publish it", () => {
+	it("is the public pi-review-panel package with the review-panel bin", () => {
 		const manifest = JSON.parse(
-			readFileSync(path.join(CLI_DIR, "package.json"), "utf8"),
-		) as { private?: unknown };
-		expect(manifest.private).toBe(true);
+			readFileSync(path.join(REPO, "package.json"), "utf8"),
+		) as {
+			name?: unknown;
+			private?: unknown;
+			bin?: Record<string, string>;
+			dependencies?: Record<string, string>;
+			peerDependencies?: unknown;
+			pi?: Record<string, unknown>;
+		};
+		expect(manifest.name).toBe("pi-review-panel");
+		expect(manifest.private).toBeUndefined();
+		expect(manifest.bin).toEqual({ "review-panel": "dist/src/cli/main.js" });
+		// The SDK runs the seats, so it is a real, exactly pinned dependency.
+		expect(manifest.dependencies?.["@earendil-works/pi-coding-agent"]).toMatch(
+			/^\d+\.\d+\.\d+$/,
+		);
+		expect(manifest.peerDependencies).toBeUndefined();
+		// Pi still loads the skill from the package, and no extension.
+		expect(manifest.pi).toEqual({ skills: ["./skills"] });
 	});
 
-	it("carries its own prompts, outside the repository", async () => {
+	it("carries the built CLI, its prompts and the skill, and runs outside the repository", async () => {
 		const out = tempHome();
 		execFileSync(
 			"npm",
 			["pack", "--ignore-scripts", "--pack-destination", out],
-			{ cwd: CLI_DIR, stdio: "ignore" },
+			{ cwd: REPO, stdio: "ignore" },
 		);
 		const tarball = readdirSync(out).find((name) => name.endsWith(".tgz"));
 		expect(tarball).toBeDefined();
 		execFileSync("tar", ["-xzf", path.join(out, tarball as string)], {
 			cwd: out,
 		});
-		const dist = path.join(out, "package", "dist");
+		const root = path.join(out, "package");
+		const dist = path.join(root, "dist");
 		const lenses = await import(
 			pathToFileURL(path.join(dist, "src", "config", "lenses.js")).href
 		);
@@ -514,5 +531,21 @@ describe("the packed tarball", () => {
 		expect(existsSync(path.join(dist, "src", "tool", "review-panel.js"))).toBe(
 			false,
 		);
+		// No TypeScript source, tests or internal files ship.
+		expect(existsSync(path.join(root, "src"))).toBe(false);
+		expect(existsSync(path.join(root, "tests"))).toBe(false);
+		expect(existsSync(path.join(root, "scripts"))).toBe(false);
+		// The unpacked bin finds the package's own version.
+		const version = spawnSync(
+			process.execPath,
+			[path.join(dist, "src", "cli", "main.js"), "--version"],
+			{
+				cwd: out,
+				encoding: "utf8",
+				env: { PATH: process.env.PATH ?? "", HOME: out },
+			},
+		);
+		expect(version.status).toBe(0);
+		expect(version.stdout).toBe(`${CLI_VERSION}\n`);
 	});
 });

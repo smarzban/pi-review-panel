@@ -11,7 +11,7 @@ import { applyAgentDir } from "./agent-dir.js";
 
 const agentDir = applyAgentDir({ env: process.env, home: homedir() });
 
-/** The nearest `review-panel` package.json, in the source tree or in dist. */
+/** The nearest `pi-review-panel` package.json, from the source tree or dist. */
 function cliVersion(): string {
 	let dir = import.meta.dirname;
 	for (;;) {
@@ -20,7 +20,7 @@ function cliVersion(): string {
 				readFileSync(path.join(dir, "package.json"), "utf8"),
 			) as { name?: unknown; version?: unknown };
 			if (
-				manifest.name === "review-panel" &&
+				manifest.name === "pi-review-panel" &&
 				typeof manifest.version === "string"
 			) {
 				return manifest.version;

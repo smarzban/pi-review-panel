@@ -10,7 +10,7 @@ import type * as PiSdk from "@earendil-works/pi-coding-agent";
 import {
 	resolveSeatRuntime,
 	type SeatServicesSdk,
-} from "../../src/seat/seat-runtime.js";
+} from "../seat/seat-runtime.js";
 import type { AuthSdk, LoginRuntime, ProviderAuthState } from "./auth.js";
 import type { AuthInteraction } from "./sdk-types.js";
 

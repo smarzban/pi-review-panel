@@ -10,6 +10,8 @@
 		"includes": [
 			"src/**/*.ts",
 			"tests/**/*.ts",
+			"tests/**/*.mjs",
+			"scripts/**/*.mjs",
 			"package.json",
 			"tsconfig.json",
 			"vitest.config.ts",

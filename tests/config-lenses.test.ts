@@ -94,10 +94,16 @@ describe("config lens registry", () => {
 	});
 
 	it("ships the runtime resources and no internal artifacts inside the npm package contents", () => {
-		const output = execFileSync("npm", ["pack", "--dry-run", "--json"], {
-			cwd: PACKAGE_ROOT,
-			encoding: "utf8",
-		});
+		// --ignore-scripts: dist/ is already built by the test setup, and a
+		// prepack rebuild would replace it under the tests that run it.
+		const output = execFileSync(
+			"npm",
+			["pack", "--dry-run", "--json", "--ignore-scripts"],
+			{
+				cwd: PACKAGE_ROOT,
+				encoding: "utf8",
+			},
+		);
 		const parsed: unknown = JSON.parse(output);
 		const packaged = Array.isArray(parsed) ? parsed : [parsed];
 		const shipped = new Set(
@@ -112,47 +118,49 @@ describe("config lens registry", () => {
 		// inventory broad, so a T-1 entry-point replacement cannot silently drop
 		// unrelated loop, run, config, or seat sources from the tarball.
 		const required = [
-			"prompts/holistic.md",
-			"prompts/correctness.md",
-			"prompts/security.md",
-			"prompts/tests.md",
-			"prompts/contracts.md",
-			"prompts/privacy.md",
-			"prompts/migrations.md",
-			"prompts/subtle-correctness.md",
-			"prompts/simplification.md",
-			"prompts/performance.md",
-			"prompts/infrastructure.md",
-			"prompts/specification-conformance.md",
-			"prompts/fix-verification.md",
-			"prompts/grouping.md",
-			"prompts/audit-code-health.md",
-			"prompts/audit-docs.md",
-			"prompts/audit-tests.md",
-			"prompts/audit-security.md",
-			"prompts/audit-over-engineering.md",
-			"prompts/audit-observability.md",
-			"prompts/audit-operability.md",
-			"prompts/audit-ux.md",
+			"dist/prompts/holistic.md",
+			"dist/prompts/correctness.md",
+			"dist/prompts/security.md",
+			"dist/prompts/tests.md",
+			"dist/prompts/contracts.md",
+			"dist/prompts/privacy.md",
+			"dist/prompts/migrations.md",
+			"dist/prompts/subtle-correctness.md",
+			"dist/prompts/simplification.md",
+			"dist/prompts/performance.md",
+			"dist/prompts/infrastructure.md",
+			"dist/prompts/specification-conformance.md",
+			"dist/prompts/fix-verification.md",
+			"dist/prompts/grouping.md",
+			"dist/prompts/audit-code-health.md",
+			"dist/prompts/audit-docs.md",
+			"dist/prompts/audit-tests.md",
+			"dist/prompts/audit-security.md",
+			"dist/prompts/audit-over-engineering.md",
+			"dist/prompts/audit-observability.md",
+			"dist/prompts/audit-operability.md",
+			"dist/prompts/audit-ux.md",
 			"docs/configuration.md",
-			"src/config/roles.ts",
-			"src/config/audit-passes.ts",
-			"src/config/audit-panel.ts",
-			"src/config/load.ts",
-			"src/config/schema.ts",
-			"src/config/lenses.ts",
-			"src/config/panel.ts",
-			"src/config/readiness.ts",
-			"src/tool/review-panel.ts",
-			"src/tool/closeout-comment.ts",
-			"src/tool/closeout-post.ts",
-			"src/tool/closeout-from-run.ts",
-			"src/run/run-review.ts",
-			"src/run/run-audit.ts",
-			"src/run/render-audit.ts",
-			"src/seat/seat-extension.ts",
+			"docs/cli.md",
+			"dist/src/cli/main.js",
+			"dist/src/cli/run.js",
+			"dist/src/actions/call.js",
+			"dist/src/config/roles.js",
+			"dist/src/config/audit-passes.js",
+			"dist/src/config/audit-panel.js",
+			"dist/src/config/load.js",
+			"dist/src/config/schema.js",
+			"dist/src/config/lenses.js",
+			"dist/src/config/panel.js",
+			"dist/src/config/readiness.js",
+			"dist/src/tool/closeout-comment.js",
+			"dist/src/tool/closeout-post.js",
+			"dist/src/tool/closeout-from-run.js",
+			"dist/src/run/run-review.js",
+			"dist/src/run/run-audit.js",
+			"dist/src/run/render-audit.js",
+			"dist/src/seat/seat-extension.js",
 			"skills/review-panel-pi/SKILL.md",
-			"host-skills/review-panel/SKILL.md",
 			"package.json",
 			"README.md",
 			"LICENSE",
@@ -160,11 +168,15 @@ describe("config lens registry", () => {
 		for (const file of required) {
 			expect(shipped.has(file), `npm package contains ${file}`).toBe(true);
 		}
-		expect(shipped.has("src/tool/review-panel.ts")).toBe(true);
+		expect(shipped.has("dist/src/tool/review-panel.js")).toBe(false);
 		// Internal process artifacts, specs, and tests never ship.
 		const internalPrefixes = [
 			".agent-sdlc/",
 			".review-panel/",
+			"src/",
+			"scripts/",
+			"host-skills/",
+			"cli/",
 			".worktrees/",
 			"tests/",
 			"docs/specs/",

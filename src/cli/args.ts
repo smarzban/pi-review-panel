@@ -1,7 +1,7 @@
 /**
- * Turns argv into one command. Action flags map one-to-one onto the
- * `review_panel` tool's arguments (kebab-case here, camelCase there) and are
- * handed to the same `parse*Arguments` validation the tool uses. There are no
+ * Turns argv into one command. Action flags map one-to-one onto the actions'
+ * argument names (kebab-case here, camelCase in a `call` object) and are
+ * handed to the same `parse*Arguments` validation a `call` object gets. There are no
  * `--provider` or `--model` flags: seats come only from the owner config.
  */
 
@@ -26,7 +26,7 @@ const NOT_SHOWN = "(not shown, in case it is a key)";
 
 /**
  * Removes from an error message every argument name that is not shaped like
- * one of the tool's (camelCase letters, no digits, no long runs), in case it
+ * one of the actions' (camelCase letters, no digits, no long runs), in case it
  * is a key passed in a `call` object by mistake.
  */
 export function withoutKeyLikeNames(
@@ -109,7 +109,7 @@ const ROUND_FLAGS: Record<string, FlagSpec> = {
 	"owner-approved": BOOLEAN("ownerApproved"),
 };
 
-/** Each action's flags, named after the tool argument they set. */
+/** Each action's flags, named after the argument they set. */
 const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 	diagnose: {},
 	suggest: {
@@ -288,7 +288,7 @@ function parseCall(argv: readonly string[]): Command {
 	}
 	if (flags.positionals.length !== 1) {
 		throw new UsageError(
-			"call takes exactly one argument: the tool's JSON object, or - to read it from stdin",
+			"call takes exactly one argument: the JSON argument object, or - to read it from stdin",
 		);
 	}
 	const repo = flags.values.get("repo");
@@ -389,7 +389,7 @@ export const HELP = `review-panel: run the multi-model review panel from a termi
 
 Usage: review-panel <command> [options]
 
-Actions (the same as the review_panel tool's):
+Actions:
   diagnose                     Check the owner config, every seat's model and login, and the record key
   suggest                      Suggest lenses for base...head, each with its reason; runs no seat: --base <ref> --head <ref>
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
@@ -402,7 +402,7 @@ Actions (the same as the review_panel tool's):
   comment                      Post or update the manual close-out PR card, after the owner said yes: --prior-run-id <run> --owner-approved
                                [--pr <n>] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4]
                                [--dismissed <json> | --dismissed @<file> | --dismissed -]
-  call '<json>'                Run the tool's own argument object, e.g. '{"action":"diagnose"}' (- reads it from stdin)
+  call '<json>'                Run one action from its argument object, e.g. '{"action":"diagnose"}' (- reads it from stdin)
 
 Logins (stored in the agent folder in use; see diagnose):
   auth login <provider>        Sign in with the provider's account (OAuth, including subscriptions)

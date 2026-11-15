@@ -13,23 +13,25 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 
+import { coerceCallArguments } from "../src/actions/call.js";
+import {
+	canonicalizeRepository,
+	REPOSITORY_EXAMPLE,
+	rejectFilesystemRoot,
+} from "../src/actions/repository.js";
 import type { Config } from "../src/config/schema.js";
 import { loadRecordKey } from "../src/run/record-key.js";
 import { resumeRun } from "../src/run/resume.js";
 import { runAudit } from "../src/run/run-audit.js";
 import { type RunReviewResult, runReview } from "../src/run/run-review.js";
 import type { PlannedSeat, RunConfig } from "../src/run/types.js";
-import reviewPanelExtension, {
-	canonicalizeRepository,
-	createReviewPanelTool,
-	prepareReviewArguments,
-	REPOSITORY_EXAMPLE,
-	rejectFilesystemRoot,
-} from "../src/tool/review-panel.js";
-import { MAX_PRESENTATION_BYTES } from "../src/tool/review-presentation.js";
+import {
+	MAX_PRESENTATION_BYTES,
+	renderReviewProgress,
+} from "../src/tool/review-presentation.js";
+import { createPanelCaller } from "./fixtures/panel-call.js";
 import {
 	signPlan,
 	signReviewRecord,
@@ -39,7 +41,7 @@ import {
 } from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
-type ReviewTool = ReturnType<typeof createReviewPanelTool>;
+type ReviewTool = ReturnType<typeof createPanelCaller>;
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -75,9 +77,9 @@ const sampleConfig: Config = {
 };
 
 function toolWith(
-	overrides: Parameters<typeof createReviewPanelTool>[0] = {},
+	overrides: Parameters<typeof createPanelCaller>[0] = {},
 ): ReviewTool {
-	return createReviewPanelTool({
+	return createPanelCaller({
 		env: {},
 		home: "/tmp/review-panel-home",
 		diagnose: async () => ({ ready: true, rows: [] }),
@@ -87,10 +89,9 @@ function toolWith(
 	});
 }
 
-describe("review_panel public tool adapter", () => {
-	it("prepares stringified arrays before host schema validation", () => {
-		const tool = toolWith();
-		const jsonEncoded = prepareReviewArguments({
+describe("an argument object, from coercion to the action", () => {
+	it("coerces stringified arrays in an argument object", () => {
+		const jsonEncoded = coerceCallArguments({
 			action: "review",
 			repository: "/tmp/repo",
 			base: "main",
@@ -104,9 +105,8 @@ describe("review_panel public tool adapter", () => {
 			head: "HEAD",
 			lenses: ["subtle-correctness"],
 		});
-		expect(Value.Check(tool.parameters, jsonEncoded)).toBe(true);
 
-		const scalar = prepareReviewArguments({
+		const scalar = coerceCallArguments({
 			action: "review",
 			repository: "/tmp/repo",
 			base: "main",
@@ -114,56 +114,6 @@ describe("review_panel public tool adapter", () => {
 			lenses: "security",
 		});
 		expect(scalar).toMatchObject({ lenses: ["security"] });
-		expect(Value.Check(tool.parameters, scalar)).toBe(true);
-	});
-
-	it("accepts every documented object argument shape without schema branches", () => {
-		const tool = toolWith();
-		const args = {
-			action: "comment",
-			repository: "/tmp/repo",
-			priorRunId: "review-run",
-			ownerApproved: true,
-			pr: 42,
-			dismissed: [
-				{ id: "F-1", reason: "not reproducible", title: "finding title" },
-			],
-			lowAdvisory: [],
-			verifyRunId: "verify-run",
-			head: "HEAD",
-		};
-
-		expect(Value.Check(tool.parameters, tool.prepareArguments(args))).toBe(
-			true,
-		);
-		const schema = JSON.stringify(tool.parameters);
-		expect(schema).not.toContain('"anyOf"');
-		expect(schema).not.toContain('"oneOf"');
-	});
-
-	it("turns an empty probe into a copy-paste usage error", async () => {
-		const tool = toolWith();
-		await expect(
-			tool.execute("tool-call", {}, undefined, undefined, {}),
-		).rejects.toThrow(/"action": "diagnose"/);
-		await expect(
-			tool.execute("tool-call", {}, undefined, undefined, {}),
-		).rejects.toThrow(/"action": "review"/);
-		await expect(
-			tool.execute("tool-call", {}, undefined, undefined, {}),
-		).rejects.toThrow(/"action": "verify"/);
-		const usage = await tool
-			.execute("tool-call", {}, undefined, undefined, {})
-			.then(
-				() => {
-					throw new Error("empty probe must throw");
-				},
-				(error: unknown) =>
-					error instanceof Error ? error.message : String(error),
-			);
-		expect(usage).toMatch(/already in the repo/i);
-		expect(usage).not.toContain("/absolute/path");
-		expect(usage).not.toContain(REPOSITORY_EXAMPLE);
 	});
 
 	it("uses cwd when repository is omitted or a placeholder", async () => {
@@ -182,7 +132,7 @@ describe("review_panel public tool adapter", () => {
 					repositoryArg === undefined
 						? { action: "diagnose" }
 						: { action: "diagnose", repository: repositoryArg };
-				await tool.execute("tool-call", args, undefined, undefined, {
+				await tool.execute("call-1", args, undefined, undefined, {
 					cwd: repository,
 				});
 				expect(seen).toBe(expected);
@@ -203,7 +153,7 @@ describe("review_panel public tool adapter", () => {
 					},
 				});
 				await tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "diagnose", repository },
 					undefined,
 					undefined,
@@ -223,7 +173,7 @@ describe("review_panel public tool adapter", () => {
 			const tool = toolWith();
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "diagnose", repository: "/" },
 					undefined,
 					undefined,
@@ -248,15 +198,6 @@ describe("review_panel public tool adapter", () => {
 		).toBe("/Users/you/the-repo");
 	});
 
-	it("registers exactly one tool named review_panel", () => {
-		const tools: ReviewTool[] = [];
-		reviewPanelExtension({ registerTool: (tool) => tools.push(tool) });
-
-		expect(tools).toHaveLength(1);
-		expect(tools[0]?.name).toBe("review_panel");
-		expect(JSON.stringify(tools[0]?.parameters)).not.toContain("Type.Unknown");
-	});
-
 	it("diagnose launches no reviewer", async () => {
 		await withRepository(async (repository) => {
 			let reviewed = 0;
@@ -267,7 +208,7 @@ describe("review_panel public tool adapter", () => {
 				},
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "diagnose", repository },
 				undefined,
 				undefined,
@@ -285,7 +226,7 @@ describe("review_panel public tool adapter", () => {
 			const tool = toolWith();
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "diagnose", repository, base: "HEAD" },
 					undefined,
 					undefined,
@@ -301,7 +242,7 @@ describe("review_panel public tool adapter", () => {
 			const head = git(repository, ["rev-parse", "HEAD"]).trim();
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "review", repository, base: head, head },
 					undefined,
 					undefined,
@@ -322,7 +263,7 @@ describe("review_panel public tool adapter", () => {
 			});
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{
 						action: "review",
 						repository,
@@ -356,7 +297,7 @@ describe("review_panel public tool adapter", () => {
 			});
 
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				undefined,
@@ -397,7 +338,7 @@ describe("review_panel public tool adapter", () => {
 				},
 			});
 			await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "review",
 					repository,
@@ -439,7 +380,7 @@ describe("review_panel public tool adapter", () => {
 			});
 
 			await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "review",
 					repository,
@@ -480,7 +421,7 @@ describe("review_panel public tool adapter", () => {
 			});
 
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				undefined,
@@ -514,7 +455,7 @@ describe("review_panel public tool adapter", () => {
 
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 					undefined,
 					undefined,
@@ -545,7 +486,7 @@ describe("review_panel public tool adapter", () => {
 					}) as unknown as RunReviewResult,
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				undefined,
@@ -571,7 +512,7 @@ describe("review_panel public tool adapter", () => {
 					}) as unknown as RunReviewResult,
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				undefined,
@@ -610,7 +551,7 @@ describe("review_panel public tool adapter", () => {
 					}) as unknown as RunReviewResult,
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "review",
 					repository,
@@ -648,7 +589,7 @@ describe("review_panel public tool adapter", () => {
 				},
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "suggest", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				undefined,
@@ -662,7 +603,7 @@ describe("review_panel public tool adapter", () => {
 			]);
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{
 						action: "suggest",
 						repository,
@@ -693,7 +634,7 @@ describe("review_panel public tool adapter", () => {
 			git(repository, ["add", "."]);
 			git(repository, ["commit", "-m", "hostile", "--quiet"]);
 			const response = await toolWith().execute(
-				"tool-call",
+				"call-1",
 				{ action: "suggest", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				undefined,
@@ -715,7 +656,7 @@ describe("review_panel public tool adapter", () => {
 			const tool = toolWith();
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{
 						action: "verify",
 						repository,
@@ -799,7 +740,7 @@ describe("review_panel public tool adapter", () => {
 				}),
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "verify",
 					repository,
@@ -818,7 +759,7 @@ describe("review_panel public tool adapter", () => {
 		});
 	});
 
-	it("forwards in-flight review progress to the host onUpdate", async () => {
+	it("passes in-flight review progress to the caller", async () => {
 		await withRepository(async (repository) => {
 			const updates: string[] = [];
 			const tool = toolWith({
@@ -845,11 +786,11 @@ describe("review_panel public tool adapter", () => {
 				},
 			});
 			await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 				undefined,
-				(update: { content: Array<{ type: string; text: string }> }) => {
-					updates.push(update.content[0]?.text ?? "");
+				(view) => {
+					updates.push(renderReviewProgress(view));
 				},
 				{},
 			);
@@ -865,7 +806,7 @@ describe("review_panel public tool adapter", () => {
 		});
 	});
 
-	it("forwards in-flight verify progress to the host onUpdate", async () => {
+	it("passes in-flight verify progress to the caller", async () => {
 		await withRepository(async (repository) => {
 			writeReviewRecord(repository, "run-1", {
 				findings: [{ id: "F-1", severity: "high", title: "bug" }],
@@ -910,7 +851,7 @@ describe("review_panel public tool adapter", () => {
 				},
 			});
 			await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "verify",
 					repository,
@@ -919,8 +860,8 @@ describe("review_panel public tool adapter", () => {
 					keptFindingIds: ["F-1"],
 				},
 				undefined,
-				(update: { content: Array<{ type: string; text: string }> }) => {
-					updates.push(update.content[0]?.text ?? "");
+				(view) => {
+					updates.push(renderReviewProgress(view));
 				},
 				{},
 			);
@@ -1080,13 +1021,6 @@ function writeVerifyRecord(
 }
 
 describe("review_panel comment", () => {
-	it("turns an empty probe into usage that names comment", async () => {
-		const tool = toolWith();
-		await expect(
-			tool.execute("tool-call", {}, undefined, undefined, {}),
-		).rejects.toThrow(/"action": "comment"/);
-	});
-
 	it("refuses comment until the owner approved posting", async () => {
 		await withRepository(async (repository) => {
 			writeReviewRecord(repository, "review-1", { findings: [] });
@@ -1097,7 +1031,7 @@ describe("review_panel comment", () => {
 			});
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{
 						action: "comment",
 						repository,
@@ -1134,7 +1068,7 @@ describe("review_panel comment", () => {
 				},
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "comment",
 					repository,
@@ -1188,7 +1122,7 @@ describe("review_panel comment", () => {
 			});
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{
 						action: "comment",
 						repository,
@@ -1227,7 +1161,7 @@ describe("review_panel comment", () => {
 				},
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{
 					action: "comment",
 					repository,
@@ -1275,7 +1209,7 @@ describe("review_panel comment", () => {
 			});
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{
 						action: "comment",
 						repository,
@@ -1332,21 +1266,12 @@ describe("review_panel resume action", () => {
 		return readdirSync(runsDir)[0] as string;
 	}
 
-	it("lists resume in the tool description, the action argument and the usage", async () => {
-		const tool = toolWith();
-		expect(tool.description).toMatch(/resume/i);
-		expect(JSON.stringify(tool.parameters)).toContain('\\"resume\\"');
-		await expect(
-			tool.execute("tool-call", {}, undefined, undefined, {}),
-		).rejects.toThrow(/"action": "resume", "priorRunId"/);
-	});
-
 	it("rejects arguments resume does not take, so seats never come from the caller", async () => {
 		await withRepository(async (repository) => {
 			const tool = toolWith();
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "resume", repository, priorRunId: "x", seats: ["terra"] },
 					undefined,
 					undefined,
@@ -1355,7 +1280,7 @@ describe("review_panel resume action", () => {
 			).rejects.toThrow(/resume does not accept argument "seats"/);
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "resume", repository },
 					undefined,
 					undefined,
@@ -1376,7 +1301,7 @@ describe("review_panel resume action", () => {
 			});
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "resume", repository, priorRunId: "no-such-run" },
 					undefined,
 					undefined,
@@ -1412,11 +1337,10 @@ describe("review_panel resume action", () => {
 					}),
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "resume", repository, priorRunId: runId },
 				undefined,
-				(update: { content: Array<{ text: string }> }) =>
-					updates.push(update.content[0]?.text ?? ""),
+				(view) => updates.push(renderReviewProgress(view)),
 				{},
 			);
 			const text = response.content[0]?.text ?? "";
@@ -1497,11 +1421,10 @@ describe("review_panel resume action", () => {
 				resumeRun: countingResume(sessions),
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "resume", repository, priorRunId: runId },
 				undefined,
-				(update: { content: Array<{ text: string }> }) =>
-					updates.push(update.content[0]?.text ?? ""),
+				(view) => updates.push(renderReviewProgress(view)),
 				{},
 			);
 			const text = response.content[0]?.text ?? "";
@@ -1528,7 +1451,7 @@ describe("review_panel resume action", () => {
 				resumeRun: countingResume(sessions),
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "resume", repository, priorRunId: runId },
 				undefined,
 				undefined,
@@ -1564,7 +1487,7 @@ describe("review_panel resume action", () => {
 				resumeRun: countingResume([]),
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "resume", repository, priorRunId: runId },
 				undefined,
 				undefined,
@@ -1600,7 +1523,7 @@ describe("review_panel resume action", () => {
 			});
 			await expect(
 				tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "resume", repository, priorRunId: runId },
 					undefined,
 					undefined,
@@ -1638,9 +1561,9 @@ describe("review_panel record key", () => {
 	 */
 	function ownerTool(
 		configDir: string,
-		overrides: Parameters<typeof createReviewPanelTool>[0] = {},
+		overrides: Parameters<typeof createPanelCaller>[0] = {},
 	): ReviewTool {
-		return createReviewPanelTool({
+		return createPanelCaller({
 			env: { PI_REVIEW_PANEL_CONFIG: path.join(configDir, "config.json") },
 			home: "/nonexistent-home",
 			diagnose: async () => ({ ready: true, rows: [] }),
@@ -1673,7 +1596,7 @@ describe("review_panel record key", () => {
 					},
 				});
 				await tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 					undefined,
 					undefined,
@@ -1712,7 +1635,7 @@ describe("review_panel record key", () => {
 					});
 					await expect(
 						tool.execute(
-							"tool-call",
+							"call-1",
 							{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 							undefined,
 							undefined,
@@ -1723,7 +1646,7 @@ describe("review_panel record key", () => {
 					);
 					await expect(
 						tool.execute(
-							"tool-call",
+							"call-1",
 							{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 							undefined,
 							undefined,
@@ -1758,7 +1681,7 @@ describe("review_panel record key", () => {
 					});
 					await expect(
 						tool.execute(
-							"tool-call",
+							"call-1",
 							{ action: "audit", repository, passes: ["security"] },
 							undefined,
 							undefined,
@@ -1775,7 +1698,7 @@ describe("review_panel record key", () => {
 
 	it("diagnose still reports, rather than throws, when the config override is not absolute", async () => {
 		await withRepository(async (repository) => {
-			const tool = createReviewPanelTool({
+			const tool = createPanelCaller({
 				env: { PI_REVIEW_PANEL_CONFIG: "relative/config.json" },
 				home: "/nonexistent-home",
 				diagnose: async () => ({
@@ -1784,7 +1707,7 @@ describe("review_panel record key", () => {
 				}),
 			});
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "diagnose", repository },
 				undefined,
 				undefined,
@@ -1801,7 +1724,7 @@ describe("review_panel record key", () => {
 			withConfigDir(async (configDir) => {
 				const tool = ownerTool(configDir);
 				const response = await tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "diagnose", repository },
 					undefined,
 					undefined,
@@ -1822,7 +1745,7 @@ describe("review_panel record key", () => {
 					const keyPath = path.join(configDir, "record-key");
 					const tool = ownerTool(configDir);
 					const response = await tool.execute(
-						"tool-call",
+						"call-1",
 						{ action: "diagnose", repository },
 						undefined,
 						undefined,
@@ -1852,7 +1775,7 @@ describe("review_panel record key", () => {
 					try {
 						const tool = ownerTool(configDir);
 						const response = await tool.execute(
-							"tool-call",
+							"call-1",
 							{ action: "diagnose", repository },
 							undefined,
 							undefined,
@@ -1910,7 +1833,7 @@ describe("review_panel record key", () => {
 						},
 					});
 					await tool.execute(
-						"tool-call",
+						"call-1",
 						{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 						undefined,
 						undefined,
@@ -1918,7 +1841,7 @@ describe("review_panel record key", () => {
 					);
 					await expect(
 						tool.execute(
-							"tool-call",
+							"call-1",
 							{ action: "audit", repository, passes: ["security"] },
 							undefined,
 							undefined,
@@ -1969,7 +1892,7 @@ describe("review_panel record key", () => {
 							],
 						] as const) {
 							await expect(
-								tool.execute("tool-call", args, undefined, undefined, {}),
+								tool.execute("call-1", args, undefined, undefined, {}),
 							).rejects.toThrow(
 								new RegExp(
 									`${refusal} refused: record key .*record-key is refused: its folder .* is writable by other users`,
@@ -2001,7 +1924,7 @@ describe("review_panel record key", () => {
 						}),
 					});
 					const response = await tool.execute(
-						"tool-call",
+						"call-1",
 						{ action: "diagnose", repository },
 						undefined,
 						undefined,
@@ -2026,7 +1949,7 @@ describe("review_panel record key", () => {
 					const before = readdirSync(configDir);
 					const tool = ownerTool(configDir);
 					const response = await tool.execute(
-						"tool-call",
+						"call-1",
 						{ action: "diagnose", repository },
 						undefined,
 						undefined,
@@ -2052,7 +1975,7 @@ describe("review_panel record key", () => {
 				const tool = ownerTool(configDir);
 				await expect(
 					tool.execute(
-						"tool-call",
+						"call-1",
 						{ action: "resume", repository, priorRunId: "any-run" },
 						undefined,
 						undefined,
@@ -2102,7 +2025,7 @@ describe("review_panel record key", () => {
 							}),
 					});
 					const response = await tool.execute(
-						"tool-call",
+						"call-1",
 						{ action: "resume", repository, priorRunId: runId },
 						undefined,
 						undefined,
@@ -2182,7 +2105,7 @@ describe("review_panel record key", () => {
 						}),
 				});
 				const response = await tool.execute(
-					"tool-call",
+					"call-1",
 					{ action: "resume", repository, priorRunId: runId },
 					undefined,
 					undefined,

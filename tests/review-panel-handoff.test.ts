@@ -10,19 +10,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import type { ActionDependencies } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
 import { resumeRun } from "../src/run/resume.js";
 import type { RunAuditResult } from "../src/run/run-audit.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { PlannedSeat } from "../src/run/types.js";
-import {
-	createReviewPanelTool,
-	type ReviewPanelDependencies,
-} from "../src/tool/review-panel.js";
+import { renderReviewProgress } from "../src/tool/review-presentation.js";
 import {
 	interruptedReviewRecord,
 	plannedSeats,
 } from "./fixtures/interrupted-run.js";
+import { createPanelCaller } from "./fixtures/panel-call.js";
 import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 /** A complete review record signed with the test key, as verify needs. */
@@ -52,8 +51,8 @@ function writeSignedReview(repo: string, runId: string): void {
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 /**
- * What crosses from the Pi tool's `execute` into the plain actions and on to
- * the runners: the cancellation signal, and progress back out to `onUpdate`.
+ * What crosses from an argument object into the plain actions and on to the
+ * runners: the cancellation signal, and progress back out to the caller.
  */
 
 function git(cwd: string, args: string[]): string {
@@ -86,8 +85,8 @@ const config: Config = {
 	defaults: { seats: ["terra", "claude"] },
 };
 
-function toolWith(overrides: ReviewPanelDependencies) {
-	return createReviewPanelTool({
+function toolWith(overrides: ActionDependencies) {
+	return createPanelCaller({
 		env: {},
 		home: "/tmp/handoff-home",
 		diagnose: async () => ({ ready: true, rows: [] }),
@@ -118,12 +117,12 @@ function rosterOf(seats: PlannedSeat[]): Config {
 	};
 }
 
-describe("review_panel execute signal reaches the runner", () => {
+describe("the abort signal reaches the runner", () => {
 	async function expectSignalHandedOff(
 		args: Record<string, unknown>,
 		deps: (
 			capture: (signal: AbortSignal | undefined) => void,
-		) => ReviewPanelDependencies,
+		) => ActionDependencies,
 		repo: string,
 	): Promise<void> {
 		const controller = new AbortController();
@@ -136,7 +135,7 @@ describe("review_panel execute signal reaches the runner", () => {
 			}),
 		);
 		await tool.execute(
-			"tool-call",
+			"call-1",
 			{ repository: repo, ...args },
 			controller.signal,
 			undefined,
@@ -233,7 +232,7 @@ describe("review_panel execute signal reaches the runner", () => {
 	});
 });
 
-describe("review_panel forwards seat progress to onUpdate", () => {
+describe("seat progress reaches the caller, rendered as the CLI prints it", () => {
 	it("audit", async () => {
 		await withRepository(async (repo) => {
 			const updates: string[] = [];
@@ -250,11 +249,10 @@ describe("review_panel forwards seat progress to onUpdate", () => {
 				},
 			});
 			await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "audit", repository: repo, passes: ["security"] },
 				undefined,
-				(update: { content: Array<{ text: string }> }) =>
-					updates.push(update.content[0]?.text ?? ""),
+				(view) => updates.push(renderReviewProgress(view)),
 				{},
 			);
 			expect(updates).toHaveLength(2);
@@ -282,11 +280,10 @@ describe("review_panel forwards seat progress to onUpdate", () => {
 					}),
 			});
 			await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "resume", repository: repo, priorRunId: runId },
 				undefined,
-				(update: { content: Array<{ text: string }> }) =>
-					updates.push(update.content[0]?.text ?? ""),
+				(view) => updates.push(renderReviewProgress(view)),
 				{},
 			);
 			const roster = "correctness: seat-0 · security: seat-1\n";

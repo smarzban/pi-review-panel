@@ -13,6 +13,10 @@ const FAKE_GH = path.join(
 export default defineConfig({
 	test: {
 		include: ["tests/**/*.test.ts"],
+		// The built-bin tests run dist/, so every run rebuilds it first.
+		globalSetup: ["tests/cli/build-dist.ts"],
+		// The built-bin tests spawn node with the Pi SDK, which can take seconds.
+		testTimeout: 60_000,
 		env: { PATH: `${FAKE_GH}${path.delimiter}${process.env.PATH ?? ""}` },
 	},
 });

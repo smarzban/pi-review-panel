@@ -22,8 +22,8 @@ import {
 	type AuthTerminal,
 	type LoginRuntime,
 	login,
-} from "../src/auth.js";
-import { realAuthSdk } from "../src/sdk.js";
+} from "../../src/cli/auth.js";
+import { realAuthSdk } from "../../src/cli/sdk.js";
 
 const saved = {
 	HOME: process.env.HOME,

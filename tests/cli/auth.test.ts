@@ -10,8 +10,8 @@ import {
 	renderStatus,
 	status,
 	statusRows,
-} from "../src/auth.js";
-import type { AuthInteraction } from "../src/sdk-types.js";
+} from "../../src/cli/auth.js";
+import type { AuthInteraction } from "../../src/cli/sdk-types.js";
 
 type Provider = ReturnType<LoginRuntime["getProviders"]>[number];
 

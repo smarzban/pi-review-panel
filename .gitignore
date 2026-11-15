@@ -9,5 +9,5 @@ node_modules/
 .DS_Store
 .review-panel/
 
-# The review-panel CLI build output; built at pack time, never committed.
-cli/dist/
+# The review-panel build output; built at pack time (prepack), never committed.
+/dist/

@@ -34,22 +34,25 @@ import type { RunAuditResult } from "../src/run/run-audit.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { PlannedSeat } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
-import { createReviewPanelTool } from "../src/tool/review-panel.js";
 import {
 	interruptedReviewRecord,
 	plannedSeats,
 } from "./fixtures/interrupted-run.js";
+import { createPanelCaller } from "./fixtures/panel-call.js";
 import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import { createSdkSeatFake } from "./fixtures/sdk-seat-fake.js";
 
 /**
- * What the Pi tool tests cannot show: that each action runs from plain inputs
- * (no Pi host, no TypeBox, no argument parser, no repository resolution), and
- * that it refuses a bad input itself. The tool's behaviour through these
- * actions is pinned in `review-panel.test.ts` and `audit-tool.test.ts`.
+ * That each action runs from plain inputs (no Pi host, no argument parser, no
+ * repository resolution), and that it refuses a bad input itself, the same way
+ * whether it is called directly or from an argument object.
  */
 
-const ACTION_MODULES = ["src/actions/actions.ts", "src/actions/repository.ts"];
+const ACTION_MODULES = [
+	"src/actions/actions.ts",
+	"src/actions/call.ts",
+	"src/actions/repository.ts",
+];
 const BANNED = /^(typebox|@earendil-works)(\/|$)/;
 
 /**
@@ -241,14 +244,13 @@ function poster() {
 	};
 }
 
-describe("review_panel actions without Pi", () => {
+describe("the actions without Pi", () => {
 	it("reach no typebox or Pi package through any import that loads with the module", () => {
 		const graph = importGraph(ACTION_MODULES);
 		const files = [...graph.keys()].map((file) =>
 			path.relative(process.cwd(), file),
 		);
 		expect(files).toContain("src/run/run-review.ts");
-		expect(files).not.toContain("src/tool/review-panel.ts");
 		const offenders = [...graph.entries()].flatMap(([file, source]) => {
 			const relative = path.relative(process.cwd(), file);
 			return [
@@ -626,7 +628,7 @@ const verifyArgs = {
 };
 const commentArgs = { ownerApproved: true, priorRunId: "review-1" };
 
-/** Bad inputs a caller that skips `parse*` might send, and the tool's refusal. */
+/** Bad inputs a caller that skips `parse*` might send, and the refusal. */
 const CASES: Case[] = [
 	{
 		action: "review",
@@ -711,7 +713,7 @@ const CASES: Case[] = [
 	},
 ];
 
-describe("each action refuses a bad input itself, as the tool does", () => {
+describe("each action refuses a bad input itself, as an argument object is refused", () => {
 	function refusingDeps(): ActionDependencies {
 		const never = () => {
 			throw new Error("must not run");
@@ -732,10 +734,10 @@ describe("each action refuses a bad input itself, as the tool does", () => {
 				const defined = Object.fromEntries(
 					Object.entries(args).filter(([, value]) => value !== undefined),
 				);
-				const tool = createReviewPanelTool(refusingDeps());
+				const caller = createPanelCaller(refusingDeps());
 				await expect(
-					tool.execute(
-						"tool-call",
+					caller.execute(
+						"call-1",
 						{ action, repository: repo, ...defined },
 						undefined,
 						undefined,
@@ -758,14 +760,14 @@ describe("each action refuses a bad input itself, as the tool does", () => {
 		});
 	}
 
-	it("comment drops an empty head the way the tool does", async () => {
+	it("comment drops an empty head the way an argument object does", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "review-1", []);
-			const viaTool = poster();
-			await createReviewPanelTool(
-				deps({ postComment: viaTool.postComment }),
+			const viaCall = poster();
+			await createPanelCaller(
+				deps({ postComment: viaCall.postComment }),
 			).execute(
-				"tool-call",
+				"call-1",
 				{ action: "comment", repository: repo, ...commentArgs, head: "" },
 				undefined,
 				undefined,
@@ -783,7 +785,7 @@ describe("each action refuses a bad input itself, as the tool does", () => {
 				},
 				{ deps: deps({ postComment: direct.postComment }) },
 			);
-			expect(direct.bodies).toEqual(viaTool.bodies);
+			expect(direct.bodies).toEqual(viaCall.bodies);
 		});
 	});
 });

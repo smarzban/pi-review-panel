@@ -5,32 +5,18 @@
  */
 import path from "node:path";
 
+import type { ActionContext, ActionResult } from "../actions/actions.js";
 import {
-	type ActionContext,
-	type ActionResult,
-	auditAction,
-	coerceJsonValue,
-	coerceStringList,
-	commentAction,
-	diagnoseAction,
-	parseAuditArguments,
-	parseCommentArguments,
-	parseDiagnoseArguments,
-	parseResumeArguments,
-	parseReviewArguments,
-	parseSuggestArguments,
-	parseVerifyArguments,
-	resumeAction,
-	reviewAction,
-	suggestAction,
-	verifyAction,
-} from "../../src/actions/actions.js";
+	ACTION_PARSERS,
+	type ActionFunctions,
+	coerceCallArguments,
+} from "../actions/call.js";
 import {
 	canonicalizeRepository,
 	resolveReviewRepository,
-} from "../../src/actions/repository.js";
-import { loadConfig } from "../../src/config/load.js";
-import { renderReviewProgress } from "../../src/tool/review-presentation.js";
+} from "../actions/repository.js";
+import { loadConfig } from "../config/load.js";
+import { renderReviewProgress } from "../tool/review-presentation.js";
 import { type AgentDirChoice, describeAgentDir } from "./agent-dir.js";
 import {
 	ACTIONS,
@@ -59,25 +45,7 @@ export const EXIT_USAGE = 2;
 /** A refusal that is not a usage mistake, such as comment without approval. */
 export class RefusalError extends Error {}
 
-export type ActionFunctions = {
-	diagnose: typeof diagnoseAction;
-	review: typeof reviewAction;
-	audit: typeof auditAction;
-	verify: typeof verifyAction;
-	resume: typeof resumeAction;
-	comment: typeof commentAction;
-	suggest: typeof suggestAction;
-};
-
-export const realActions: ActionFunctions = {
-	diagnose: diagnoseAction,
-	review: reviewAction,
-	audit: auditAction,
-	verify: verifyAction,
-	resume: resumeAction,
-	comment: commentAction,
-	suggest: suggestAction,
-};
+export { type ActionFunctions, realActions } from "../actions/call.js";
 
 export type RunIo = {
 	cwd: string;
@@ -101,19 +69,6 @@ export type RunDeps = {
 	loadConfig?: typeof loadConfig;
 };
 
-const PARSERS: Record<
-	ActionName,
-	(args: Record<string, unknown>) => Record<string, unknown>
-> = {
-	diagnose: parseDiagnoseArguments,
-	review: parseReviewArguments,
-	audit: parseAuditArguments,
-	verify: parseVerifyArguments,
-	resume: parseResumeArguments,
-	comment: parseCommentArguments,
-	suggest: parseSuggestArguments,
-};
-
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -121,7 +76,8 @@ function message(error: unknown): string {
 /**
  * `--repo` is taken strictly: a path that is not a Git repository is refused.
  * Without it, the Git top-level of the working folder is used. A `call`
- * object's `repository` is resolved exactly as the tool resolves it.
+ * object's `repository` may be omitted or a placeholder: the working folder's
+ * Git top-level is used then.
  */
 function resolveRepo(io: RunIo, flag: string | undefined): string {
 	return flag === undefined
@@ -156,7 +112,7 @@ async function dismissedText(
 	}
 }
 
-/** Validates the tool's argument record and runs one action. */
+/** Validates one argument record and runs its action. */
 async function runAction(
 	action: ActionName,
 	args: Record<string, unknown>,
@@ -172,7 +128,7 @@ async function runAction(
 	}
 	let input: Record<string, unknown>;
 	try {
-		input = PARSERS[action](args);
+		input = ACTION_PARSERS[action](args);
 	} catch (error) {
 		// A `call` object's unknown argument name may be a key pasted there.
 		throw new UsageError(
@@ -221,40 +177,7 @@ function parseCallPayload(text: string): Record<string, unknown> {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) {
 		throw new UsageError("call: the argument must be a JSON object");
 	}
-	return coerceLikeTheTool(value as Record<string, unknown>);
-}
-
-/**
- * The tool's `prepareArguments` coercions, so `call` accepts what the tool
- * accepts: a string for a list, JSON text for `dismissed`, and
- * `"true"`/`"false"` for `ownerApproved` and `prComment`.
- */
-function coerceLikeTheTool(
-	args: Record<string, unknown>,
-): Record<string, unknown> {
-	const next: Record<string, unknown> = { ...args };
-	for (const key of [
-		"seats",
-		"lenses",
-		"passes",
-		"keptFindingIds",
-		"lowAdvisory",
-	]) {
-		if (Object.hasOwn(next, key)) {
-			next[key] = coerceStringList(next[key]);
-		}
-	}
-	if (typeof next.dismissed === "string") {
-		next.dismissed = coerceJsonValue(next.dismissed);
-	}
-	for (const key of ["ownerApproved", "prComment"]) {
-		if (next[key] === "true") {
-			next[key] = true;
-		} else if (next[key] === "false") {
-			next[key] = false;
-		}
-	}
-	return next;
+	return coerceCallArguments(value as Record<string, unknown>);
 }
 
 async function execute(

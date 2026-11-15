@@ -1,19 +1,19 @@
 /**
- * The `review_panel` actions as plain functions: no Pi tool envelope and no
- * schema library, so any front end (the Pi tool, a standalone CLI) can call
- * them. Each `parse*Arguments` validates a raw argument record the way the
- * tool always has; each `*Action` runs one action and returns the tool's
+ * The review panel's actions as plain functions: no host envelope and no
+ * schema library, so any front end (today the `review-panel` CLI) can call
+ * them. Each `parse*Arguments` validates a raw argument record (the object
+ * `review-panel call` takes); each `*Action` runs one action and returns its
  * result object.
  *
  * Each action validates its own input with the same checks, in the same order
  * and with the same messages as its parser, so a front end that builds the
- * input itself gets the refusals the tool gives. The parser adds only the
+ * input itself gets the refusals an argument object gets. The parser adds only the
  * refusal of argument keys the action does not take. Each action, and each
  * exported record-key helper, also resolves `repoDir` to its Git top level as
- * the tool does: a relative path, `/`, a placeholder path or a path outside
+ * an argument object's is: a relative path, `/`, a placeholder path or a path outside
  * Git is refused.
  *
- * The tool first coerces what models send as strings. A JSON array string
+ * `coerceCallArguments` (call.ts) first coerces what agents send as strings. A JSON array string
  * for `seats`, `lenses`, `passes`, `keptFindingIds` or `lowAdvisory`, JSON
  * for `dismissed`, and `"true"` for `ownerApproved` are converted (a comma
  * list is not split; it stays one item). The actions convert the same
