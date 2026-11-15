@@ -312,7 +312,12 @@ describe("review-panel skill", () => {
 
 	it("verifies with the owner's verify seats and refuses unsigned records", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
-		expect(body).toContain("`defaults.verifySeats`");
+		expect(flat(body)).toContain(
+			"`defaults.verifySeats`, or the first `defaults.seats` row when that is unset",
+		);
+		expect(flat(body)).toContain(
+			"a kept low counts as resolved and need not be listed in `--low-advisory`",
+		);
 		expect(body).toContain("refuses when head matches the prior run");
 		expect(body).toContain("signed with the owner's record key");
 		expect(body).toContain("Resume never posts");

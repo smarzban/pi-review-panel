@@ -262,7 +262,7 @@ describe("postCloseoutComment reads every page of comments", () => {
 		[
 			"a pull request at another head",
 			{ number: 7, state: "open", head: { sha: "0".repeat(40) } },
-			"PR #7's head is not the head this card is about",
+			"PR #7's head is not the head this card is about; run verify at the PR's head, then comment with that verify",
 		],
 	] as const)(
 		"refuses %s named with pr, before any comment call",
