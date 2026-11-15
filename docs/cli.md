@@ -193,9 +193,11 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   passphrase or an unknown host key can still prompt, as `pi install` would (the command does
   not force `BatchMode`, which would override your own SSH setup). The first Ctrl-C ends any
   setup command (`auth providers`, `models`, `extension ...`) at once, with exit code 1, and the
-  process exits so nothing finishes in the background. An install stopped that way says
-  whether its source was recorded in `settings.json`; a clone it had started may be left under
-  the agent folder, and installing the source again finishes it.
+  process exits, so the package manager does not go on to record the source. A git or npm
+  that was already running is not stopped by review-panel (Ctrl-C in a terminal stops it too).
+  An install stopped that way says whether `settings.json` listed its source when checked after
+  the stop; `review-panel extension list` shows the final state. A clone it had started may be
+  left under the agent folder, and installing the source again finishes it.
 - When the agent folder in use is Pi's own `~/.pi/agent`, `extension install` and `remove`
   change Pi's own packages, as `pi install` and `pi remove` do: Pi then loads the package in
   every session too. The command says so, and for another folder that `PI_CODING_AGENT_DIR`

@@ -840,7 +840,7 @@ async function abortedInstall(
 	}
 	return recorded
 		? `${shownSource} was already recorded in ${path.join(agentDir, "settings.json")} when the install stopped; review-panel extension list shows it, and review-panel extension remove undoes it.`
-		: `${shownSource} was not recorded in ${path.join(agentDir, "settings.json")}: the install stopped first. A git clone or npm install it had started may be left under ${agentDir} (git/ or npm/); install the source again to finish it.`;
+		: `${shownSource} was not recorded in ${path.join(agentDir, "settings.json")} when checked after the stop, and review-panel exits now so that its package manager does not go on; review-panel extension list shows the final state. A git clone or npm install it had started may be left under ${agentDir} (git/ or npm/); install the source again to finish it.`;
 }
 
 export async function installExtension(input: {
