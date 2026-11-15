@@ -15,6 +15,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	CLOSEOUT_GENERATIONS,
+	chainClaimFile,
+	claimChain,
 	claimCloseout,
 	claimRound,
 	closeoutClaimFile,
@@ -547,5 +549,50 @@ describe("posted markers are signed (T502)", () => {
 		expect(
 			await claimCloseout(dir, "v-2", nothingOnPr, { key: TEST_RECORD_KEY }),
 		).toEqual({ kind: "posted", onPr: false });
+	});
+});
+
+describe("claimChain (S-2)", () => {
+	it("checks the chain again after the create, and gives the claim back when a verify finished in between", () => {
+		const dir = record();
+		expect(() =>
+			claimChain(dir, "prior", "verify-b", () => {
+				throw new Error(
+					'Verify refused: review "prior" has been verified already; verify against the latest verify, "verify-a"',
+				);
+			}),
+		).toThrow('verify against the latest verify, "verify-a"');
+		expect(existsSync(chainClaimFile(dir, "prior", 1))).toBe(false);
+	});
+
+	it("a live claim is checked against the chain too, so a finished verify is named as the latest", () => {
+		const dir = record();
+		const first = claimChain(dir, "prior", "verify-a", () => undefined);
+		expect(() =>
+			claimChain(dir, "prior", "verify-b", () => {
+				throw new Error('verify against the latest verify, "verify-a"');
+			}),
+		).toThrow('verify against the latest verify, "verify-a"');
+		first.release();
+		expect(readdirSync(dir)).toEqual([]);
+	});
+
+	it("refreshes only its own claim, and releases only its own", () => {
+		const dir = record();
+		const held = claimChain(dir, "prior", "verify-a", () => undefined);
+		const file = chainClaimFile(dir, "prior", 1);
+		const before = JSON.parse(readFileSync(file, "utf8")).claimedAt as number;
+		vi.spyOn(Date, "now").mockReturnValue(before + 30_000);
+		held.refresh();
+		expect(JSON.parse(readFileSync(file, "utf8")).claimedAt).toBe(
+			before + 30_000,
+		);
+		writeFileSync(
+			file,
+			JSON.stringify({ verifyRunId: "other", pid: 1, host: "x", claimedAt: 1 }),
+		);
+		held.refresh();
+		held.release();
+		expect(JSON.parse(readFileSync(file, "utf8")).verifyRunId).toBe("other");
 	});
 });

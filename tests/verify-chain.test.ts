@@ -1,15 +1,17 @@
 import { execFileSync } from "node:child_process";
 import {
 	cpSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { commentAction } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
@@ -151,6 +153,7 @@ async function verify(
 		lowAdvisory?: string[];
 		seats?: string[];
 	} = {},
+	hooks: { onSeat?: () => Promise<void>; abortSignal?: AbortSignal } = {},
 ) {
 	let call = 0;
 	// The first verify places every finding: unless the test says, the
@@ -175,12 +178,16 @@ async function verify(
 		},
 		{
 			recordKey: TEST_RECORD_KEY,
+			...(hooks.abortSignal === undefined
+				? {}
+				: { abortSignal: hooks.abortSignal }),
 			pinSnapshot: () => ({
 				worktreePath: repo,
 				release: () => ({ ok: true }),
 			}),
 			runAdvisorySeat: async (spec) => {
 				specs.push(spec as SeatSpec);
+				await hooks.onSeat?.();
 				const answer = answers[call] ?? answers[0];
 				call += 1;
 				if (answer?.lost === true) {
@@ -608,6 +615,223 @@ function writeLink(
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	return runId;
 }
+
+describe("no forks: a verify claims the link it chains from (S-2)", () => {
+	const reviewDir = () => path.join(repo, ".review-panel", "runs", REVIEW);
+	const claimFile = (prior: string, generation: number) =>
+		path.join(reviewDir(), `chain-${prior}.claim-${generation}`);
+	const chainClaims = () =>
+		readdirSync(reviewDir()).filter((name) => name.startsWith("chain-"));
+	const held = (prior: string, generation: number) =>
+		(
+			JSON.parse(readFileSync(claimFile(prior, generation), "utf8")) as {
+				verifyRunId: string;
+			}
+		).verifyRunId;
+	const STILL = [{ items: [{ id: "F-1", disposition: "still present" }] }] as [
+		{ items: Item[] },
+	];
+
+	it("a second verify from the same tip is refused, naming the running one, before any seat runs; then the finished one", async () => {
+		let refusal: unknown;
+		let running = "";
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			STILL,
+			{},
+			{
+				onSeat: async () => {
+					if (specs.length > 1) {
+						return;
+					}
+					running = held(REVIEW, 1);
+					await verify(REVIEW, commits[3] as string, ["F-1"], STILL).catch(
+						(error: unknown) => {
+							refusal = error;
+						},
+					);
+				},
+			},
+		);
+		expect(running).toBe(runIdOf(v1));
+		expect(String(refusal)).toContain(
+			`Verify refused: verify "${runIdOf(v1)}" is already running from "${REVIEW}"`,
+		);
+		expect(specs).toHaveLength(1);
+		// Given back once the verify is signed: the chain itself names it now.
+		expect(chainClaims()).toEqual([]);
+		await expect(
+			verify(REVIEW, commits[3] as string, ["F-1"], STILL),
+		).rejects.toThrow(`verify against the latest verify, "${runIdOf(v1)}"`);
+	});
+
+	it("a later link is claimed the same way: from the previous verify, not the review", async () => {
+		const v1 = await verify(REVIEW, commits[2] as string, ["F-1"], STILL);
+		let claimed: string[] = [];
+		await verify(
+			runIdOf(v1),
+			commits[3] as string,
+			["F-1"],
+			STILL,
+			{},
+			{
+				onSeat: async () => {
+					claimed = chainClaims();
+				},
+			},
+		);
+		expect(claimed).toEqual([`chain-${runIdOf(v1)}.claim-1`]);
+	});
+
+	it("a stale claim is skipped and left where it is, so the chain is never dead", async () => {
+		writeFileSync(
+			claimFile(REVIEW, 1),
+			`${JSON.stringify({
+				verifyRunId: "2026-11-15T10-30-00-000Z-crashed",
+				pid: 1,
+				host: "elsewhere",
+				claimedAt: Date.now() - 66_000,
+			})}\n`,
+		);
+		let claimed: string[] = [];
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			STILL,
+			{},
+			{
+				onSeat: async () => {
+					claimed = chainClaims();
+				},
+			},
+		);
+		expect(claimed).toEqual([
+			`chain-${REVIEW}.claim-1`,
+			`chain-${REVIEW}.claim-2`,
+		]);
+		expect(held(REVIEW, 1)).toBe("2026-11-15T10-30-00-000Z-crashed");
+		expect(chainClaims()).toEqual([`chain-${REVIEW}.claim-1`]);
+		expect(loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)).toHaveLength(1);
+		expect(runIdOf(v1)).not.toBe("");
+	});
+
+	it("a live claim names the file to delete when no verify is running", async () => {
+		writeFileSync(
+			claimFile(REVIEW, 1),
+			`${JSON.stringify({
+				verifyRunId: "2026-11-15T10-30-00-000Z-elsewhere",
+				pid: 1,
+				host: "elsewhere",
+				claimedAt: Date.now(),
+			})}\n`,
+		);
+		await expect(
+			verify(REVIEW, commits[2] as string, ["F-1"], STILL),
+		).rejects.toThrow(
+			`Verify refused: verify "2026-11-15T10-30-00-000Z-elsewhere" is already running from "${REVIEW}"; verify against it once it finishes (if no verify is running, delete chain-${REVIEW}.claim-1 from the review's run record)`,
+		);
+		expect(specs).toHaveLength(0);
+	});
+
+	it("the claim stays fresh while the verify runs, however long its seats take", async () => {
+		vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+		try {
+			let refusal: unknown;
+			await verify(
+				REVIEW,
+				commits[2] as string,
+				["F-1"],
+				STILL,
+				{},
+				{
+					onSeat: async () => {
+						if (specs.length > 1) {
+							return;
+						}
+						// Ten minutes in one seat: far past the 65 s staleness rule.
+						vi.advanceTimersByTime(600_000);
+						await verify(REVIEW, commits[3] as string, ["F-1"], STILL).catch(
+							(error: unknown) => {
+								refusal = error;
+							},
+						);
+					},
+				},
+			);
+			expect(String(refusal)).toContain("is already running from");
+			expect(specs).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("a verify that stops gives its claim back, so the round can be run again", async () => {
+		const controller = new AbortController();
+		await expect(
+			verify(
+				REVIEW,
+				commits[2] as string,
+				["F-1"],
+				STILL,
+				{},
+				{
+					abortSignal: controller.signal,
+					onSeat: async () => {
+						controller.abort();
+					},
+				},
+			),
+		).rejects.toThrow("verify cancelled");
+		expect(existsSync(claimFile(REVIEW, 1))).toBe(false);
+		const v1 = await verify(REVIEW, commits[2] as string, ["F-1"], STILL);
+		expect(loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)[0]?.runId).toBe(
+			runIdOf(v1),
+		);
+	});
+
+	it("comment is never blocked by a chain claim: it reads only signed records", async () => {
+		await verify(REVIEW, commits[2] as string, ["F-1"], STILL);
+		const v1 = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)[0]?.runId ?? "";
+		writeFileSync(
+			claimFile(v1, 1),
+			`${JSON.stringify({
+				verifyRunId: "2026-11-15T12-00-00-000Z-running",
+				pid: 1,
+				host: "elsewhere",
+				claimedAt: Date.now(),
+			})}\n`,
+		);
+		const reply = await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId: REVIEW,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{
+				deps: {
+					env: {},
+					home: root,
+					diagnose: async () => ({ ready: true, rows: [] }),
+					loadConfig: () => config,
+					recordKey: () => TEST_RECORD_KEY,
+					checkRecordKey: () => undefined,
+					postComment: () => ({
+						action: "created" as const,
+						commentId: 1,
+						pr: 12,
+						url: "https://github.com/o/r/pull/12#issuecomment-1",
+					}),
+				},
+			},
+		);
+		expect(reply.content[0]?.text ?? "").not.toContain("refused");
+	});
+});
 
 describe("the chain refuses what is not one line of signed links", () => {
 	it("refuses verifying the review again once it has a verify, naming the latest", async () => {
