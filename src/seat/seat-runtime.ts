@@ -49,6 +49,7 @@ export type SeatServicesSdk = {
 		agentDir: string;
 		settingsManager: unknown;
 		resourceLoaderOptions: Record<string, unknown>;
+		modelRuntime?: unknown;
 	}) => Promise<SeatServices>;
 };
 
@@ -120,8 +121,13 @@ export function createIsolatedServices(input: {
 	agentDir: string;
 	extensionPaths: readonly string[];
 	loaderOptions?: Record<string, unknown>;
+	/** A runtime the caller made; by default the SDK makes one. */
+	modelRuntime?: unknown;
 }): Promise<SeatServices> {
 	return input.sdk.createAgentSessionServices({
+		...(input.modelRuntime === undefined
+			? {}
+			: { modelRuntime: input.modelRuntime }),
 		cwd: input.cwd,
 		agentDir: input.agentDir,
 		settingsManager: input.sdk.SettingsManager.inMemory({}),

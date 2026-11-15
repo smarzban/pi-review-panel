@@ -248,6 +248,8 @@ export const realSetupSdk: SetupSdk = {
 			cwd: input.cwd,
 			agentDir: input.agentDir,
 			extensionPaths: input.extensionPaths,
+			// The same offline runtime as auth providers: no catalog refresh.
+			modelRuntime: await createModelRuntime(sdk, input.agentDir),
 		});
 		const runtime = services.modelRuntime as unknown as PiSdk.ModelRuntime;
 		try {
