@@ -548,27 +548,35 @@ Both cards, the automatic close-out and the manual `comment` card, read like thi
   low), the findings resolved and in how many verify rounds, and then the dismissed and
   low/advisory counts. A count of zero is left out.
 - `Review seats:` is the review's seats grouped by lens, in the reply's format. `Verified by:` is
-  every counted verify round's seats, each once, grouped the same way.
+  the seats that voted in each counted verify round, each once, grouped the same way; a verify
+  seat that was lost is not named.
 - `Lost:` appears only when a seat was lost. The `### Dismissed` section (each id with its title
   and reason) and the `### Low / advisory (not kept)` section appear only when they have ids.
 - The range shows the base ref only when it is not itself a commit id (a full or abbreviated SHA
   of the base); the head is one short SHA: the commit the card's verify checked, or for a
-  `comment` card with no `verifyRunId`, the review's head. `comment`'s `head` (`--head`) is still
-  accepted and no longer shown.
-- Each kept finding is listed, by severity, as `resolved in verify N`, where N is the first
-  verify round that marked it resolved (every voting seat that answered said resolved). A verify
-  round's number is the `verify N` its comment posted as, read only from the review record's
-  signed `round-<N>.posted`; its seats and dispositions come from its own signed verify record.
-  The card counts its own verify and the posted rounds before it. A verify that never posted (for
-  example, run with `--no-pr-comment` and then named in `comment`'s `verifyRunId`) counts as a
-  round with no number, and its ids read plain `resolved`. The card never says “fixed”.
+  `comment` card with no `verifyRunId`, the review's head. `comment` checks and uses a
+  `verifyRunId` whenever one is given, even when every finding is dismissed or left as
+  low/advisory, and requires one only when ids are left resolved. `comment`'s `head` (`--head`) is
+  still accepted and no longer shown.
+- Each kept finding is listed, by severity, as `resolved in verify N`. A round marks an id
+  resolved when every voting seat that answered for it said resolved; N is the earliest counted
+  round that did so after which every later counted round that answered for the id also said
+  resolved (so resolved in verify 1, split in verify 2 and resolved in verify 3 reads verify 3).
+  A verify round's number is the `verify N` its comment posted as, read only from the file name of
+  the review record's signed `round-<N>.posted` (never from a field inside it); its voting seats
+  and dispositions come from its own signed verify record. The card counts its own verify and the
+  posted rounds before it. A verify that never posted (for example, run with `--no-pr-comment`
+  and then named in `comment`'s `verifyRunId`) counts as a round with no number, after the posted
+  rounds reserved before it (by the time in each run id, which `record.mac` binds; a run id with no
+  time cannot be placed), and its ids read plain `resolved`. The card never says “fixed”.
 - The range line links to the review comment and to each counted verify's comment on the same
   PR, when they can be found among the PR's comments: by this author, first line the round's
   heading (`## Review panel · review` or `## Review panel · verify N`), last non-empty line exactly
   that round's hidden marker. The link goes to the `html_url` gh gave for that comment, and only
   when it is exactly this PR's comment URL (`https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`).
   The automatic card links its own verify comment by the URL gh gave when it was posted. A comment
-  that cannot be found gets no link, and the card still posts.
+  that cannot be found gets no link, and the card still posts. Only the last 10 verify comments
+  are linked, after a `…`, so the range line stays short however many rounds there were.
 - When the list is too long, rows are cut from the end, with the usual line counting them; the
   counts stay in the head and the hidden marker stays last.
 

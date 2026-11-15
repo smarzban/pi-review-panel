@@ -76,15 +76,20 @@ review). The card is presentation, not a verdict: the agents judge and the owner
 cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card after the owner says yes
 (`--owner-approved`), found later by author plus heading `## Review panel`. Both cards list each
-kept id as “resolved in verify N” (N the first posted verify round that marked it resolved, from
-the review record's signed `round-<N>.posted`; plain “resolved” for a verify that never posted),
-presentation only: never the word “fixed”, no “ready to merge.” They show counts by severity and
-hide zero counts, `Review seats:` and `Verified by:` (each counted round's verify seats, from
-signed verify records), `Lost:` only when a seat was lost, the base ref only when it is not itself
-a commit id, the head as one short SHA, and links to the review and each verify comment on the
-same PR when they can be found (author, first-line heading and marker as the last line, at the
-`html_url` gh gave for that comment on this PR; a comment not found has no link and never stops
-the post). Remaining high/medium ids count as resolved only when a verify
+kept id as “resolved in verify N” (N the earliest counted round that marked it resolved after
+which every later counted round that answered for it also said resolved; round numbers only from
+the review record's signed `round-<N>.posted` file names; plain “resolved” for a verify that never
+posted), presentation only: never the word “fixed”, no “ready to merge.” They show counts by
+severity and hide zero counts, `Review seats:` and `Verified by:` (the seats that voted in each
+counted round, from signed verify records; a lost seat is not named), `Lost:` only when a seat
+was lost, the base ref only when it is not itself a commit id, the head as one short SHA, and
+links to the review and the last 10 verify comments on the same PR when they can be found
+(author, first-line heading and marker as the last line, at the `html_url` gh gave for that
+comment on this PR; a comment not found has no link and never stops the post). A card counts its
+own verify and the posted rounds before it (by round number, or for an unposted `comment`
+`verifyRunId` by the time in each run id, which `record.mac` binds). `comment` authenticates and
+uses a supplied `verifyRunId` whenever one is given, and requires one only when ids are left
+resolved. Remaining high/medium ids count as resolved only when a verify
 run whose `priorRunId` is this review marks them resolved. Every agent's skill runs the
 `review-panel` command directly; it never starts another agent session.
 
