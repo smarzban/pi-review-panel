@@ -50,6 +50,7 @@ import {
 	REVIEW_ROUND_HEADING,
 	resolvedIdsOf,
 	roundCommentLinks,
+	unresolvedIdsOf,
 } from "./closeout-rounds.js";
 import {
 	type CommentGroupRow,
@@ -953,13 +954,15 @@ function buildCloseout(
 		.filter((row) => row.outcome.kind === "failed")
 		.map((row) => `${row.seat.rosterId}/${row.seat.lens}`);
 	const verifyRunId = runIdOf(result.recordPath);
+	const dispositions = dispositionsOf(result.outcomes);
 	const rounds = cardRounds(
 		postedVerifyRounds(repoDir, review.run, facts.recordKey),
 		{
 			runId: verifyRunId,
 			round,
 			seats: facts.panel,
-			resolved: resolvedIdsOf(dispositionsOf(result.outcomes)),
+			resolved: resolvedIdsOf(dispositions),
+			unresolved: unresolvedIdsOf(dispositions),
 		},
 	);
 	const render = (links?: CloseoutLinks) => {

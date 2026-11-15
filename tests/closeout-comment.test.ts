@@ -291,6 +291,35 @@ describe("renderCloseoutComment", () => {
 		expect(text).not.toMatch(/fixed/i);
 	});
 
+	it("rule 3: N is the round after which every later round that answered also resolved it (R-1)", () => {
+		const rows = [
+			finding("F-1", "high", "auth bypass"),
+			finding("F-2", "medium", "missing timeout"),
+		];
+		const text = renderCloseoutComment({
+			findings: rows,
+			resolved: rows,
+			dismissed: [],
+			lowAdvisory: [],
+			seats: seatsOf(["holistic", ["terra"]]),
+			lost: [],
+			rounds: [
+				round("v-1", 1, ["F-1", "F-2"]),
+				{ ...round("v-2", 2, []), unresolved: new Set(["F-1"]) },
+				round("v-3", 3, ["F-1"]),
+			],
+			baseRef: "main",
+			baseOid,
+			headOid,
+		});
+		expect(text).toContain(
+			"- **F-1 [high]** auth bypass · resolved in verify 3",
+		);
+		expect(text).toContain(
+			"- **F-2 [medium]** missing timeout · resolved in verify 1",
+		);
+	});
+
 	it("rule 3: a verify that never posted has no number, so its ids read plain resolved", () => {
 		const rows = [finding("F-1", "high", "auth bypass")];
 		const text = renderCloseoutComment({

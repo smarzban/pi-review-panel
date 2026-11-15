@@ -83,6 +83,19 @@ export function resolvedIdsOf(
 	return resolved;
 }
 
+/** The ids a voting seat answered without every answer being `resolved`. */
+export function unresolvedIdsOf(
+	dispositions: ReadonlyMap<string, ReadonlySet<string>>,
+): Set<string> {
+	const unresolved = new Set<string>();
+	for (const [id, states] of dispositions) {
+		if (states.size !== 1 || !states.has("resolved")) {
+			unresolved.add(id);
+		}
+	}
+	return unresolved;
+}
+
 /** The seats of a panel record, as roster id and lens. */
 export function seatsOf(panel: unknown): CloseoutSeat[] {
 	const seats = (panel as { seats?: unknown } | null)?.seats;
@@ -129,10 +142,12 @@ export function verifyRoundOf(
 	) {
 		return undefined;
 	}
+	const dispositions = dispositionsOf(verification.outcomes);
 	return {
 		runId,
 		seats: seatsOf(parse(signed.get("panel.json"))),
-		resolved: resolvedIdsOf(dispositionsOf(verification.outcomes)),
+		resolved: resolvedIdsOf(dispositions),
+		unresolved: unresolvedIdsOf(dispositions),
 		...(typeof meta.headOid === "string" ? { headOid: meta.headOid } : {}),
 	};
 }

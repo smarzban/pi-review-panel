@@ -30,8 +30,10 @@ export type CloseoutVerifyRound = {
 	/** The `verify N` its comment posted as; absent when it never posted. */
 	round?: number;
 	seats: readonly CloseoutSeat[];
-	/** The ids it marked resolved. */
+	/** The ids it marked resolved: every voting seat that answered said resolved. */
 	resolved: ReadonlySet<string>;
+	/** The ids a voting seat answered without every answer being resolved. */
+	unresolved?: ReadonlySet<string>;
 };
 
 /**
@@ -192,7 +194,7 @@ function rangeLine(input: CloseoutCommentInput): string {
 		}
 	};
 	add("review", input.links?.review);
-	for (const round of input.rounds ?? []) {
+	for (const round of inOrder(input.rounds ?? [])) {
 		if (round.round !== undefined) {
 			add(`verify ${round.round}`, input.links?.verify?.get(round.runId));
 		}
@@ -200,20 +202,38 @@ function rangeLine(input: CloseoutCommentInput): string {
 	return parts.join(" · ");
 }
 
+/** Rounds in order: by number, a round with no number (never posted) last. */
+function inOrder(
+	rounds: readonly CloseoutVerifyRound[],
+): CloseoutVerifyRound[] {
+	return [...rounds].sort(
+		(left, right) =>
+			(left.round ?? Number.POSITIVE_INFINITY) -
+			(right.round ?? Number.POSITIVE_INFINITY),
+	);
+}
+
 /**
- * `resolved in verify N`, N the lowest-numbered round that marked the id
- * resolved; plain `resolved` when only a round with no number did.
+ * `resolved in verify N`, N the earliest round that marked the id resolved
+ * after which every later round that answered for it also said resolved: a
+ * round that answered otherwise starts the count again. Plain `resolved`
+ * when that round has no number (it never posted), or no round marked it.
  */
 function resolvedLabel(
 	id: string,
-	rounds: readonly CloseoutVerifyRound[],
+	ordered: readonly CloseoutVerifyRound[],
 ): string {
-	const numbers = rounds
-		.filter((round) => round.round !== undefined && round.resolved.has(id))
-		.map((round) => round.round as number);
-	return numbers.length === 0
+	let since: CloseoutVerifyRound | undefined;
+	for (const round of ordered) {
+		if (round.resolved.has(id)) {
+			since ??= round;
+		} else if (round.unresolved?.has(id) === true) {
+			since = undefined;
+		}
+	}
+	return since?.round === undefined
 		? "resolved"
-		: `resolved in verify ${Math.min(...numbers)}`;
+		: `resolved in verify ${since.round}`;
 }
 
 /** One close-out card as its head lines and its list rows. */
@@ -240,7 +260,7 @@ export function closeoutCardParts(
 	for (const row of input.dismissed) {
 		requireReason(row.id, row.reason);
 	}
-	const rounds = input.rounds ?? [];
+	const rounds = inOrder(input.rounds ?? []);
 	const lostNames = [
 		...input.lost.map((name) => postedText(name)),
 		...(input.verifyLost ?? []).map((name) => `${postedText(name)} (verify)`),

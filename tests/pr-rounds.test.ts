@@ -339,6 +339,11 @@ function writeVerifyRecord(
 		items?: Item[];
 		/** The verify seat that voted, recorded in panel.json. */
 		seat?: { rosterId: string; lens: string };
+		/**
+		 * Several seats instead of `items` and `seat`: each votes its items,
+		 * or fails when it has none.
+		 */
+		votes?: Array<{ seat: { rosterId: string; lens: string }; items?: Item[] }>;
 		headOid?: string;
 	} = {},
 ): void {
@@ -353,35 +358,53 @@ function writeVerifyRecord(
 			...(options.headOid === undefined ? {} : { headOid: options.headOid }),
 		}),
 	);
-	const seat = {
+	const full = (seat: { rosterId: string; lens: string }) => ({
 		provider: "ollama",
 		model: "glm-5.2",
 		lensPrompt: "",
-		...(options.seat ?? { rosterId: "glm", lens: "fix-verification" }),
-	};
-	if (options.items !== undefined) {
+		...seat,
+	});
+	const votes =
+		options.votes ??
+		(options.items === undefined
+			? undefined
+			: [
+					{
+						seat: options.seat ?? { rosterId: "glm", lens: "fix-verification" },
+						items: options.items,
+					},
+				]);
+	if (votes !== undefined) {
 		writeFileSync(
 			path.join(recordPath, "panel.json"),
-			JSON.stringify({ runId, baseRef: "main", seats: [seat] }),
+			JSON.stringify({
+				runId,
+				baseRef: "main",
+				seats: votes.map((vote) => full(vote.seat)),
+			}),
 		);
 	}
 	writeFileSync(
 		path.join(recordPath, "verification.json"),
 		JSON.stringify({
 			priorRunId,
-			keptFindingIds: (options.items ?? []).map((item) => item.id),
-			outcomes:
-				options.items === undefined
-					? []
-					: [
-							{
-								seat,
-								outcome: {
-									kind: "voted",
-									result: { items: options.items, regressions: [] },
-								},
+			keptFindingIds: [
+				...new Set(
+					(votes ?? []).flatMap((vote) =>
+						(vote.items ?? []).map((item) => item.id),
+					),
+				),
+			],
+			outcomes: (votes ?? []).map((vote) => ({
+				seat: full(vote.seat),
+				outcome:
+					vote.items === undefined
+						? { kind: "failed", class: "provider-error" }
+						: {
+								kind: "voted",
+								result: { items: vote.items, regressions: [] },
 							},
-						],
+			})),
 		}),
 	);
 	if (options.posted !== false) {
@@ -4076,6 +4099,61 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			});
 		});
 	}
+
+	const GLM = { rosterId: "glm", lens: "fix-verification" };
+	const OPUS = { rosterId: "opus", lens: "fix-verification" };
+
+	it("an earlier round where the seats split on an id did not resolve it (P-4)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+				votes: [
+					{ seat: GLM, items: [resolved("F-1")] },
+					{ seat: OPUS, items: [{ id: "F-1", disposition: "still present" }] },
+				],
+			});
+			writeSignedMarker(reviewRecordDir(repo), "round-1.posted", "v-0", {
+				pr: 12,
+			});
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await cleanVerify(repo, gh);
+			const card = bodyOf(closeoutPosts(gh.calls)[0]);
+			expect(card).toContain("**2 resolved** in 2 verify rounds");
+			expect(card).toContain(
+				"- **F-1 [high]** auth bypass · resolved in verify 2",
+			);
+		});
+	});
+
+	it("an id resolved, then not, then resolved again reads the round after which it stayed resolved (R-1)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const reviewDir = reviewRecordDir(repo);
+			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+				votes: [{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] }],
+			});
+			writeSignedMarker(reviewDir, "round-1.posted", "v-0", { pr: 12 });
+			writeVerifyRecord(repo, "v-a", REVIEW_ID, {
+				votes: [
+					{ seat: GLM, items: [resolved("F-1")] },
+					{ seat: OPUS, items: [{ id: "F-1", disposition: "inconclusive" }] },
+				],
+			});
+			writeSignedMarker(reviewDir, "round-2.posted", "v-a", { pr: 12 });
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await cleanVerify(repo, gh);
+			const card = bodyOf(closeoutPosts(gh.calls)[0]);
+			expect(card).toContain("**2 resolved** in 3 verify rounds");
+			// Verify 2 split on F-1, so only verify 3 resolved it for good.
+			expect(card).toContain(
+				"- **F-1 [high]** auth bypass · resolved in verify 3",
+			);
+			// Verify 2 said nothing of F-2, so verify 1 still stands.
+			expect(card).toContain(
+				"- **F-2 [medium]** missing timeout · resolved in verify 1",
+			);
+		});
+	});
 
 	it("a round's number is its signed file name's N, never the marker's unsigned round field (P-2)", async () => {
 		await withRepository(async (repo, head) => {
