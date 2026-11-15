@@ -643,6 +643,216 @@ describe("a verify that lost a seat", () => {
 	});
 });
 
+describe("the final check before the card (S-6)", () => {
+	/** Verify 3 at fix3, from verify 2: F-2 resolved, nothing left open. */
+	async function lastRound(extra: Record<string, unknown> = {}) {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		return await verify(
+			{ priorRunId: v2.runId, head: commits[4], closeOut: true, ...extra },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+	}
+	const latestOf = (reply: string) =>
+		/^Latest verify: `([^`]+)`/mu.exec(reply)?.[1] ?? "";
+	const UNDONE: Regression = {
+		file: "src/cache.ts",
+		line: 3,
+		title: "the fix2 rename drops the tenant from the key again",
+		evidence: "key is built without tenant",
+		undoes: "F-1",
+	};
+
+	it("--close-out checks the review head to the final head once, with one seat, before the card; when it finds nothing the card posts", async () => {
+		answers.push({ items: [] });
+		const v3 = await lastRound();
+		const check = specs[3];
+		expect(specs).toHaveLength(4);
+		expect(check?.baseRef).toBe(commits[1]);
+		expect(check?.expectedIds).toEqual([]);
+		expect([...(check?.undoableIds ?? [])].sort()).toEqual([
+			"F-1",
+			"F-2",
+			"F-3",
+			"V1-R1",
+		]);
+		expect(check?.cycle).toBe(4);
+		expect(check?.scopingNote).toContain(
+			`Final check of the whole change: ${commits[1]}...${commits[4]}`,
+		);
+		const headings = posted().map((body) => body.split("\n")[0]);
+		expect(headings).toEqual([
+			"## Review panel · verify 1",
+			"## Review panel · verify 2",
+			"## Review panel · verify 3",
+			"## Review panel · verify 4",
+			"## Review panel · close-out",
+		]);
+		const final = latestOf(v3.reply);
+		expect(final).not.toBe("");
+		expect(final).not.toBe(v3.runId);
+		const card = closeouts()[0] as string;
+		expect(card).toContain(
+			"**Final check:** verify 4, from the reviewed head to the final head",
+		);
+		expect(card).toContain(
+			"- **F-1 [high]** cache key misses the tenant · resolved in verify 1",
+		);
+		expect(card.split("\n").at(-1)).toBe(
+			`<!-- review-panel review=${REVIEW} verify=${final} -->`,
+		);
+	});
+
+	it("a fix that no longer holds blocks the card, and is posted as a regression with an id; the next verify checks it", async () => {
+		answers.push({ items: [], regressions: [UNDONE] });
+		const v3 = await lastRound();
+		expect(closeouts()).toEqual([]);
+		const check = posted().at(-1) as string;
+		expect(check.split("\n")[0]).toBe("## Review panel · verify 4");
+		expect(check).toContain("**Open after this round:** V4-R1");
+		expect(check).toContain("V4-R1");
+		expect(check).toContain("undoes");
+		expect(v3.reply).toContain("PR close-out: not posted (1 regression)");
+		const final = latestOf(v3.reply);
+		const v5 = await verify(
+			{ priorRunId: final, head: commits[5] },
+			{ items: [{ id: "V4-R1", disposition: "resolved" }] },
+		);
+		expect(specs.at(-1)?.expectedIds).toEqual(["V4-R1"]);
+		expect(specs.at(-1)?.baseRef).toBe(commits[4]);
+		expect(v5.body.split("\n")[0]).toBe("## Review panel · verify 5");
+	});
+
+	it("a lost seat blocks the card, and the reply names comment, which checks again and posts it", async () => {
+		answers.push({ items: [], lost: true });
+		const v3 = await lastRound();
+		expect(closeouts()).toEqual([]);
+		expect(v3.reply).toContain(
+			"PR close-out: not posted (lost verify coverage: terra/fix-verification)",
+		);
+		const hinted =
+			/`(review-panel comment [^`]+)`/u.exec(
+				v3.reply.split("\n").find((line) => line.startsWith("Final check:")) ??
+					"",
+			)?.[1] ?? "";
+		expect(hinted).toBe(
+			`review-panel comment --prior-run-id ${REVIEW} --owner-approved`,
+		);
+		const command = parseCommand(hinted.split(" ").slice(1));
+		answers.push({ items: [] });
+		const card = await stopWith(
+			(command as { args: Record<string, unknown> }).args,
+		);
+		expect(specs).toHaveLength(5);
+		expect(specs[4]?.baseRef).toBe(commits[1]);
+		expect(card.body).toContain(
+			"**Final check:** verify 5, from the reviewed head to the final head",
+		);
+		expect(card.body).not.toContain("### Open");
+	});
+
+	it("the seat is the owner's first verify seat, never one the caller names", async () => {
+		const owner = (): Config => ({
+			roster: [
+				...config.roster,
+				{ id: "glm", provider: "ollama", model: "glm-5.2" },
+			],
+			defaults: { seats: ["terra"], verifySeats: ["glm", "terra"] },
+		});
+		answers.push(
+			{
+				items: [
+					{ id: "F-1", disposition: "resolved" },
+					{ id: "F-2", disposition: "resolved" },
+					{ id: "F-3", disposition: "resolved" },
+					{ id: "F-5", disposition: "resolved" },
+				],
+			},
+			{ items: [] },
+		);
+		await verifyAction(
+			{
+				repoDir: repo,
+				priorRunId: REVIEW,
+				head: commits[2] as string,
+				keptFindingIds: ["F-1", "F-2", "F-3", "F-5"],
+				seats: ["terra"],
+				closeOut: true,
+			},
+			{ deps: { ...deps(), loadConfig: owner } },
+		);
+		expect(specs.map((spec) => spec.model)).toEqual([
+			"gpt-5.6-terra",
+			"glm-5.2",
+		]);
+		expect(closeouts()).toHaveLength(1);
+	});
+
+	it("is not run when nothing was resolved, or when the tip already is a final check with no lost seat", async () => {
+		// No verify: nothing resolved, so comment runs no seat.
+		await stopWith({
+			dismissed: ["F-1", "F-2", "F-3", "F-5"].map((id) => ({
+				id,
+				reason: "by design",
+			})),
+		});
+		expect(specs).toHaveLength(0);
+		// After a --close-out that ran it, comment runs no seat again.
+		answers.push({ items: [] });
+		await lastRound();
+		expect(specs).toHaveLength(4);
+		const card = await stopWith({});
+		expect(specs).toHaveLength(4);
+		expect(card.body).toContain("**Final check:** verify 4");
+	});
+
+	it("comment runs it when the owner stops with ids open: what it finds is open on the card, and the card still posts", async () => {
+		const v1 = await round1();
+		answers.push({ items: [], regressions: [UNDONE] });
+		const card = await stopWith({});
+		expect(specs).toHaveLength(2);
+		expect(specs[1]?.baseRef).toBe(commits[1]);
+		expect([...(specs[1]?.undoableIds ?? [])].sort()).toEqual(["F-1", "F-3"]);
+		const lines = card.body.split("\n");
+		const open = lines.indexOf("### Open (not resolved)");
+		expect(lines.slice(open + 1, open + 5)).toEqual([
+			"- **F-2 [high]** token compared with ===",
+			"- **F-5 [medium]** log line prints the request body",
+			"- **V1-R1 [regression]** the new key builder drops the null check",
+			"- **V2-R1 [regression]** the fix2 rename drops the tenant from the key again (undoes `F-1`)",
+		]);
+		expect(card.body).toContain("**Final check:** verify 2");
+		expect(v1.runId).not.toBe("");
+	});
+
+	it("comment refuses before any seat runs what it would refuse anyway, and says why while a verify runs from the tip", async () => {
+		const v1 = await round1();
+		await expect(
+			stopWith({ dismissed: [{ id: "F-1", reason: "no" }] }),
+		).rejects.toThrow("comment refused: F-1 was resolved in a verify round");
+		expect(specs).toHaveLength(1);
+		writeFileSync(
+			path.join(
+				repo,
+				".review-panel",
+				"runs",
+				REVIEW,
+				`chain-${v1.runId}.claim-1`,
+			),
+			`${JSON.stringify({
+				verifyRunId: "2026-11-15T12-00-00-000Z-running",
+				pid: 1,
+				host: "elsewhere",
+				claimedAt: Date.now(),
+			})}\n`,
+		);
+		await expect(stopWith({})).rejects.toThrow(
+			`comment refused: verify "2026-11-15T12-00-00-000Z-running" is already running from "${v1.runId}"; verify against it once it finishes`,
+		);
+		expect(specs).toHaveLength(1);
+	});
+});
+
 describe("the undo guard on a PR", () => {
 	it("a later change that reverts an earlier fix is a regression naming that id", async () => {
 		const v1 = await round1();
