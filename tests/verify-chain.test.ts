@@ -734,6 +734,10 @@ describe("no forks: a verify claims the link it chains from (S-2)", () => {
 			`Verify refused: verify "2026-11-15T10-30-00-000Z-elsewhere" is already running from "${REVIEW}"; verify against it once it finishes (if no verify is running, delete chain-${REVIEW}.claim-1 from the review's run record)`,
 		);
 		expect(specs).toHaveLength(0);
+		// The refused verify leaves no run folder behind.
+		expect(readdirSync(path.join(repo, ".review-panel", "runs"))).toEqual([
+			REVIEW,
+		]);
 	});
 
 	it("the claim stays fresh while the verify runs, however long its seats take", async () => {
