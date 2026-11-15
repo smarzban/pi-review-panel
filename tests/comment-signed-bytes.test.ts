@@ -182,8 +182,8 @@ describe("comment builds its card from the authenticated review bytes (panel P-3
 				},
 			);
 			expect(bodies).toHaveLength(1);
-			expect(bodies[0]).toContain("**Seats:** holistic (terra)");
-			expect(bodies[0]).toContain("**Lost:** none");
+			expect(bodies[0]).toContain("**Review seats:** holistic (terra)");
+			expect(bodies[0]).not.toContain("Lost");
 			expect(bodies[0]).not.toContain("planted");
 		} finally {
 			rmSync(repo, { recursive: true, force: true });

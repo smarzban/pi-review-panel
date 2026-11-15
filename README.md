@@ -37,8 +37,10 @@ What you get instead:
   ids you kept — not a second full discovery circus.
 - **Each round on the PR.** When the head is an open PR, the review and each
   verify post a new comment there, and a verify where every seat voted and
-  resolved every kept id, with no regressions, also posts the close-out card: counts, dismissals with
-  reasons, leftover lows. No Fixed list. No “ready to merge.” Turn it off per run
+  resolved every kept id, with no regressions, also posts the close-out card: counts by severity,
+  each kept finding with the verify round that resolved it, the verify seats, dismissals with
+  reasons, leftover lows, and links to the review and verify comments. Never “fixed”, never
+  “ready to merge.” Turn it off per run
   with `--no-pr-comment`, or set `defaults.prComment: "ownerApproved"` so every
   post needs the owner's yes.
 

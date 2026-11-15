@@ -108,8 +108,20 @@ export function postedMarkerText(
  * Anything else, planted or copied, is no marker.
  */
 export function isSignedMarker(file: string, key: Buffer): boolean {
+	return signedMarkerVerifyRunId(file, key) !== undefined;
+}
+
+/**
+ * The verify a signed posted marker names, or undefined for anything that
+ * is not one (see {@link isSignedMarker}). The verify id is under the MAC;
+ * any other field in the marker is not.
+ */
+export function signedMarkerVerifyRunId(
+	file: string,
+	key: Buffer,
+): string | undefined {
 	if (!isRealFile(file)) {
-		return false;
+		return undefined;
 	}
 	try {
 		const value = JSON.parse(readFileSync(file, "utf8")) as {
@@ -123,7 +135,7 @@ export function isSignedMarker(file: string, key: Buffer): boolean {
 			typeof value.mac !== "string" ||
 			!/^[0-9a-f]{64}$/.test(value.mac)
 		) {
-			return false;
+			return undefined;
 		}
 		const expected = postedMarkerMac(
 			key,
@@ -134,9 +146,11 @@ export function isSignedMarker(file: string, key: Buffer): boolean {
 		return timingSafeEqual(
 			Buffer.from(expected, "hex"),
 			Buffer.from(value.mac, "hex"),
-		);
+		)
+			? value.verifyRunId
+			: undefined;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 

@@ -75,8 +75,21 @@ review). The card is presentation, not a verdict: the agents judge and the owner
 `defaults.prComment: "ownerApproved"` makes every post need `--owner-approved`. A post that
 cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card after the owner says yes
-(`--owner-approved`), found later by author plus heading `## Review panel`. No Fixed
-list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
+(`--owner-approved`), found later by author plus heading `## Review panel`. Both cards list each
+kept id as “resolved in verify N” (N the earliest counted round that marked it resolved after
+which every later counted round that answered for it also said resolved; round numbers only from
+the review record's signed `round-<N>.posted` file names; plain “resolved” for a verify that never
+posted), presentation only: never the word “fixed”, no “ready to merge.” They show counts by
+severity and hide zero counts, `Review seats:` and `Verified by:` (the seats that voted in each
+counted round, from signed verify records; a lost seat is not named), `Lost:` only when a seat
+was lost, the base ref only when it is not itself a commit id, the head as one short SHA, and
+links to the review and the last 10 verify comments on the same PR when they can be found
+(author, first-line heading and marker as the last line, at the `html_url` gh gave for that
+comment on this PR; a comment not found has no link and never stops the post). A card counts its
+own verify and the posted rounds before it (by round number, or for an unposted `comment`
+`verifyRunId` by the time in each run id, which `record.mac` binds). `comment` authenticates and
+uses a supplied `verifyRunId` whenever one is given, and requires one only when ids are left
+resolved. Remaining high/medium ids count as resolved only when a verify
 run whose `priorRunId` is this review marks them resolved. Every agent's skill runs the
 `review-panel` command directly; it never starts another agent session.
 
@@ -123,7 +136,9 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   … <span>$</span><span>$</span>` still renders as display math; parentheses, braces,
   quotes and dots stay plain. A text field is cut by code points before escaping and to at most
   twice its length once escaped (`POSTED_TEXT_GROWTH`), never inside an escape or a dollar span,
-  so its posted size has a fixed cap. File
+  so its posted size has a fixed cap. The only links the tool writes are the close-out card's
+  links to this PR's own comments (`postedLink`), whose URL must be exactly
+  `https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`. File
   names and ids are code spans with a fence longer than any backtick run inside, with nothing
   escaped or joined in them, and a value with nothing visible renders as `(empty)`. Labels the
   tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in

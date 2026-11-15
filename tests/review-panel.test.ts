@@ -1084,11 +1084,12 @@ describe("the comment action", () => {
 			);
 			expect(posted?.pr).toBe(29);
 			expect(posted?.body).toContain("## Review panel");
-			expect(posted?.body).toContain(
-				"2 findings submitted · 0 fixed · 1 dismissed · 1 left as low/advisory",
+			expect(posted?.body).toMatch(
+				/^\*\*2 findings\*\* \([^)]*\) · 1 dismissed · 1 left as low\/advisory$/m,
 			);
+			expect(posted?.body).not.toMatch(/fixed|resolved/i);
 			expect(posted?.body).toContain("**Lost:** deepseek/holistic");
-			expect(posted?.body).toMatch(/\*\*Seats:\*\* .*security \(/);
+			expect(posted?.body).toMatch(/\*\*Review seats:\*\* .*security \(/);
 			expect(posted?.body).toContain(
 				"- **F-1** auth bypass — checked, not real",
 			);
@@ -1139,7 +1140,7 @@ describe("the comment action", () => {
 		});
 	});
 
-	it("counts verified remaining findings as fixed", async () => {
+	it("lists verified remaining findings as resolved", async () => {
 		await withRepository(async (repository) => {
 			writeReviewRecord(repository, "review-1", {
 				findings: [
@@ -1181,11 +1182,13 @@ describe("the comment action", () => {
 				{},
 			);
 			expect(body).toContain(
-				"2 findings submitted · 1 fixed · 0 dismissed · 1 left as low/advisory",
+				"**2 findings** (1 high, 1 low) · **1 resolved** in 1 verify round · 1 left as low/advisory",
 			);
 			expect(body).not.toContain("### Dismissed");
 			expect(body).toContain("- **F-2** nit");
-			expect(body).not.toContain("F-1");
+			// verify-1 posted no round, so it has no number.
+			expect(body).toMatch(/^- \*\*F-1 \[high\]\*\* auth bypass · resolved$/m);
+			expect(body).not.toMatch(/fixed/i);
 			// A verify run given as its record path is named by its id.
 			expect(body.split("\n").at(-1)).toBe(
 				"<!-- review-panel review=review-1 verify=verify-1 -->",

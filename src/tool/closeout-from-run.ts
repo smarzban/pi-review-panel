@@ -9,6 +9,13 @@ import {
 } from "../run/prior-run.js";
 import { COMPLETE_MARKER, readSignedRecord } from "../run/record.js";
 import type { PanelRecord } from "../run/types.js";
+import {
+	dispositionsOf,
+	resolvedIdsOf,
+	type SignedVerifyRound,
+	unresolvedIdsOf,
+	votedSeatsOf,
+} from "./closeout-rounds.js";
 
 export type CloseoutRunFacts = {
 	run: PriorRun;
@@ -108,18 +115,13 @@ export function closeoutFactsOf(run: PriorRun): CloseoutRunFacts {
 	return { run, panel, lost };
 }
 
-type VerificationOutcome = {
-	outcome?: {
-		kind?: unknown;
-		result?: { items?: Array<{ id?: unknown; disposition?: unknown }> };
-	};
-};
-
 /**
- * Checks that a verify run of this review marked every fixed id resolved. The
- * verify record is taken only when it is signed by the owner's record key
- * (`record.mac` over its panel, meta and verification bytes, bound to its
- * own run id); a planted or copied verify record is refused.
+ * Checks that a verify run of this review marked every resolved id resolved,
+ * and returns that verify as a round of the card (no number: the caller
+ * finds that among the posted rounds). The verify record is taken only when
+ * it is signed by the owner's record key (`record.mac` over its panel, meta
+ * and verification bytes, bound to its own run id); a planted or copied
+ * verify record is refused.
  */
 export function assertFixedResolved(
 	repoDir: string,
@@ -127,10 +129,7 @@ export function assertFixedResolved(
 	fixedIds: readonly string[],
 	expectedPriorRunId: string,
 	recordKey: Buffer,
-): void {
-	if (fixedIds.length === 0) {
-		return;
-	}
+): SignedVerifyRound {
 	let runId: string;
 	try {
 		runId = resolvePriorRunId(repoDir, verifyRunId);
@@ -178,20 +177,7 @@ export function assertFixedResolved(
 	if (!Array.isArray(outcomes)) {
 		throw new Error("comment refused: verification.json has no outcomes");
 	}
-	const dispositions = new Map<string, Set<string>>();
-	for (const row of outcomes as VerificationOutcome[]) {
-		if (row.outcome?.kind !== "voted") {
-			continue;
-		}
-		for (const item of row.outcome.result?.items ?? []) {
-			if (typeof item.id !== "string" || typeof item.disposition !== "string") {
-				continue;
-			}
-			const seen = dispositions.get(item.id) ?? new Set<string>();
-			seen.add(item.disposition);
-			dispositions.set(item.id, seen);
-		}
-	}
+	const dispositions = dispositionsOf(outcomes);
 	for (const id of fixedIds) {
 		const states = dispositions.get(id);
 		if (states === undefined) {
@@ -205,4 +191,14 @@ export function assertFixedResolved(
 			);
 		}
 	}
+	const meta = parseJson(signed.get("meta.json") as string, "meta.json") as {
+		headOid?: unknown;
+	} | null;
+	return {
+		runId,
+		seats: votedSeatsOf(outcomes),
+		resolved: resolvedIdsOf(dispositions),
+		unresolved: unresolvedIdsOf(dispositions),
+		...(typeof meta?.headOid === "string" ? { headOid: meta.headOid } : {}),
+	};
 }

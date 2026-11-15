@@ -23,7 +23,11 @@ import type { Config } from "../src/config/schema.js";
 import type { RunVerifyInput } from "../src/run/run-verify.js";
 import type { RunConfig } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
-import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
+import {
+	signReviewRecord,
+	signVerifyRecord,
+	TEST_RECORD_KEY,
+} from "./fixtures/record-key.js";
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -542,6 +546,80 @@ describe("comment takes G-ids as well as F-ids", () => {
 				expect(body).toContain(id);
 			}
 			expect(body).not.toContain("G-1");
+		});
+	});
+
+	it("lists a kept group on the card by its member F-ids, each resolved (T505)", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, "review-1");
+			// A signed verify that resolved G-1's members, F-1 and F-3.
+			const verifyPath = path.join(repo, ".review-panel", "runs", "v-1");
+			mkdirSync(verifyPath, { recursive: true });
+			const seat = {
+				rosterId: "terra",
+				lens: "fix-verification",
+				provider: "openai-codex",
+				model: "gpt-5.6-terra",
+			};
+			writeFileSync(
+				path.join(verifyPath, "panel.json"),
+				JSON.stringify({ runId: "v-1", baseRef: "main", seats: [seat] }),
+			);
+			writeFileSync(
+				path.join(verifyPath, "meta.json"),
+				JSON.stringify({
+					runId: "v-1",
+					kind: "verify",
+					priorRunId: "review-1",
+				}),
+			);
+			writeFileSync(
+				path.join(verifyPath, "verification.json"),
+				JSON.stringify({
+					priorRunId: "review-1",
+					keptFindingIds: ["F-1", "F-3"],
+					outcomes: [
+						{
+							seat,
+							outcome: {
+								kind: "voted",
+								result: {
+									items: [
+										{ id: "F-1", disposition: "resolved" },
+										{ id: "F-3", disposition: "resolved" },
+									],
+									regressions: [],
+								},
+							},
+						},
+					],
+				}),
+			);
+			signVerifyRecord(verifyPath);
+			writeFileSync(path.join(verifyPath, "COMPLETE"), "");
+			const { bodies, postComment } = poster();
+			await commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: "review-1",
+					verifyRunId: "v-1",
+					dismissed: [{ id: "G-2", reason: "by design" }],
+					lowAdvisory: ["G-3"],
+					pr: 7,
+				},
+				{ deps: deps({ postComment }) },
+			);
+			const body = bodies[0] ?? "";
+			expect(
+				body.split("\n").filter((line) => line.includes("· resolved")),
+			).toEqual([
+				"- **F-1 [high]** F-1 title · resolved",
+				"- **F-3 [medium]** F-3 title · resolved",
+			]);
+			expect(body).toContain("**2 resolved** in 1 verify round");
+			expect(body).toContain("**Verified by:** fix-verification (terra)");
+			expect(body).not.toMatch(/G-\d/);
 		});
 	});
 
