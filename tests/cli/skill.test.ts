@@ -18,6 +18,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+function lexistsSync(file: string): boolean {
+	try {
+		lstatSync(file);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 import {
 	AGENTS,
 	agentHome,
@@ -325,6 +334,101 @@ describe("skill install", () => {
 		).toContain("v2");
 		expect(second.lines.join("\n")).toContain(
 			`Codex: refreshed the copy at ${target(skills)} (1.2.3 to 1.2.4)`,
+		);
+	});
+});
+
+/** The frontmatter of the old host skill the 0.3.0 README told users to copy. */
+const OLD_HOST_SKILL =
+	'---\nname: review-panel\ndescription: "Run the review-panel CLI on a PR or a local change, read its report, and judge each finding keep or skip."\n---\n\n# Review panel from the command line\n';
+
+describe("upgrades from earlier installs (R-2)", () => {
+	function earlierInstall(present: boolean): string {
+		const prefix = tempDir("rp-old-prefix-");
+		const dir = path.join(
+			prefix,
+			"lib",
+			"node_modules",
+			"pi-review-panel",
+			"skills",
+			"review-panel",
+		);
+		if (present) {
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(path.join(dir, "SKILL.md"), "old");
+		}
+		return dir;
+	}
+
+	for (const present of [true, false]) {
+		it(`replaces a ${present ? "" : "broken "}link into an earlier pi-review-panel install without --force`, () => {
+			const home = tempDir("rp-home-");
+			const source = fakePackage();
+			const skills = path.join(home, ".codex", "skills");
+			mkdirSync(skills, { recursive: true });
+			const old = earlierInstall(present);
+			symlinkSync(old, target(skills));
+
+			expect(skillStatus(options(home, source, { agents: ["codex"] }))).toEqual(
+				[
+					`- Codex: ${target(skills)} links to an earlier pi-review-panel install (${old}); run review-panel skill install`,
+				],
+			);
+			const result = installSkill(options(home, source));
+			expect(result.ok).toBe(true);
+			expect(result.lines.join("\n")).toContain(
+				`Codex: replaced the link to an earlier pi-review-panel install (${old}): linked ${target(skills)} -> ${source}`,
+			);
+			expect(readlinkSync(target(skills))).toBe(source);
+			if (present) {
+				expect(readFileSync(path.join(old, "SKILL.md"), "utf8")).toBe("old");
+			}
+		});
+	}
+
+	it("uninstall removes a link into an earlier pi-review-panel install", () => {
+		const home = tempDir("rp-home-");
+		const skills = path.join(home, ".grok", "skills");
+		mkdirSync(skills, { recursive: true });
+		const old = earlierInstall(true);
+		symlinkSync(old, target(skills));
+		const result = uninstallSkill(options(home, fakePackage()));
+		expect(result.lines).toContain(`Grok: removed ${target(skills)}`);
+		expect(lexistsSync(target(skills))).toBe(false);
+		expect(existsSync(path.join(old, "SKILL.md"))).toBe(true);
+	});
+
+	it("replaces the old host-skill copy without --force, and names it", () => {
+		const home = tempDir("rp-home-");
+		const source = fakePackage();
+		const skills = path.join(home, ".claude", "skills");
+		mkdirSync(target(skills), { recursive: true });
+		writeFileSync(path.join(target(skills), "SKILL.md"), OLD_HOST_SKILL);
+
+		expect(skillStatus(options(home, source, { agents: ["claude"] }))).toEqual([
+			`- Claude Code: ${target(skills)} is the old review-panel host-skill copy; run review-panel skill install to replace it`,
+		]);
+		expect(uninstallSkill(options(home, source)).lines).toContain(
+			`Claude Code: left alone: ${target(skills)} is the old review-panel host-skill copy; review-panel skill install replaces it.`,
+		);
+		const result = installSkill(options(home, source));
+		expect(result.ok).toBe(true);
+		expect(result.lines.join("\n")).toContain(
+			`Claude Code: replaced the old review-panel host-skill copy: linked ${target(skills)} -> ${source}`,
+		);
+		expect(readlinkSync(target(skills))).toBe(source);
+	});
+
+	it("still refuses a review-panel folder with anything beside that SKILL.md", () => {
+		const home = tempDir("rp-home-");
+		const skills = path.join(home, ".claude", "skills");
+		mkdirSync(target(skills), { recursive: true });
+		writeFileSync(path.join(target(skills), "SKILL.md"), OLD_HOST_SKILL);
+		writeFileSync(path.join(target(skills), "notes.md"), "mine");
+		const result = installSkill(options(home, fakePackage()));
+		expect(result.ok).toBe(false);
+		expect(readFileSync(path.join(target(skills), "notes.md"), "utf8")).toBe(
+			"mine",
 		);
 	});
 });

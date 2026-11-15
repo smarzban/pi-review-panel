@@ -22,6 +22,7 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	readlinkSync,
 	realpathSync,
@@ -160,8 +161,50 @@ type TargetState =
 	| { kind: "ours-link" }
 	| { kind: "broken-link"; to: string }
 	| { kind: "other-link"; to: string }
+	/** A link (live or broken) into another pi-review-panel install's skill. */
+	| { kind: "earlier-link"; to: string }
 	| { kind: "ours-copy"; version: string }
+	/** The 0.3.0 host skill, copied by hand: one SKILL.md and nothing else. */
+	| { kind: "old-host-copy" }
 	| { kind: "other" };
+
+/**
+ * A link into `.../pi-review-panel/skills/review-panel`: an install of this
+ * package under another prefix or Node version (nvm, a new npm prefix, the
+ * npx cache), so it is replaced and removed like our own link.
+ */
+function isEarlierInstall(to: string): boolean {
+	const parts = path.resolve(to).split(path.sep).filter(Boolean);
+	return parts.slice(-3).join("/") === `${PACKAGE_NAME}/skills/${SKILL_NAME}`;
+}
+
+const OLD_HOST_DESCRIPTION =
+	'description: "Run the review-panel CLI on a PR or a local change';
+
+/** The old host skill: a folder holding only a SKILL.md with its frontmatter. */
+function isOldHostCopy(dir: string): boolean {
+	try {
+		if (readdirSync(dir).join("/") !== "SKILL.md") {
+			return false;
+		}
+		const file = path.join(dir, "SKILL.md");
+		if (!lstatSync(file).isFile()) {
+			return false;
+		}
+		const text = readFileSync(file, "utf8");
+		const end = text.indexOf("\n---", 4);
+		if (!text.startsWith("---\n") || end === -1) {
+			return false;
+		}
+		const lines = text.slice(4, end).split("\n");
+		return (
+			lines.includes(`name: ${SKILL_NAME}`) &&
+			lines.some((line) => line.startsWith(OLD_HOST_DESCRIPTION))
+		);
+	} catch {
+		return false;
+	}
+}
 
 function readStamp(dir: string): string | undefined {
 	try {
@@ -185,17 +228,22 @@ function inspect(target: string, source: string): TargetState {
 	}
 	if (stats.isSymbolicLink()) {
 		const to = path.resolve(path.dirname(target), readlinkSync(target));
-		if (!existsSync(target)) {
-			return { kind: "broken-link", to };
+		const live = existsSync(target);
+		if (live && samePath(target, source)) {
+			return { kind: "ours-link" };
 		}
-		return samePath(target, source)
-			? { kind: "ours-link" }
-			: { kind: "other-link", to };
+		if (isEarlierInstall(to)) {
+			return { kind: "earlier-link", to };
+		}
+		return live ? { kind: "other-link", to } : { kind: "broken-link", to };
 	}
 	if (stats.isDirectory()) {
 		const version = readStamp(target);
 		if (version !== undefined) {
 			return { kind: "ours-copy", version };
+		}
+		if (isOldHostCopy(target)) {
+			return { kind: "old-host-copy" };
 		}
 	}
 	return { kind: "other" };
@@ -342,7 +390,11 @@ export function installSkill(options: SkillOptions): SkillResult {
 			continue;
 		}
 		const replacing = state.kind !== "absent";
-		if (replacing && state.kind !== "ours-copy" && options.force !== true) {
+		const replaceable =
+			state.kind === "ours-copy" ||
+			state.kind === "earlier-link" ||
+			state.kind === "old-host-copy";
+		if (replacing && !replaceable && options.force !== true) {
 			ok = false;
 			lines.push(
 				`${agent.label}: skipped: ${notOurs(target, state)}. Re-run with --force to replace it.`,
@@ -361,9 +413,13 @@ export function installSkill(options: SkillOptions): SkillResult {
 		}
 		place(options, target);
 		lines.push(
-			replacing
-				? `${agent.label}: replaced ${target} (${placedWord(options, target)})`
-				: `${agent.label}: ${placedWord(options, target)}`,
+			state.kind === "earlier-link"
+				? `${agent.label}: replaced the link to an earlier pi-review-panel install (${state.to}): ${placedWord(options, target)}`
+				: state.kind === "old-host-copy"
+					? `${agent.label}: replaced the old review-panel host-skill copy: ${placedWord(options, target)}`
+					: replacing
+						? `${agent.label}: replaced ${target} (${placedWord(options, target)})`
+						: `${agent.label}: ${placedWord(options, target)}`,
 		);
 	}
 	if (acted === 0) {
@@ -396,7 +452,17 @@ export function uninstallSkill(options: SkillOptions): SkillResult {
 			lines.push(`${agent.label}: not installed`);
 			continue;
 		}
-		if (state.kind !== "ours-link" && state.kind !== "ours-copy") {
+		if (state.kind === "old-host-copy") {
+			lines.push(
+				`${agent.label}: left alone: ${target} is the old review-panel host-skill copy; review-panel skill install replaces it.`,
+			);
+			continue;
+		}
+		if (
+			state.kind !== "ours-link" &&
+			state.kind !== "ours-copy" &&
+			state.kind !== "earlier-link"
+		) {
 			lines.push(`${agent.label}: left alone: ${notOurs(target, state)}.`);
 			continue;
 		}
@@ -438,6 +504,16 @@ export function skillStatus(options: SkillOptions): string[] {
 					state.version === options.source.version
 						? `${label} copy ${state.version} (${target})`
 						: `${label} stale copy ${state.version} (this is ${options.source.version}) at ${target}; run review-panel skill install`,
+				);
+				break;
+			case "earlier-link":
+				rows.push(
+					`${label} ${target} links to an earlier pi-review-panel install (${state.to}); run review-panel skill install`,
+				);
+				break;
+			case "old-host-copy":
+				rows.push(
+					`${label} ${target} is the old review-panel host-skill copy; run review-panel skill install to replace it`,
 				);
 				break;
 			case "broken-link":
