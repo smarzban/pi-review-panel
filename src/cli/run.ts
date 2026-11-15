@@ -405,6 +405,7 @@ async function execute(
 			const result = await listProviders({
 				agentDir: deps.agentDir,
 				sdk: deps.setupSdk,
+				signal: io.signal,
 			});
 			io.stdout(
 				command.json
@@ -424,6 +425,7 @@ async function execute(
 				all: command.all,
 				extensions: command.extensions,
 				sdk: deps.setupSdk,
+				signal: io.signal,
 				...(deps.extensionTimeoutMs === undefined
 					? {}
 					: { timeoutMs: deps.extensionTimeoutMs }),
@@ -444,6 +446,7 @@ async function execute(
 				source: command.source,
 				sdk: deps.setupSdk,
 				progress: (line: string) => io.stderr(`${line}\n`),
+				signal: io.signal,
 			};
 			io.stdout(
 				`${
@@ -458,6 +461,7 @@ async function execute(
 			const result = await listExtensions({
 				agentDir: deps.agentDir,
 				sdk: deps.setupSdk,
+				signal: io.signal,
 			});
 			io.stdout(
 				command.json

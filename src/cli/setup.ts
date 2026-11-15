@@ -132,10 +132,14 @@ export type ProvidersResult = { agentDir: string; providers: ProviderRow[] };
 export async function listProviders(input: {
 	agentDir: AgentDirChoice;
 	sdk: SetupSdk;
+	signal?: AbortSignal;
 }): Promise<ProvidersResult> {
 	return {
 		agentDir: input.agentDir.dir,
-		providers: await input.sdk.providers(input.agentDir.dir),
+		providers: await untilAborted(
+			input.sdk.providers(input.agentDir.dir),
+			input.signal,
+		),
 	};
 }
 
@@ -220,9 +224,37 @@ type Group = {
 
 const TIMED_OUT = Symbol("timed out");
 
+/**
+ * `work`, or a rejection with the signal's reason as soon as it aborts. The
+ * first Ctrl-C ends a setup command at once, even while an extension or the
+ * package manager is still busy.
+ */
+export function untilAborted<T>(
+	work: Promise<T>,
+	signal: AbortSignal | undefined,
+): Promise<T> {
+	if (signal === undefined) {
+		return work;
+	}
+	if (signal.aborted) {
+		return Promise.reject(signal.reason);
+	}
+	let onAbort: (() => void) | undefined;
+	const aborted = new Promise<never>((_, reject) => {
+		onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	return Promise.race([work, aborted]).finally(() => {
+		if (onAbort !== undefined) {
+			signal.removeEventListener("abort", onAbort);
+		}
+	});
+}
+
 function withinBound<T>(
 	work: Promise<T>,
 	ms: number,
+	signal?: AbortSignal,
 ): Promise<T | typeof TIMED_OUT> {
 	let timer: NodeJS.Timeout | undefined;
 	// The timer stays referenced: an extension that awaits a promise that never
@@ -231,7 +263,9 @@ function withinBound<T>(
 	const bound = new Promise<typeof TIMED_OUT>((resolve) => {
 		timer = setTimeout(() => resolve(TIMED_OUT), ms);
 	});
-	return Promise.race([work, bound]).finally(() => clearTimeout(timer));
+	return untilAborted(Promise.race([work, bound]), signal).finally(() =>
+		clearTimeout(timer),
+	);
 }
 
 /**
@@ -270,11 +304,15 @@ export async function listModels(input: {
 	extensions: readonly string[];
 	sdk: SetupSdk;
 	timeoutMs?: number;
+	signal?: AbortSignal;
 }): Promise<ModelsResult> {
 	const timeoutMs = input.timeoutMs ?? READINESS_ROW_TIMEOUT_MS;
 	const agentDir = input.agentDir.dir;
 	const groups: Group[] = [{ extensionPaths: [] }];
-	for (const installed of await input.sdk.listExtensions({ agentDir })) {
+	for (const installed of await untilAborted(
+		input.sdk.listExtensions({ agentDir }),
+		input.signal,
+	)) {
 		if (installed.entries.length > 0) {
 			groups.push({
 				label: redactSecrets(installed.source),
@@ -302,8 +340,12 @@ export async function listModels(input: {
 					extensionPaths: group.extensionPaths,
 				}),
 				timeoutMs,
+				input.signal,
 			);
 		} catch (error) {
+			if (input.signal?.aborted) {
+				throw error;
+			}
 			problems.push(
 				`${group.label === undefined ? "The model catalog" : `Extension ${group.label}`} failed to load: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
 			);
@@ -516,14 +558,18 @@ export async function installExtension(input: {
 	source: string;
 	sdk: SetupSdk;
 	progress(line: string): void;
+	signal?: AbortSignal;
 }): Promise<string> {
 	const source = absoluteSource(input.source, input.cwd);
 	const installed = redactedExtension(
-		await input.sdk.installExtension({
-			agentDir: input.agentDir.dir,
-			source,
-			progress: (line) => input.progress(redactSecrets(line)),
-		}),
+		await untilAborted(
+			input.sdk.installExtension({
+				agentDir: input.agentDir.dir,
+				source,
+				progress: (line) => input.progress(redactSecrets(line)),
+			}),
+			input.signal,
+		),
 	);
 	const shownSource = redactSecrets(source);
 	if (installed.entries.length === 0) {
@@ -553,11 +599,15 @@ export type ExtensionsResult = {
 export async function listExtensions(input: {
 	agentDir: AgentDirChoice;
 	sdk: SetupSdk;
+	signal?: AbortSignal;
 }): Promise<ExtensionsResult> {
 	return {
 		agentDir: input.agentDir.dir,
 		extensions: (
-			await input.sdk.listExtensions({ agentDir: input.agentDir.dir })
+			await untilAborted(
+				input.sdk.listExtensions({ agentDir: input.agentDir.dir }),
+				input.signal,
+			)
 		).map(redactedExtension),
 	};
 }
@@ -600,20 +650,25 @@ export async function removeExtension(input: {
 	source: string;
 	sdk: SetupSdk;
 	progress(line: string): void;
+	signal?: AbortSignal;
 }): Promise<string> {
-	const configured = await input.sdk.listExtensions({
-		agentDir: input.agentDir.dir,
-	});
+	const configured = await untilAborted(
+		input.sdk.listExtensions({ agentDir: input.agentDir.dir }),
+		input.signal,
+	);
 	// The source as `extension list` prints it is taken as is: a relative local
 	// source there is relative to the agent folder, not to the working folder.
 	const source = configured.some((entry) => entry.source === input.source)
 		? input.source
 		: absoluteSource(input.source, input.cwd);
-	const removed = await input.sdk.removeExtension({
-		agentDir: input.agentDir.dir,
-		source,
-		progress: (line) => input.progress(redactSecrets(line)),
-	});
+	const removed = await untilAborted(
+		input.sdk.removeExtension({
+			agentDir: input.agentDir.dir,
+			source,
+			progress: (line) => input.progress(redactSecrets(line)),
+		}),
+		input.signal,
+	);
 	const shownSource = redactSecrets(source);
 	if (!removed) {
 		throw new SetupError(

@@ -105,7 +105,12 @@ loaded. Entry paths come from `resolve()` with every missing package skipped, ne
 The package manager runs `git` and `npm` with inherited stdio, so their output reaches stdout:
 `extension install` prints the entry paths last, and only `extension list` has `--json`. When
 the agent folder is `~/.pi/agent`, install and remove change Pi's own `packages`, and the
-output says so.
+output says so. Setup commands race the run's abort signal, so the first Ctrl-C ends them at
+once; the per-group timer stays referenced while it waits (an extension that awaits a promise
+that never settles holds no handle, and an unreferenced timer would let Node end the process
+with the top-level await unsettled). Install and remove set `GIT_TERMINAL_PROMPT=0`. Every
+printed source, `--json` included, goes through `redactSecrets` (URL user info and secret-named
+query values become `***`); the package manager gets the source as given.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production

@@ -150,6 +150,9 @@ function configuredHow(status: {
  * `.pi/settings.json` or `.pi/extensions`) is ever read or installed.
  */
 function packageManager(sdk: typeof PiSdk, agentDir: string) {
+	// git never stops to ask for a user name or password on the terminal: a
+	// source that needs one fails with git's own message instead.
+	process.env.GIT_TERMINAL_PROMPT = "0";
 	const settingsManager = sdk.SettingsManager.create(agentDir, agentDir, {
 		projectTrusted: false,
 	});
