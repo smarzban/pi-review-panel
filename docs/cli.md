@@ -281,7 +281,10 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   npm's own output, which passes through unchanged. Give git the token through a credential
   helper, use an SSH source, or put an npm token in `.npmrc`. review-panel's own lines
   (progress, result, list, `models`, errors and `--json`) also show a credential as `***`, for
-  a source that Pi or an earlier version recorded.
+  a source that Pi or an earlier version recorded, in the source and in the folder Pi named
+  after it. Such a path cannot be copied into a roster row, and the output says so; remove the
+  source and install it again without the credential. Any other `@` in a path (a folder
+  named `ext@v2`, a `.pnpm/name@1.2.0` folder) prints as it is.
 
 | Exit code | Meaning |
 |---|---|

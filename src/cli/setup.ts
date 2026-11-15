@@ -58,6 +58,11 @@ export type InstalledExtension = {
 	filtered: boolean;
 	/** The package's extension entry files, for `extraExtensionPaths`. */
 	entries: string[];
+	/**
+	 * Set when a credential in the recorded source was hidden (`***`) in these
+	 * paths, which therefore cannot be copied into a roster row.
+	 */
+	credentialHidden?: true;
 };
 
 export type SetupSdk = {
@@ -93,11 +98,12 @@ export class SetupError extends Error {}
  * - the user info of a scheme-less `git:` source (`git:user:token@host/...`,
  *   `git:token@host/...`), which Pi clones over HTTPS, but not an scp-style
  *   SSH user (`git:git@host:owner/repo`);
- * - a path segment holding user info, as Pi names the clone folder of such a
- *   source after its host (`.../git/user:token@host/owner/repo`);
  * - the value of a query parameter whose name looks like a secret.
  *
- * Sources reach the package manager as given; only what is printed changes.
+ * It reads source strings only: a local path that holds an `@` is never
+ * changed. A folder Pi named after a recorded source's credential is hidden
+ * with that source's own parse (`redactorFor`). Sources reach the package
+ * manager as given; only what is printed changes.
  */
 export function redactSecrets(text: string): string {
 	return text
@@ -105,7 +111,6 @@ export function redactSecrets(text: string): string {
 		.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@?#:]+:[^\s/@?#]*@/gi, "$1***@")
 		.replace(/(\bgit:\s*)[^\s/@:]+:[^\s/@]+@/gi, "$1***@")
 		.replace(/(\bgit:\s*)(?!git@)[^\s/@:]+@(?=[^\s/@]+\/)/gi, "$1***@")
-		.replace(/\/(?!git@|\*\*\*@)[^\s/@]+@(?=[^\s/@]+\/)/g, "/***@")
 		.replace(
 			/([?&][^=&#\s/]*(?:token|key|secret|passw|pwd|auth|sig|credential)[^=&#\s/]*=)[^&#\s/]*/gi,
 			"$1***",
@@ -250,16 +255,46 @@ export function sourceProblem(
 	}
 }
 
-function redactedExtension(entry: InstalledExtension): InstalledExtension {
+/**
+ * How to print text about one recorded source: its own credential parts (from
+ * Pi's parse of it) hidden first, then `redactSecrets`. Only that source's
+ * credential text is hidden, so no other `@` in a path changes.
+ */
+async function redactorFor(
+	sdk: SetupSdk,
+	source: string,
+): Promise<(text: string) => string> {
+	let parts: string[] = [];
+	try {
+		parts = credentialParts(await sdk.parseSource(source));
+	} catch {
+		// Unparseable: the source-string rules still apply.
+	}
+	return (text) => redactSecrets(hideParts(text, parts));
+}
+
+async function redactedExtension(
+	sdk: SetupSdk,
+	entry: InstalledExtension,
+): Promise<InstalledExtension> {
+	const redact = await redactorFor(sdk, entry.source);
+	const entries = entry.entries.map(redact);
+	const installedPath =
+		entry.installedPath === undefined ? undefined : redact(entry.installedPath);
+	const hidden =
+		entries.some((shown, index) => shown !== entry.entries[index]) ||
+		installedPath !== entry.installedPath;
 	return {
 		...entry,
-		source: redactSecrets(entry.source),
-		entries: entry.entries.map(redactSecrets),
-		...(entry.installedPath === undefined
-			? {}
-			: { installedPath: redactSecrets(entry.installedPath) }),
+		source: redact(entry.source),
+		entries,
+		...(installedPath === undefined ? {} : { installedPath }),
+		...(hidden ? { credentialHidden: true as const } : {}),
 	};
 }
+
+const UNCOPYABLE =
+	"*** hides a credential from the source, so these paths cannot be copied into a roster row; remove it and install the source again without the credential";
 
 function folderLine(agentDir: AgentDirChoice): string {
 	return `Agent folder: ${describeAgentDir(agentDir)}`;
@@ -377,7 +412,10 @@ export type ModelsResult = {
 
 type Group = {
 	label?: string;
+	/** Loaded as given. */
 	extensionPaths: string[];
+	/** How its paths are printed. */
+	redact?: (text: string) => string;
 };
 
 const TIMED_OUT = Symbol("timed out");
@@ -503,7 +541,8 @@ export async function listModels(input: {
 		// on every start too. Each entry loads on its own, as one roster row's
 		// path would, so a model's roster row names only the entry that
 		// registered its provider.
-		const source = redactSecrets(installed.source);
+		const redact = await redactorFor(input.sdk, installed.source);
+		const source = redact(installed.source);
 		for (const entry of installed.entries) {
 			const within =
 				installed.installedPath === undefined
@@ -511,8 +550,11 @@ export async function listModels(input: {
 					: path.relative(installed.installedPath, entry);
 			groups.push({
 				label:
-					installed.entries.length === 1 ? source : `${source} (${within})`,
+					installed.entries.length === 1
+						? source
+						: `${source} (${redact(within)})`,
 				extensionPaths: [entry],
+				redact,
 			});
 		}
 	}
@@ -555,7 +597,7 @@ export async function listModels(input: {
 				);
 				continue;
 			}
-			const paths = group.extensionPaths.map(redactSecrets);
+			const paths = group.extensionPaths.map(group.redact ?? redactSecrets);
 			const where =
 				group.label === paths[0]
 					? group.label
@@ -569,6 +611,15 @@ export async function listModels(input: {
 			problems.push(
 				`Extension ${redactSecrets(failure.extension)} failed to load: ${redactSecrets(failure.message)}`,
 			);
+		}
+		const shownPaths = group.extensionPaths.map(group.redact ?? redactSecrets);
+		if (
+			shownPaths.some(
+				(shown, index) => shown !== group.extensionPaths[index],
+			) &&
+			loaded.registeredProviders.length > 0
+		) {
+			problems.push(`Extension ${group.label}: ${UNCOPYABLE}`);
 		}
 		const own = new Set(loaded.registeredProviders);
 		for (const row of loaded.models) {
@@ -592,7 +643,7 @@ export async function listModels(input: {
 				...row,
 				// Loaded as given; printed redacted (a folder Pi named after a
 				// source with a token in it keeps that token).
-				extensionPaths: group.extensionPaths.map(redactSecrets),
+				extensionPaths: shownPaths,
 				...(group.label === undefined ? {} : { extensionSource: group.label }),
 			});
 		}
@@ -811,7 +862,8 @@ export async function installExtension(input: {
 	try {
 		// Nothing starts once the run is aborted.
 		input.signal?.throwIfAborted();
-		installed = redactedExtension(
+		installed = await redactedExtension(
+			input.sdk,
 			await untilAborted(
 				input.sdk.installExtension({
 					agentDir: input.agentDir.dir,
@@ -863,15 +915,15 @@ export async function listExtensions(input: {
 	sdk: SetupSdk;
 	signal?: AbortSignal;
 }): Promise<ExtensionsResult> {
-	return {
-		agentDir: input.agentDir.dir,
-		extensions: (
-			await untilAborted(
-				input.sdk.listExtensions({ agentDir: input.agentDir.dir }),
-				input.signal,
-			)
-		).map(redactedExtension),
-	};
+	const recorded = await untilAborted(
+		input.sdk.listExtensions({ agentDir: input.agentDir.dir }),
+		input.signal,
+	);
+	const extensions: InstalledExtension[] = [];
+	for (const entry of recorded) {
+		extensions.push(await redactedExtension(input.sdk, entry));
+	}
+	return { agentDir: input.agentDir.dir, extensions };
 }
 
 export function renderExtensions(
@@ -900,6 +952,9 @@ export function renderExtensions(
 				"  extraExtensionPaths entries:",
 				...extension.entries.map((entry) => `    ${entry}`),
 			);
+			if (extension.credentialHidden) {
+				lines.push(`  ${UNCOPYABLE}`);
+			}
 		}
 	}
 	return lines.join("\n");
@@ -923,11 +978,16 @@ export async function removeExtension(input: {
 	// and a source with a credential is printed redacted, so the printed form
 	// names the recorded source it matches when it matches exactly one.
 	let source: string;
-	const printedAs = configured.filter(
-		(entry) =>
+	const printedAs: InstalledExtension[] = [];
+	for (const entry of configured) {
+		if (
 			entry.source !== input.source &&
-			redactSecrets(entry.source) === input.source,
-	);
+			(await redactorFor(input.sdk, entry.source))(entry.source) ===
+				input.source
+		) {
+			printedAs.push(entry);
+		}
+	}
 	if (configured.some((entry) => entry.source === input.source)) {
 		source = input.source;
 	} else if (printedAs.length === 1) {
