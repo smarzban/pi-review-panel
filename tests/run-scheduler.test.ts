@@ -116,6 +116,42 @@ describe("SDK scheduler", () => {
 		expect(finished.sort()).toEqual(["correctness", "security"]);
 	});
 
+	it("an interrupted run still writes a seat that had submitted, and not one that was killed", async () => {
+		const seats = [seat("correctness"), seat("security")];
+		const controller = new AbortController();
+		const settled: Array<[number, string]> = [];
+
+		await expect(
+			scheduleSeats(
+				{ seats, worktree: "/snapshot", baseRef: "base" },
+				{
+					runAbortSignal: controller.signal,
+					// Both seats are running when the run is interrupted. The first
+					// had already submitted; the second had not.
+					runSeat: async (spec) => {
+						await delay(2);
+						controller.abort(new Error("interrupted"));
+						return spec.lens === "correctness"
+							? result(spec)
+							: {
+									...result(spec),
+									outcome: {
+										kind: "failure",
+										class: "killed",
+										reason: "seat SDK session was aborted",
+									},
+								};
+					},
+					onSeatSettled: (index, facts) => {
+						settled.push([index, facts.outcome.kind]);
+					},
+				},
+			),
+		).rejects.toThrow("run cancelled");
+
+		expect(settled).toEqual([[0, "voted"]]);
+	});
+
 	it("rejects duplicate exact provider/model/lens identities before starting a session", async () => {
 		let calls = 0;
 		await expect(
