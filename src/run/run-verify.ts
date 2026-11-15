@@ -1,3 +1,4 @@
+import { rmdirSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { loadRoleTable } from "../config/roles.js";
 import {
@@ -375,12 +376,16 @@ export async function runVerify(
 	// No forks: before any seat runs, this verify claims the record it
 	// chains from, and the chain is read again once the claim is held.
 	const previousRunId = previous?.runId ?? prior.runId;
-	const claim = claimChain(
-		prior.recordPath,
-		previousRunId,
-		record.runId,
-		() => void loadChainPrior(input.repoDir, previousRunId, options.recordKey),
-	);
+	let claim: ReturnType<typeof claimChain>;
+	try {
+		claim = claimChain(prior.recordPath, previousRunId, record.runId, () => {
+			loadChainPrior(input.repoDir, previousRunId, options.recordKey);
+		});
+	} catch (error) {
+		// Refused before anything was written: leave no run folder behind.
+		rmdirSync(record.recordPath);
+		throw error;
+	}
 	const refresh = setInterval(() => claim.refresh(), CHAIN_CLAIM_REFRESH_MS);
 	refresh.unref();
 	try {
