@@ -673,10 +673,10 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
 - Open ids are listed under `### Open (not resolved)`: what the chain left still present,
   inconclusive or unanswered, and open regressions. With no verify at all, `comment` refuses a
   high or medium it is not told to dismiss (never verified), and lists a low it is not told
-  about as low/advisory. `comment`
-  may dismiss or leave as low/advisory an id that is open, or give a new
-  reason for an id the chain dismissed, never an id a round resolved. The card never says
-  “fixed”.
+  about as low/advisory. `comment`'s `dismissed` and `lowAdvisory` may name only an id
+  still open (or, with no verify, one never placed); an id a round resolved, dismissed or left
+  as low/advisory is refused, naming the round, because the card shows it as that round left
+  it. The card never says “fixed”.
 - The range line links to the review comment and to each counted verify's comment on the same
   PR, when they can be found among the PR's comments: by this author, first line the round's
   heading (`## Review panel · review` or `## Review panel · verify N`), last non-empty line exactly

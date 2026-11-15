@@ -384,12 +384,12 @@ function itemOf(item: ChainItem, label?: string): CloseoutItem {
 /**
  * Sorts every review finding and regression onto the card from where the
  * verify chain left it, plus judgment given with the card: resolved (with
- * the posted round of the link that resolved it, or plain `resolved` when
- * that link never posted), open, dismissed with the reason, or left as
- * low/advisory. With no verify, every finding is unplaced: a low is left as
- * low/advisory, and a high or medium not dismissed is refused as never
- * verified. Judgment given with the card may name an open or unplaced id,
- * or replace a chain dismissal's reason; never an id a round resolved.
+ * the round of the link that resolved it), open, dismissed with the reason,
+ * or left as low/advisory. With no verify, every finding is unplaced: a low
+ * is left as low/advisory, and a high or medium not dismissed is refused as
+ * never verified. Judgment given with the card may name only an open or
+ * unplaced id; never one a round resolved, dismissed or left as
+ * low/advisory.
  */
 export function accountCloseoutFindings(
 	input: AccountCloseoutInput,
@@ -398,10 +398,18 @@ export function accountCloseoutFindings(
 	const rounds = input.rounds ?? [];
 	const claimed = new Map<string, "dismissed" | "low">();
 	const reasons = new Map<string, string>();
+	// Judgment given with the card names only an id still open, or one no
+	// verify placed: what a round judged is on the card as that round left it.
 	const refuseResolved = (id: string, item: ChainItem) => {
-		if (item.state.status === "resolved") {
+		const state = item.state;
+		if (state.status === "resolved") {
 			throw new Error(
 				`${id} was resolved in a verify round; it cannot also be kept out`,
+			);
+		}
+		if (state.status === "dismissed" || state.status === "low") {
+			throw new Error(
+				`${id} was ${state.status === "dismissed" ? "dismissed" : "left as low/advisory"} in verify ${rounds[state.link - 1]?.round ?? state.link}; name only ids still open`,
 			);
 		}
 	};

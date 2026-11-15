@@ -223,11 +223,13 @@ The close-out card is posted once, at the end, and only when asked:
 
 ```bash
 review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \
-  --low-advisory F-3 --dismissed '[{"id":"F-4","reason":"..."}]'
+  --dismissed '[{"id":"F-2","reason":"..."}]'
 ```
 
 `comment` reads the whole verify chain itself and lists every id as resolved (with the round
 that resolved it), dismissed, low/advisory, or open. Pass `--verify-run-id` only to name the
 latest verify; an older one is refused. Pass `--dismissed` and `--low-advisory` only for ids
-no round already judged. It updates the one existing panel card instead of opening a second
+still open (or, with no verify, never placed): comment refuses an id a round already resolved,
+dismissed or left as low/advisory, because the card shows it as that round left it. An open id
+you name here is dismissed (or low/advisory) on the card, not open. It updates the one existing panel card instead of opening a second
 one. Never write ready to merge on the card.
