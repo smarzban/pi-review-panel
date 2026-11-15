@@ -85,6 +85,18 @@ export type Command =
 	| { kind: "auth-login"; provider: string; apiKey: boolean }
 	| { kind: "auth-logout"; provider: string }
 	| { kind: "auth-status"; repo?: string; json: boolean }
+	| { kind: "auth-providers"; json: boolean }
+	| {
+			kind: "models";
+			provider?: string;
+			search?: string;
+			all: boolean;
+			extensions: string[];
+			json: boolean;
+	  }
+	| { kind: "extension-install"; source: string }
+	| { kind: "extension-list"; json: boolean }
+	| { kind: "extension-remove"; source: string }
 	| {
 			kind: "skill-install";
 			agents?: AgentId[];
@@ -356,8 +368,93 @@ function parseAuth(argv: readonly string[]): Command {
 			json: flags.values.get("json") === true,
 		};
 	}
+	if (sub === "providers") {
+		const flags = readFlags(rest, { json: BOOLEAN("json") }, "auth providers");
+		if (flags.help) {
+			return { kind: "help", topic: "auth" };
+		}
+		if (flags.positionals.length > 0) {
+			throw new UsageError(
+				`auth providers: unexpected argument ${shown(flags.positionals[0] as string)}`,
+			);
+		}
+		return {
+			kind: "auth-providers",
+			json: flags.values.get("json") === true,
+		};
+	}
 	throw new UsageError(
-		`auth: unknown command ${shown(sub)}; use login, logout or status`,
+		`auth: unknown command ${shown(sub)}; use login, logout, status or providers`,
+	);
+}
+
+function parseModels(argv: readonly string[]): Command {
+	const flags = readFlags(
+		argv,
+		{
+			search: STRING("search"),
+			all: BOOLEAN("all"),
+			extension: LIST("extension"),
+			json: BOOLEAN("json"),
+		},
+		"models",
+	);
+	if (flags.help) {
+		return { kind: "help", topic: "models" };
+	}
+	if (flags.positionals.length > 1) {
+		throw new UsageError(
+			`models takes at most one provider id; unexpected argument ${shown(flags.positionals[1] as string)}`,
+		);
+	}
+	const provider = flags.positionals[0];
+	const search = flags.values.get("search");
+	const extensions = flags.values.get("extension");
+	return {
+		kind: "models",
+		...(provider === undefined ? {} : { provider }),
+		...(typeof search === "string" ? { search } : {}),
+		all: flags.values.get("all") === true,
+		extensions: Array.isArray(extensions) ? extensions : [],
+		json: flags.values.get("json") === true,
+	};
+}
+
+function parseExtension(argv: readonly string[]): Command {
+	const [sub, ...rest] = argv;
+	if (sub === undefined || sub === "--help" || sub === "-h" || sub === "help") {
+		return { kind: "help", topic: "extension" };
+	}
+	if (sub === "list") {
+		const flags = readFlags(rest, { json: BOOLEAN("json") }, "extension list");
+		if (flags.help) {
+			return { kind: "help", topic: "extension" };
+		}
+		if (flags.positionals.length > 0) {
+			throw new UsageError(
+				`extension list: unexpected argument ${shown(flags.positionals[0] as string)}`,
+			);
+		}
+		return { kind: "extension-list", json: flags.values.get("json") === true };
+	}
+	if (sub === "install" || sub === "remove") {
+		const command = `extension ${sub}`;
+		const flags = readFlags(rest, {}, command);
+		if (flags.help) {
+			return { kind: "help", topic: "extension" };
+		}
+		if (flags.positionals.length !== 1) {
+			throw new UsageError(
+				`${command} takes one source, for example: review-panel ${command} git:github.com/earendil-works/pi-claude-code`,
+			);
+		}
+		const source = flags.positionals[0] as string;
+		return sub === "install"
+			? { kind: "extension-install", source }
+			: { kind: "extension-remove", source };
+	}
+	throw new UsageError(
+		`extension: unknown command ${shown(sub)}; use install, list or remove`,
 	);
 }
 
@@ -455,6 +552,12 @@ export function parseCommand(argv: readonly string[]): Command {
 	if (first === "skill") {
 		return parseSkill(rest);
 	}
+	if (first === "models") {
+		return parseModels(rest);
+	}
+	if (first === "extension") {
+		return parseExtension(rest);
+	}
 	throw new UsageError(`unknown command ${shown(first)}`);
 }
 
@@ -482,6 +585,18 @@ Logins (stored in the agent folder in use; see diagnose):
                                Save an API key, read from stdin or a hidden prompt (never from the command line)
   auth logout <provider>       Remove the stored credential
   auth status                  Show login status for each provider in the owner config's roster
+  auth providers [--json]      List every provider, how it logs in (account, API key) and whether it is logged in
+
+Models and extensions (for the roster rows in the owner config):
+  models [<provider>] [--search <text>] [--all] [--extension <path>] [--json]
+                               List the models the logins give (one provider: all its models; --all: every
+                               model), with the exact provider and model ids and a ready-to-copy roster row.
+                               Installed extensions and each --extension file load on their own, as a seat's do
+  extension install <source>   Install a Pi extension package (git:host/owner/repo, npm:name or a local
+                               folder) into the agent folder with the Pi SDK's package manager, and print the
+                               entry paths for a roster row's extraExtensionPaths. In ~/.pi/agent, Pi loads it too
+  extension list [--json]      List the installed packages and their entry paths
+  extension remove <source>    Remove an installed package (the source as extension list prints it)
 
 The skill (links skills/review-panel into each coding agent's skills folder):
   skill install [--agent claude,codex,grok,pi] [--dry-run] [--force]

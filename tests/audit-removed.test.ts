@@ -23,6 +23,7 @@ import {
 } from "../src/actions/call.js";
 import type { AuthSdk } from "../src/cli/auth.js";
 import { EXIT_USAGE, type RunDeps, type RunIo, run } from "../src/cli/run.js";
+import type { SetupSdk } from "../src/cli/setup.js";
 import { loadResumable } from "../src/run/resume.js";
 import {
 	signPlan,
@@ -179,6 +180,7 @@ function cli() {
 		sdkVersion: async () => "1.5.2",
 		actions,
 		authSdk: {} as AuthSdk,
+		setupSdk: {} as SetupSdk,
 		skillSource: {
 			dir: "/nonexistent-skill",
 			version: "9.9.9",

@@ -16,7 +16,7 @@ frozen one-line pointer and says so in-file.
 
 **pi-review-panel** runs multi-model code review as one command, `review-panel`, published from the
 npm package `pi-review-panel` (`diagnose` / `suggest` / `review` / `verify` / `resume` /
-`comment`, plus `call '<json>'`, `auth` and `skill`). The package ships one agent-neutral skill,
+`comment`, plus `call '<json>'`, `auth`, `models`, `extension` and `skill`). The package ships one agent-neutral skill,
 `skills/review-panel`, which every coding agent (Claude Code, Codex, Grok, Pi) uses to run the
 command; the skill never starts another agent session.
 

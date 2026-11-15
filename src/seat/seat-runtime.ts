@@ -90,7 +90,7 @@ export type SeatRuntime = {
 
 const REGISTRATION_ERROR = /^Extension "(.+)" error: ([\s\S]*)$/;
 
-function extensionFailures(services: SeatServices): ExtensionFailure[] {
+export function extensionFailures(services: SeatServices): ExtensionFailure[] {
 	const failures: ExtensionFailure[] = services.resourceLoader
 		.getExtensions()
 		.errors.map((entry) => ({ extension: entry.path, message: entry.error }));
@@ -109,15 +109,19 @@ function extensionFailures(services: SeatServices): ExtensionFailure[] {
 }
 
 /**
- * Creates a fresh runtime and loader, loads exactly `extensionPaths`, applies
- * every provider those extensions registered, and only then resolves the
- * model and auth. Each call is independent, so one row's extension can never
- * make another row's provider visible.
+ * A fresh runtime and loader with every ambient resource suppressed and
+ * exactly `extensionPaths` loaded, with every provider they registered
+ * applied. A seat, readiness and `review-panel models` all load extensions
+ * through this one call.
  */
-export async function resolveSeatRuntime(
-	input: SeatRuntimeInput,
-): Promise<SeatRuntime> {
-	const services = await input.sdk.createAgentSessionServices({
+export function createIsolatedServices(input: {
+	sdk: SeatServicesSdk;
+	cwd: string;
+	agentDir: string;
+	extensionPaths: readonly string[];
+	loaderOptions?: Record<string, unknown>;
+}): Promise<SeatServices> {
+	return input.sdk.createAgentSessionServices({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
 		settingsManager: input.sdk.SettingsManager.inMemory({}),
@@ -127,6 +131,18 @@ export async function resolveSeatRuntime(
 			additionalExtensionPaths: [...input.extensionPaths],
 		},
 	});
+}
+
+/**
+ * Creates a fresh runtime and loader, loads exactly `extensionPaths`, applies
+ * every provider those extensions registered, and only then resolves the
+ * model and auth. Each call is independent, so one row's extension can never
+ * make another row's provider visible.
+ */
+export async function resolveSeatRuntime(
+	input: SeatRuntimeInput,
+): Promise<SeatRuntime> {
+	const services = await createIsolatedServices(input);
 	const runtime = services.modelRuntime;
 	const model = runtime.getModel(input.provider, input.model);
 	let authenticated = false;

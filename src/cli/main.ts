@@ -48,7 +48,7 @@ function findPackage(): { root: string; version: string } {
 const pkg = findPackage();
 
 const { realActions, run } = await import("./run.js");
-const { realAuthSdk, sdkVersion } = await import("./sdk.js");
+const { realAuthSdk, realSetupSdk, sdkVersion } = await import("./sdk.js");
 const { processTerminal, readAll } = await import("./terminal.js");
 
 const controller = new AbortController();
@@ -89,6 +89,7 @@ const code = await run(
 		sdkVersion,
 		actions: realActions,
 		authSdk: realAuthSdk,
+		setupSdk: realSetupSdk,
 		skillSource: {
 			dir: path.join(pkg.root, "skills", "review-panel"),
 			version: pkg.version,
