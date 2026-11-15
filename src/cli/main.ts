@@ -9,10 +9,16 @@ import path from "node:path";
 
 import { applyAgentDir } from "./agent-dir.js";
 
+// The environment as launched: `skill install` finds Pi's own folder from the
+// user's PI_CODING_AGENT_DIR, not from the folder pinned below for the SDK.
+const launchEnv = { ...process.env };
 const agentDir = applyAgentDir({ env: process.env, home: homedir() });
 
-/** The nearest `review-panel` package.json, in the source tree or in dist. */
-function cliVersion(): string {
+/**
+ * The nearest `pi-review-panel` package.json above this module, in the source
+ * tree or in an installed package's dist/: the package root and its version.
+ */
+function findPackage(): { root: string; version: string } {
 	let dir = import.meta.dirname;
 	for (;;) {
 		try {
@@ -20,21 +26,26 @@ function cliVersion(): string {
 				readFileSync(path.join(dir, "package.json"), "utf8"),
 			) as { name?: unknown; version?: unknown };
 			if (
-				manifest.name === "review-panel" &&
+				manifest.name === "pi-review-panel" &&
 				typeof manifest.version === "string"
 			) {
-				return manifest.version;
+				return { root: dir, version: manifest.version };
 			}
 		} catch {
 			// Not here; keep walking up.
 		}
 		const parent = path.dirname(dir);
 		if (parent === dir) {
-			return "unknown";
+			return {
+				root: path.resolve(import.meta.dirname, "..", ".."),
+				version: "unknown",
+			};
 		}
 		dir = parent;
 	}
 }
+
+const pkg = findPackage();
 
 const { realActions, run } = await import("./run.js");
 const { realAuthSdk, sdkVersion } = await import("./sdk.js");
@@ -59,7 +70,7 @@ const code = await run(
 	process.argv.slice(2),
 	{
 		cwd: process.cwd(),
-		env: process.env,
+		env: launchEnv,
 		home: homedir(),
 		stdout: (text) => {
 			process.stdout.write(text);
@@ -74,10 +85,15 @@ const code = await run(
 	},
 	{
 		agentDir,
-		cliVersion: cliVersion(),
+		cliVersion: pkg.version,
 		sdkVersion,
 		actions: realActions,
 		authSdk: realAuthSdk,
+		skillSource: {
+			dir: path.join(pkg.root, "skills", "review-panel"),
+			version: pkg.version,
+			platform: process.platform,
+		},
 	},
 );
 process.off("SIGINT", onInterrupt);

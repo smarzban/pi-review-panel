@@ -83,7 +83,7 @@ export function loadRecordKey(
 	if (!present) {
 		if (!options.create) {
 			throw new RecordKeyError(
-				`there is no record key at ${keyPath}; the first review or audit run creates it, so no record here was signed by this owner's review_panel`,
+				`there is no record key at ${keyPath}; the first review or audit run creates it, so no record here was signed by this owner's review-panel`,
 				"Start a new review or audit instead; it creates the key.",
 			);
 		}

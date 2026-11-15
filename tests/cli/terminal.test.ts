@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
-import { processTerminal, readAll } from "../src/terminal.js";
+import { processTerminal, readAll } from "../../src/cli/terminal.js";
 
 function fakeTty() {
 	const input = Object.assign(new PassThrough(), {

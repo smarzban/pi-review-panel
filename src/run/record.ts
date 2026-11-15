@@ -614,7 +614,7 @@ export function acquireRunLock(recordPath: string): () => void {
 		!createExclusive(takeoverPath, `${JSON.stringify({ pid: process.pid })}\n`)
 	) {
 		throw new Error(
-			`run "${runId}" lock is being taken over by another process; if no review_panel run is active, delete ${takeoverPath} and try again`,
+			`run "${runId}" lock is being taken over by another process; if no review-panel run is active, delete ${takeoverPath} and try again`,
 		);
 	}
 	try {
@@ -724,7 +724,7 @@ function heldRunLock(recordPath: string): number | undefined {
 
 /** Why a run lock that names no pid is refused, and how to clear it. */
 export function unfinishedLockMessage(recordPath: string): string {
-	return `run "${path.basename(recordPath)}" lock ${path.join(recordPath, RUN_LOCK_FILE)} is being written by another process, or was left unfinished by one that crashed; if no review_panel run is active, delete it and try again`;
+	return `run "${path.basename(recordPath)}" lock ${path.join(recordPath, RUN_LOCK_FILE)} is being written by another process, or was left unfinished by one that crashed; if no review-panel run is active, delete it and try again`;
 }
 
 /**
@@ -902,7 +902,7 @@ export function sanitizeBaseRef(baseRef: string): string {
  * `origin/main` vs `origin-main`). 16 hex characters (64 bits) make a collision
  * not a practical concern; the residual case is safe because reserve()'s
  * fail-closed path refuses and touches nothing (AC-3). Uses `node:crypto`
- * (a node builtin) so zero runtime dependencies still holds.
+ * (a node builtin), so it adds no runtime dependency.
  */
 export function digestBaseRef(baseRef: string): string {
 	return createHash("sha256")

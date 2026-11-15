@@ -475,7 +475,7 @@ function unrecoverable(
 
 /**
  * Reads the plan and checks its MAC over the exact bytes, before anything is
- * parsed: a plan this owner's review_panel did not sign is refused whatever
+ * parsed: a plan this owner's review-panel did not sign is refused whatever
  * it says.
  */
 function readPlan(
@@ -500,7 +500,7 @@ function readPlan(
 	}
 	if (!macMatches(mac, readRegularFile(macPath))) {
 		refuse(
-			`run "${runId}" has no valid signature from this owner's record key, so this owner's review_panel did not write it, or wrote it for another run. Start a new run instead.`,
+			`run "${runId}" has no valid signature from this owner's record key, so this owner's review-panel did not write it, or wrote it for another run. Start a new run instead.`,
 		);
 	}
 	let parsed: unknown;

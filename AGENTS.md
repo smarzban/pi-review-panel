@@ -14,11 +14,14 @@ frozen one-line pointer and says so in-file.
 
 ## Project overview
 
-**pi-review-panel** runs multi-model code review as a pi package. The public tool is `review_panel`
-(`diagnose` / `suggest` / `review` / `audit` / `verify` / `resume` / `comment`). The shipped Pi skill is `review-panel-pi`. A run
-fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned lens — over
-one pinned snapshot, as isolated in-process Pi SDK sessions that have only their read-only role
-tools and can report findings only through their submit tool (`submit_findings` for reviewers).
+**pi-review-panel** runs multi-model code review as one command, `review-panel`, published from the
+npm package `pi-review-panel` (`diagnose` / `suggest` / `review` / `audit` / `verify` / `resume` /
+`comment`, plus `call '<json>'`, `auth` and `skill`). The package ships one agent-neutral skill,
+`skills/review-panel`, which every coding agent (Claude Code, Codex, Grok, Pi) uses to run the
+command. A run fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned
+lens — over one pinned snapshot, as isolated Pi SDK sessions inside the `review-panel` process that
+have only their read-only role tools and can report findings only through their submit tool
+(`submit_findings` for reviewers).
 Seat identity is owner authority: an outside-repository roster config
 (`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
 rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
@@ -49,9 +52,18 @@ seat attribution, stated severity and evidence, and shows the highest severity a
 size is never shown as agreement or used to rank. A failed or invalid grouping leaves the ungrouped
 list and is named as lost grouping.
 
-Install as a Pi package with `pi install npm:pi-review-panel` (not `npm install`). Omit
-`repository`, or pass `/`, when this process is already in the repo; an explicit real
-path still wins. `audit` is a periodic whole-repository advisory sweep against one pinned `HEAD`
+Install with `npm install -g pi-review-panel` (puts `review-panel` on PATH), then
+`review-panel skill install`, which symlinks the package's `skills/review-panel` into each agent's
+skills folder (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`, `$GROK_HOME` or
+`~/.grok`, `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, each `/skills`). An agent counts only when its
+home folder exists; `--agent` names agents and creates their skills folder; a `review-panel` entry
+that is not this package's link is replaced only with `--force`, which requires `--agent`; Windows gets a copy with a version
+stamp; `skill uninstall` removes only this package's link or copy; an old `pi-review` skill gets a
+hint, never a delete. Pi's folder comes from the environment as launched, because `main.ts` pins
+`PI_CODING_AGENT_DIR` for the SDK before any command runs. The `pi` manifest lists only `skills`,
+so `pi install` still loads the skill, but the npm install is the supported path. A `call` object
+may omit `repository`, or pass `/`, to use the current folder's Git top-level; `--repo` or an
+explicit real path wins. `audit` is a periodic whole-repository advisory sweep against one pinned `HEAD`
 snapshot (no base/head range). Default passes are code-health, over-engineering, tests, and security
 across the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
 GitHub comment. Review and verify post each round to the one open PR whose head is the
@@ -59,15 +71,14 @@ run's head, by default, as a new comment (`## Review panel · review`, `## Revie
 a verify where every verify seat voted, each marked every kept id resolved, and none reported a
 regression also posts the close-out card on its own (`## Review panel · close-out`, once per
 review). The card is presentation, not a verdict: the agents judge and the owner merges.
-`prComment: false` (CLI `--no-pr-comment`) turns posting off for a run, and owner config
-`defaults.prComment: "ownerApproved"` makes every post need `ownerApproved: true`. A post that
+`--no-pr-comment` (`prComment: false` in a `call` object) turns posting off for a run, and owner config
+`defaults.prComment: "ownerApproved"` makes every post need `--owner-approved`. A post that
 cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card after the owner says yes
-(`ownerApproved: true`), found later by author plus heading `## Review panel`. No Fixed
+(`--owner-approved`), found later by author plus heading `## Review panel`. No Fixed
 list, no “ready to merge.” Remaining high/medium ids count as fixed only when a verify
-run whose `priorRunId` is this review marks them resolved. Host agents (Grok,
-Codex, Claude Code) use `host-skills/review-panel`, which runs the standalone `review-panel` CLI
-(`cli/`) directly and never starts Pi.
+run whose `priorRunId` is this review marks them resolved. Every agent's skill runs the
+`review-panel` command directly; it never starts another agent session.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
@@ -151,11 +162,14 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
   whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a
   container sharing this hostname), which can post a second card.
-- Tests never reach GitHub: a failing fake `gh` stands first on PATH in both vitest configs.
-- `0.3.0` is on npm. Bump `package.json` before the next `npm publish`; that version cannot be overwritten.
+- Tests never reach GitHub: a failing fake `gh` stands first on PATH in the vitest config.
+- `0.3.0` is on npm (the old Pi tool). Bump `package.json` before the next `npm publish`; that
+  version cannot be overwritten. The next release is breaking: Pi users run
+  `pi remove npm:pi-review-panel`, then `npm install -g pi-review-panel` and
+  `review-panel skill install`.
 - Release: bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
-  `publish.yml` checks the tag matches the version, publishes to npm, and creates the GitHub release
-  from that CHANGELOG section.
+  `publish.yml` checks the tag matches the version, publishes to npm (`prepack` builds `dist/`),
+  and creates the GitHub release from that CHANGELOG section.
 - Fixed operational bounds may halt work, but they never make a quality claim.
 
 ## Build / test / verify
@@ -165,6 +179,11 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Lint/format: `npm run check` (biome check .)
 - Canonical verify: `npm run typecheck && npm test && npm run check`
 - Before merging, verify from a clean install: `npm ci && npm run typecheck && npm test && npm run check`.
+- `npm test` rebuilds `dist/` first (a Vitest global setup), because some tests run the built bin and
+  the packed tarball.
+- Build: `npm run build` (`scripts/build.mjs`) compiles `src/` into `dist/src/` without bundling and
+  copies `prompts/` to `dist/prompts/`. `npm pack --dry-run` must list `dist/`, `skills/review-panel`
+  and the docs, and no `src/`, `tests/` or other internal file.
 - Whenever `package.json` changes, refresh the lock (`npm install --package-lock-only`) and commit it in the same change.
 - Read CI before merging. `gh run list --limit 3`. Reviewers are read-only and structurally cannot run the suite.
 
@@ -173,11 +192,15 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Conventional Commits with a task or area scope: `feat(review): …`, `docs(config): …`.
 - Feature branches (`feat/<feature>`). Never commit product code straight to `main`.
 - Test-first, always. A failing test precedes the code that satisfies it.
-- Zero runtime dependencies. The pi harness and any bundled core it imports (currently `typebox`)
-  are peer dependencies; everything else is node builtins.
-- No build step, no committed `dist/`. Pi loads the extension TypeScript directly.
+- One runtime dependency: the Pi SDK (`@earendil-works/pi-coding-agent`), pinned to an exact version,
+  which runs the seats. Everything else is node builtins. No peer dependencies.
+- `dist/` is built at pack time (`prepack`) and never committed. The bin is
+  `dist/src/cli/main.js`; Node does not strip types under `node_modules`, so the package cannot ship
+  TypeScript to run.
+- The core (`src/actions`, `src/run`, `src/seat`, `src/config`, `src/tool`) never imports the Pi SDK
+  statically; only `src/cli` and a dynamic `import()` load it.
 
-### Pi behaviors this repo depends on (verified against the shipped 1.5.2 build)
+### Pi behaviors this repo depends on (verified against the bundled 1.5.2 SDK)
 
 - A system-prompt value that exists as a file is READ as that file, both from the CLI flag and
   from the SDK loader's `systemPrompt` option. Seats pass literal role text through that option
@@ -198,6 +221,8 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Model patterns resolve across providers. Always pin the exact provider id plus an exact model
   id (`--provider` and `--model` on the CLI; seats resolve both by exact id through the runtime).
 - The tarball ships through a narrow `files` allowlist. Internal artifacts never enter it.
-- Pi bundles some packages for extensions; those go in `peerDependencies` with `"*"`.
+- A `pi` manifest that lists only `skills` is a complete resource manifest: Pi loads those skills
+  and no extension (`dist/core/package-manager.js`, `hasManifestResourceFields` and
+  `addManifestEntries`).
 - A distributed package installs production-only, so `devDependencies` are absent at runtime.
-  Anything imported by shipped source belongs in `dependencies` or `peerDependencies`.
+  Anything imported by shipped code belongs in `dependencies`.

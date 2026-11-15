@@ -1,9 +1,11 @@
 /**
- * Turns argv into one command. Action flags map one-to-one onto the
- * `review_panel` tool's arguments (kebab-case here, camelCase there) and are
- * handed to the same `parse*Arguments` validation the tool uses. There are no
+ * Turns argv into one command. Action flags map one-to-one onto the actions'
+ * argument names (kebab-case here, camelCase in a `call` object) and are
+ * handed to the same `parse*Arguments` validation a `call` object gets. There are no
  * `--provider` or `--model` flags: seats come only from the owner config.
  */
+
+import { AGENT_IDS, type AgentId, isAgentId } from "./skill.js";
 
 export class UsageError extends Error {}
 
@@ -26,7 +28,7 @@ const NOT_SHOWN = "(not shown, in case it is a key)";
 
 /**
  * Removes from an error message every argument name that is not shaped like
- * one of the tool's (camelCase letters, no digits, no long runs), in case it
+ * one of the actions' (camelCase letters, no digits, no long runs), in case it
  * is a key passed in a `call` object by mistake.
  */
 export function withoutKeyLikeNames(
@@ -82,7 +84,14 @@ export type Command =
 	| { kind: "call"; json: boolean; repo?: string; payload: string }
 	| { kind: "auth-login"; provider: string; apiKey: boolean }
 	| { kind: "auth-logout"; provider: string }
-	| { kind: "auth-status"; repo?: string; json: boolean };
+	| { kind: "auth-status"; repo?: string; json: boolean }
+	| {
+			kind: "skill-install";
+			agents?: AgentId[];
+			dryRun: boolean;
+			force: boolean;
+	  }
+	| { kind: "skill-uninstall"; agents?: AgentId[]; dryRun: boolean };
 
 type FlagKind = "string" | "list" | "boolean";
 
@@ -109,7 +118,7 @@ const ROUND_FLAGS: Record<string, FlagSpec> = {
 	"owner-approved": BOOLEAN("ownerApproved"),
 };
 
-/** Each action's flags, named after the tool argument they set. */
+/** Each action's flags, named after the argument they set. */
 const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 	diagnose: {},
 	suggest: {
@@ -288,7 +297,7 @@ function parseCall(argv: readonly string[]): Command {
 	}
 	if (flags.positionals.length !== 1) {
 		throw new UsageError(
-			"call takes exactly one argument: the tool's JSON object, or - to read it from stdin",
+			"call takes exactly one argument: the JSON argument object, or - to read it from stdin",
 		);
 	}
 	const repo = flags.values.get("repo");
@@ -357,6 +366,69 @@ function parseAuth(argv: readonly string[]): Command {
 	);
 }
 
+function parseSkill(argv: readonly string[]): Command {
+	const [sub, ...rest] = argv;
+	if (sub === undefined || sub === "--help" || sub === "-h" || sub === "help") {
+		return { kind: "help", topic: "skill" };
+	}
+	if (sub !== "install" && sub !== "uninstall") {
+		throw new UsageError(
+			`skill: unknown command ${shown(sub)}; use install or uninstall`,
+		);
+	}
+	const command = `skill ${sub}`;
+	const flags = readFlags(
+		rest,
+		{
+			agent: LIST("agent"),
+			"dry-run": BOOLEAN("dryRun"),
+			...(sub === "install" ? { force: BOOLEAN("force") } : {}),
+		},
+		command,
+	);
+	if (flags.help) {
+		return { kind: "help", topic: "skill" };
+	}
+	if (flags.positionals.length > 0) {
+		throw new UsageError(
+			`${command}: unexpected argument ${shown(flags.positionals[0] as string)}`,
+		);
+	}
+	const listed = flags.values.get("agent");
+	let agents: AgentId[] | undefined;
+	if (Array.isArray(listed)) {
+		agents = [];
+		for (const name of splitList(listed)) {
+			if (!isAgentId(name)) {
+				throw new UsageError(
+					`${command}: unknown agent ${shown(name)}; use ${AGENT_IDS.slice(0, -1).join(", ")} or ${AGENT_IDS.at(-1)}`,
+				);
+			}
+			if (!agents.includes(name)) {
+				agents.push(name);
+			}
+		}
+		if (agents.length === 0) {
+			throw new UsageError(`${command}: --agent needs at least one agent`);
+		}
+	}
+	if (flags.values.get("force") === true && agents === undefined) {
+		throw new UsageError(
+			`${command}: --force needs --agent, so it replaces only the agents you name`,
+		);
+	}
+	const dryRun = flags.values.get("dry-run") === true;
+	const optional = agents === undefined ? {} : { agents };
+	return sub === "install"
+		? {
+				kind: "skill-install",
+				...optional,
+				dryRun,
+				force: flags.values.get("force") === true,
+			}
+		: { kind: "skill-uninstall", ...optional, dryRun };
+}
+
 export function parseCommand(argv: readonly string[]): Command {
 	const [first, ...rest] = argv;
 	if (
@@ -382,6 +454,9 @@ export function parseCommand(argv: readonly string[]): Command {
 	if (first === "auth") {
 		return parseAuth(rest);
 	}
+	if (first === "skill") {
+		return parseSkill(rest);
+	}
 	throw new UsageError(`unknown command ${shown(first)}`);
 }
 
@@ -389,7 +464,7 @@ export const HELP = `review-panel: run the multi-model review panel from a termi
 
 Usage: review-panel <command> [options]
 
-Actions (the same as the review_panel tool's):
+Actions:
   diagnose                     Check the owner config, every seat's model and login, and the record key
   suggest                      Suggest lenses for base...head, each with its reason; runs no seat: --base <ref> --head <ref>
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
@@ -402,7 +477,7 @@ Actions (the same as the review_panel tool's):
   comment                      Post or update the manual close-out PR card, after the owner said yes: --prior-run-id <run> --owner-approved
                                [--pr <n>] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4]
                                [--dismissed <json> | --dismissed @<file> | --dismissed -]
-  call '<json>'                Run the tool's own argument object, e.g. '{"action":"diagnose"}' (- reads it from stdin)
+  call '<json>'                Run one action from its argument object, e.g. '{"action":"diagnose"}' (- reads it from stdin)
 
 Logins (stored in the agent folder in use; see diagnose):
   auth login <provider>        Sign in with the provider's account (OAuth, including subscriptions)
@@ -410,6 +485,16 @@ Logins (stored in the agent folder in use; see diagnose):
                                Save an API key, read from stdin or a hidden prompt (never from the command line)
   auth logout <provider>       Remove the stored credential
   auth status                  Show login status for each provider in the owner config's roster
+
+The skill (links skills/review-panel into each coding agent's skills folder):
+  skill install [--agent claude,codex,grok,pi] [--dry-run] [--force]
+                               Link it into every agent whose home folder exists (~/.claude, ~/.codex, ~/.grok,
+                               ~/.pi/agent, or CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME, PI_CODING_AGENT_DIR);
+                               --agent also creates a missing agent's skills folder; --force (only with
+                               --agent) replaces a review-panel entry that is not this package's link in the
+                               agents named. Windows gets a stamped copy.
+  skill uninstall [--agent ...] [--dry-run]
+                               Remove only this package's own link or copy
 
 Options for actions, call and auth status:
   --repo <path>                The repository (default: the Git top-level of the current folder)

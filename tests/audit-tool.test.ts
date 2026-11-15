@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Config } from "../src/config/schema.js";
 import type { RunAuditInput, RunAuditResult } from "../src/run/run-audit.js";
-import { createReviewPanelTool } from "../src/tool/review-panel.js";
+import { createPanelCaller } from "./fixtures/panel-call.js";
 import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 function git(cwd: string, args: string[]): string {
@@ -41,12 +41,12 @@ const config: Config = {
 	defaults: { seats: ["terra", "claude", "glm"] },
 };
 
-describe("review_panel audit", () => {
+describe("the audit action", () => {
 	it("pins HEAD and presents submitted findings as an advisory backlog", async () => {
 		const repo = repository();
 		let seen: RunAuditInput | undefined;
 		let seenKey: Buffer | undefined;
-		const tool = createReviewPanelTool({
+		const tool = createPanelCaller({
 			env: {},
 			home: "/tmp/audit-tool-home",
 			diagnose: async () => ({ ready: true, rows: [] }),
@@ -80,7 +80,7 @@ describe("review_panel audit", () => {
 		});
 		try {
 			const response = await tool.execute(
-				"tool-call",
+				"call-1",
 				{ action: "audit", repository: repo, passes: ["security"] },
 				undefined,
 				undefined,

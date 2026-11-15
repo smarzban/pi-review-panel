@@ -5,12 +5,14 @@
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,17 +20,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const CLI_DIR = path.resolve(import.meta.dirname, "..");
-const REPO = realpathSync(path.resolve(CLI_DIR, ".."));
-const BIN = path.join(CLI_DIR, "dist", "cli", "src", "main.js");
+const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
+const BIN = path.join(REPO, "dist", "src", "cli", "main.js");
 const SIGINT_READY = path.join(
-	CLI_DIR,
+	REPO,
 	"tests",
+	"cli",
 	"fixtures",
 	"sigint-ready.mjs",
 );
 const CLI_VERSION = (
-	JSON.parse(readFileSync(path.join(CLI_DIR, "package.json"), "utf8")) as {
+	JSON.parse(readFileSync(path.join(REPO, "package.json"), "utf8")) as {
 		version: string;
 	}
 ).version;
@@ -42,7 +44,7 @@ const EXTENSION_FIXTURES = path.join(
 beforeAll(() => {
 	if (!existsSync(BIN)) {
 		throw new Error(
-			`${BIN} is missing: the global setup (tests/build-dist.ts) should have built it`,
+			`${BIN} is missing: the global setup (tests/cli/build-dist.ts) should have built it`,
 		);
 	}
 });
@@ -162,7 +164,7 @@ describe("the built bin", () => {
 		}
 	});
 
-	it("--version prints cli/package.json's version", () => {
+	it("--version prints the package.json version", () => {
 		const { code, stdout } = cli(tempHome(), ["--version"]);
 		expect(code).toBe(0);
 		expect(stdout).toBe(`${CLI_VERSION}\n`);
@@ -481,27 +483,122 @@ describe("a provider registered by an extension", () => {
 	});
 });
 
-describe("the packed tarball", () => {
-	it("is private, so npm refuses to publish it", () => {
-		const manifest = JSON.parse(
-			readFileSync(path.join(CLI_DIR, "package.json"), "utf8"),
-		) as { private?: unknown };
-		expect(manifest.private).toBe(true);
+describe("skill install from the built bin", () => {
+	it("finds Pi by its own folder, even when the CLI uses its own agent folder", () => {
+		const home = tempHome();
+		// Pi is installed but has no login, so the CLI itself uses
+		// ~/.pi-review-panel/agent; the skill still belongs in ~/.pi/agent.
+		mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+		const { code, stdout } = cli(home, ["skill", "install", "--dry-run"]);
+		expect(code).toBe(0);
+		expect(stdout).toContain(
+			`Pi: would link ${path.join(home, ".pi", "agent", "skills", "review-panel")}`,
+		);
+		expect(stdout).toContain(
+			`Claude Code: not found (${path.join(home, ".claude")} does not exist)`,
+		);
+		expect(readdirSync(home)).toEqual([".pi"]);
+		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
 	});
 
-	it("carries its own prompts, outside the repository", async () => {
+	it("installs and uninstalls through CODEX_HOME and PI_CODING_AGENT_DIR, never the default folders (P-2)", () => {
+		const home = tempHome();
+		const elsewhere = tempHome();
+		const codexHome = path.join(elsewhere, "codex");
+		const piHome = path.join(elsewhere, "pi-agent");
+		mkdirSync(codexHome);
+		mkdirSync(piHome);
+		// Decoys: the default folders exist too, and must not change.
+		mkdirSync(path.join(home, ".codex"));
+		mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+		const env = { CODEX_HOME: codexHome, PI_CODING_AGENT_DIR: piHome };
+		const links = [codexHome, piHome].map((dir) =>
+			path.join(dir, "skills", "review-panel"),
+		);
+
+		const installed = cli(home, ["skill", "install"], { env });
+		expect(installed.code).toBe(0);
+		for (const link of links) {
+			expect(realpathSync(link)).toBe(
+				path.join(REPO, "skills", "review-panel"),
+			);
+		}
+		expect(readdirSync(path.join(home, ".codex"))).toEqual([]);
+		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
+		const diagnose = cli(home, ["diagnose"], { env });
+		expect(diagnose.stdout).toContain(`- Codex: linked (${links[0]})`);
+		expect(diagnose.stdout).toContain(`- Pi: linked (${links[1]})`);
+
+		expect(cli(home, ["skill", "uninstall"], { env }).code).toBe(0);
+		for (const link of links) {
+			expect(existsSync(link)).toBe(false);
+		}
+		expect(readdirSync(path.join(home, ".codex"))).toEqual([]);
+		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
+	});
+
+	it("finds no agent in an empty home, exits 1 and creates nothing", () => {
+		const home = tempHome();
+		const { code, stdout } = cli(home, ["skill", "install", "--dry-run"]);
+		expect(code).toBe(1);
+		expect(stdout).toContain("No coding agent found");
+		expect(readdirSync(home)).toEqual([]);
+	});
+
+	it("links the package's own skill folder, and uninstall removes the link", () => {
+		const home = tempHome();
+		mkdirSync(path.join(home, ".claude"));
+		expect(cli(home, ["skill", "install"]).code).toBe(0);
+		const link = path.join(home, ".claude", "skills", "review-panel");
+		expect(realpathSync(link)).toBe(path.join(REPO, "skills", "review-panel"));
+		const diagnose = cli(home, ["diagnose"]);
+		expect(diagnose.stdout).toContain(`- Claude Code: linked (${link})`);
+		expect(cli(home, ["skill", "uninstall"]).code).toBe(0);
+		expect(existsSync(link)).toBe(false);
+		expect(
+			existsSync(path.join(REPO, "skills", "review-panel", "SKILL.md")),
+		).toBe(true);
+	});
+});
+
+describe("the packed tarball", () => {
+	it("is the public pi-review-panel package with the review-panel bin", () => {
+		const manifest = JSON.parse(
+			readFileSync(path.join(REPO, "package.json"), "utf8"),
+		) as {
+			name?: unknown;
+			private?: unknown;
+			bin?: Record<string, string>;
+			dependencies?: Record<string, string>;
+			peerDependencies?: unknown;
+			pi?: Record<string, unknown>;
+		};
+		expect(manifest.name).toBe("pi-review-panel");
+		expect(manifest.private).toBeUndefined();
+		expect(manifest.bin).toEqual({ "review-panel": "dist/src/cli/main.js" });
+		// The SDK runs the seats, so it is a real, exactly pinned dependency.
+		expect(manifest.dependencies?.["@earendil-works/pi-coding-agent"]).toMatch(
+			/^\d+\.\d+\.\d+$/,
+		);
+		expect(manifest.peerDependencies).toBeUndefined();
+		// Pi still loads the skill from the package, and no extension.
+		expect(manifest.pi).toEqual({ skills: ["./skills"] });
+	});
+
+	it("carries the built CLI, its prompts and the skill, and runs outside the repository", async () => {
 		const out = tempHome();
 		execFileSync(
 			"npm",
 			["pack", "--ignore-scripts", "--pack-destination", out],
-			{ cwd: CLI_DIR, stdio: "ignore" },
+			{ cwd: REPO, stdio: "ignore" },
 		);
 		const tarball = readdirSync(out).find((name) => name.endsWith(".tgz"));
 		expect(tarball).toBeDefined();
 		execFileSync("tar", ["-xzf", path.join(out, tarball as string)], {
 			cwd: out,
 		});
-		const dist = path.join(out, "package", "dist");
+		const root = path.join(out, "package");
+		const dist = path.join(root, "dist");
 		const lenses = await import(
 			pathToFileURL(path.join(dist, "src", "config", "lenses.js")).href
 		);
@@ -514,5 +611,111 @@ describe("the packed tarball", () => {
 		expect(existsSync(path.join(dist, "src", "tool", "review-panel.js"))).toBe(
 			false,
 		);
+		// No TypeScript source, tests or internal files ship.
+		expect(existsSync(path.join(root, "src"))).toBe(false);
+		expect(existsSync(path.join(root, "tests"))).toBe(false);
+		expect(existsSync(path.join(root, "scripts"))).toBe(false);
+		// The unpacked bin finds the package's own version.
+		const version = spawnSync(
+			process.execPath,
+			[path.join(dist, "src", "cli", "main.js"), "--version"],
+			{
+				cwd: out,
+				encoding: "utf8",
+				env: { PATH: process.env.PATH ?? "", HOME: out },
+			},
+		);
+		expect(version.status).toBe(0);
+		expect(version.stdout).toBe(`${CLI_VERSION}\n`);
+	});
+});
+
+describe("the pack lifecycle (P-3)", () => {
+	it("npm pack on a clean copy without dist/ builds it, and the unpacked package runs the SDK and installs the skill", () => {
+		// A clean copy: the package's sources, no dist/. node_modules is the
+		// checkout's, for the build tool only.
+		const copy = tempHome();
+		for (const entry of [
+			"package.json",
+			"package-lock.json",
+			"LICENSE",
+			"README.md",
+			"scripts",
+			"src",
+			"prompts",
+			"skills",
+			"docs",
+		]) {
+			cpSync(path.join(REPO, entry), path.join(copy, entry), {
+				recursive: true,
+			});
+		}
+		symlinkSync(
+			path.join(REPO, "node_modules"),
+			path.join(copy, "node_modules"),
+		);
+		expect(existsSync(path.join(copy, "dist"))).toBe(false);
+
+		const out = tempHome();
+		execFileSync("npm", ["pack", "--pack-destination", out], {
+			cwd: copy,
+			stdio: "ignore",
+		});
+		expect(existsSync(path.join(copy, "dist", "src", "cli", "main.js"))).toBe(
+			true,
+		);
+		const tarball = readdirSync(out).find((name) => name.endsWith(".tgz"));
+		execFileSync("tar", ["-xzf", path.join(out, tarball as string)], {
+			cwd: out,
+		});
+		const unpacked = path.join(out, "package");
+		const bin = path.join(unpacked, "dist", "src", "cli", "main.js");
+		expect(existsSync(bin)).toBe(true);
+		// The runtime dependencies, as an install would place them.
+		symlinkSync(
+			path.join(REPO, "node_modules"),
+			path.join(unpacked, "node_modules"),
+		);
+
+		const home = tempHome();
+		mkdirSync(path.join(home, ".claude"));
+		const config = path.join(tempHome(), "config.json");
+		writeFileSync(
+			config,
+			JSON.stringify({
+				roster: [
+					{ id: "opus", provider: "anthropic", model: "claude-opus-4-5" },
+				],
+				defaults: { seats: ["opus"] },
+			}),
+		);
+		const repo = tempRepo();
+		const run = (args: string[]) =>
+			spawnSync(process.execPath, [bin, ...args], {
+				cwd: repo,
+				encoding: "utf8",
+				env: {
+					PATH: process.env.PATH ?? "",
+					HOME: home,
+					PI_REVIEW_PANEL_CONFIG: config,
+				},
+				timeout: 60_000,
+			});
+
+		// An SDK-backed, offline command: the version comes from the SDK, and
+		// the readiness check resolves the roster's model through it.
+		const diagnose = run(["diagnose"]);
+		expect(diagnose.status).toBe(0);
+		expect(diagnose.stdout).toMatch(/^review-panel \S+ \(Pi SDK 1\.5\.2\)$/m);
+		expect(diagnose.stdout).toContain("# Review panel readiness");
+		expect(diagnose.stdout).toContain(
+			'authentication anthropic: Authenticate the Pi provider "anthropic"',
+		);
+
+		const install = run(["skill", "install"]);
+		expect(install.status).toBe(0);
+		expect(
+			realpathSync(path.join(home, ".claude", "skills", "review-panel")),
+		).toBe(realpathSync(path.join(unpacked, "skills", "review-panel")));
 	});
 });

@@ -1293,7 +1293,7 @@ describe("resume trusts only records signed with the owner's record key", () => 
 				/^Resume refused: run ".*" was interrupted before its plan was signed, so it cannot be resumed\. Start a new run instead\.$/,
 			);
 			expect(message).not.toMatch(
-				/signature|this owner's review_panel did not/,
+				/signature|this owner's review-panel did not/,
 			);
 			// A plan.mac that is there but is not a regular file is not a crash
 			// the package can leave; it is refused as unsigned.

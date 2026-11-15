@@ -1,9 +1,13 @@
 import { execFileSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
+	readlinkSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +15,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ActionContext } from "../../src/actions/actions.js";
 import * as actionsModule from "../../src/actions/actions.js";
-import type { AuthSdk, AuthTerminal } from "../src/auth.js";
+import { REPOSITORY_EXAMPLE } from "../../src/actions/repository.js";
+import type { AuthSdk, AuthTerminal } from "../../src/cli/auth.js";
 import {
 	type ActionFunctions,
 	EXIT_FAILED,
@@ -21,9 +26,11 @@ import {
 	type RunIo,
 	realActions,
 	run,
-} from "../src/run.js";
+} from "../../src/cli/run.js";
 
 const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
+/** The repository's own skill, as an installed package holds it. */
+const SKILL_SOURCE = path.join(REPO, "skills", "review-panel");
 
 type Call = { input: Record<string, unknown>; context: ActionContext };
 
@@ -34,6 +41,7 @@ function harness(
 		result?: string;
 		throws?: Error;
 		cwd?: string;
+		home?: string;
 		/** Replaces the default fake for one action. */
 		action?: Partial<ActionFunctions>;
 		deps?: Partial<RunDeps>;
@@ -84,7 +92,7 @@ function harness(
 	const io: RunIo = {
 		cwd: options.cwd ?? REPO,
 		env: {},
-		home: "/nonexistent-home",
+		home: options.home ?? "/nonexistent-home",
 		stdout: (text) => {
 			stdout += text;
 		},
@@ -108,6 +116,7 @@ function harness(
 		sdkVersion: async () => "1.5.2",
 		actions,
 		authSdk: {} as AuthSdk,
+		skillSource: { dir: SKILL_SOURCE, version: "9.9.9", platform: "darwin" },
 		...options.deps,
 	};
 	return {
@@ -121,7 +130,7 @@ function harness(
 	};
 }
 
-describe("action commands map flags onto the tool's arguments", () => {
+describe("action commands map flags onto the actions' arguments", () => {
 	it("review: --base, --head, --seats, --lenses, --scoping-note", async () => {
 		const h = harness();
 		const code = await h.run([
@@ -279,7 +288,7 @@ describe("action commands map flags onto the tool's arguments", () => {
 		});
 	});
 
-	it('call coerces prComment "false" like the tool', async () => {
+	it('call coerces prComment "false" like ownerApproved', async () => {
 		const h = harness();
 		await h.run([
 			"call",
@@ -304,8 +313,8 @@ describe("action commands map flags onto the tool's arguments", () => {
 	});
 
 	it("--repo resolves relative to the working folder and to its Git top-level", async () => {
-		const h = harness({ cwd: path.join(REPO, "cli") });
-		await h.run(["diagnose", "--repo", "src"]);
+		const h = harness({ cwd: path.join(REPO, "src") });
+		await h.run(["diagnose", "--repo", "cli"]);
 		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
 	});
 
@@ -318,7 +327,7 @@ describe("action commands map flags onto the tool's arguments", () => {
 	});
 });
 
-describe("call takes the tool's own object", () => {
+describe("call takes one argument object", () => {
 	it("runs the same action with the same validation", async () => {
 		const h = harness();
 		const code = await h.run([
@@ -349,7 +358,50 @@ describe("call takes the tool's own object", () => {
 		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
 	});
 
-	it('coerces like the tool: a string list, JSON-text dismissed, ownerApproved "true"', async () => {
+	it("uses the working folder's Git top-level when repository is omitted or a placeholder (P-4)", async () => {
+		for (const repository of [undefined, "/", REPOSITORY_EXAMPLE]) {
+			const h = harness({ cwd: path.join(REPO, "src", "cli") });
+			const object =
+				repository === undefined
+					? { action: "diagnose" }
+					: { action: "diagnose", repository };
+			expect(await h.run(["call", JSON.stringify(object)])).toBe(EXIT_OK);
+			expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
+		}
+	});
+
+	it("an explicit repository wins over the working folder (P-4)", async () => {
+		const other = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-other-")));
+		execFileSync("git", ["init", "-q"], { cwd: other });
+		const h = harness({ cwd: other });
+		await h.run([
+			"call",
+			JSON.stringify({ action: "diagnose", repository: REPO }),
+		]);
+		expect(h.calls.diagnose?.[0]?.input).toEqual({ repoDir: REPO });
+	});
+
+	it("refuses a placeholder when the working folder is not a Git repository (P-4)", async () => {
+		const loose = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-loose-")));
+		for (const repository of ["/", REPOSITORY_EXAMPLE]) {
+			const h = harness({ cwd: loose });
+			expect(
+				await h.run([
+					"call",
+					JSON.stringify({
+						action: "suggest",
+						base: "a",
+						head: "b",
+						repository,
+					}),
+				]),
+			).toBe(EXIT_FAILED);
+			expect(h.err()).toMatch(/not a Git repository/i);
+			expect(h.calls.suggest).toBeUndefined();
+		}
+	});
+
+	it('coerces leniently: a string list, JSON-text dismissed, ownerApproved "true"', async () => {
 		const h = harness();
 		expect(
 			await h.run([
@@ -433,7 +485,7 @@ describe("exit codes never encode review content", () => {
 		expect(h.calls.diagnose).toBeUndefined();
 	});
 
-	it("exits 2 for a usage error, including the tool's own argument validation", async () => {
+	it("exits 2 for a usage error, including each action's own argument validation", async () => {
 		const h = harness();
 		expect(await h.run(["nonsense"])).toBe(EXIT_USAGE);
 		expect(await h.run(["review", "--model", "x"])).toBe(EXIT_USAGE);
@@ -531,6 +583,35 @@ describe("output", () => {
 		expect(h.out()).toContain("diagnose report");
 	});
 
+	it("diagnose outside a Git repository still prints the version, agent folder and skill rows, then fails (R-3)", async () => {
+		const home = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-diag-")));
+		const loose = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-loose-")));
+		mkdirSync(path.join(home, ".claude"));
+		const h = harness({ home, cwd: loose });
+		expect(await h.run(["diagnose"])).toBe(EXIT_FAILED);
+		expect(h.out()).toContain("review-panel 9.9.9 (Pi SDK 1.5.2)");
+		expect(h.out()).toContain("Agent folder: /agent");
+		expect(h.out()).toContain(
+			"- Claude Code: not installed; run review-panel skill install",
+		);
+		expect(h.err()).toMatch(/not a Git repository/i);
+		expect(h.calls.diagnose).toBeUndefined();
+	});
+
+	it("diagnose lists the skill's state in each coding agent", async () => {
+		const home = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-diag-")));
+		mkdirSync(path.join(home, ".codex"));
+		const h = harness({ home });
+		expect(await h.run(["diagnose"])).toBe(EXIT_OK);
+		expect(h.out()).toContain(
+			[
+				"Skill (review-panel skill install links it into each agent):",
+				`- Claude Code: not found (${path.join(home, ".claude")} does not exist)`,
+				"- Codex: not installed; run review-panel skill install",
+			].join("\n"),
+		);
+	});
+
 	it("--help lists every command", async () => {
 		const h = harness();
 		expect(await h.run(["--help"])).toBe(EXIT_OK);
@@ -546,6 +627,8 @@ describe("output", () => {
 			"auth login",
 			"auth logout",
 			"auth status",
+			"skill install",
+			"skill uninstall",
 		]) {
 			expect(h.out()).toContain(command);
 		}
@@ -768,7 +851,7 @@ describe("suggest", () => {
 		};
 	}
 
-	it("maps --base and --head onto the tool's arguments", async () => {
+	it("maps --base and --head onto the action's arguments", async () => {
 		const h = harness();
 		expect(await h.run(["suggest", "--base", "main", "--head", "HEAD"])).toBe(
 			EXIT_OK,
@@ -851,5 +934,129 @@ describe("suggest", () => {
 		).toBe(EXIT_USAGE);
 		expect(h.err()).toContain('suggest does not accept argument "seats"');
 		expect(h.calls.suggest).toBeUndefined();
+	});
+});
+
+describe("skill install and uninstall", () => {
+	function home(): string {
+		return realpathSync(mkdtempSync(path.join(tmpdir(), "rp-skill-home-")));
+	}
+
+	it("installs into the agents found under the user's home, from the package's skill", async () => {
+		const dir = home();
+		mkdirSync(path.join(dir, ".grok"));
+		const h = harness({ home: dir });
+		expect(await h.run(["skill", "install"])).toBe(EXIT_OK);
+		const link = path.join(dir, ".grok", "skills", "review-panel");
+		expect(realpathSync(link)).toBe(realpathSync(SKILL_SOURCE));
+		expect(h.out()).toContain(`Grok: linked ${link}`);
+		expect(h.calls.diagnose).toBeUndefined();
+	});
+
+	it("takes --agent as a list, --dry-run and --force", async () => {
+		const dir = home();
+		const h = harness({ home: dir });
+		expect(
+			await h.run([
+				"skill",
+				"install",
+				"--agent",
+				"claude,codex",
+				"--agent",
+				"pi",
+				"--dry-run",
+				"--force",
+			]),
+		).toBe(EXIT_OK);
+		for (const folder of [
+			[".claude", "skills"],
+			[".codex", "skills"],
+			[".pi", "agent", "skills"],
+		]) {
+			expect(h.out()).toContain(
+				`would link ${path.join(dir, ...folder, "review-panel")}`,
+			);
+		}
+		expect(h.out()).not.toContain("Grok");
+		expect(existsSync(path.join(dir, ".claude"))).toBe(false);
+	});
+
+	it("exits 1 when it installs nothing, and 2 on a usage error", async () => {
+		const h = harness({ home: home() });
+		expect(await h.run(["skill", "install"])).toBe(EXIT_FAILED);
+		expect(h.out()).toContain("No coding agent found");
+		expect(await h.run(["skill", "install", "--agent", "vim"])).toBe(
+			EXIT_USAGE,
+		);
+		expect(h.err()).toContain(
+			'skill install: unknown agent "vim"; use claude, codex, grok or pi',
+		);
+		expect(await h.run(["skill", "uninstall", "--force"])).toBe(EXIT_USAGE);
+		expect(await h.run(["skill", "list"])).toBe(EXIT_USAGE);
+		expect(await h.run(["skill", "install", "extra"])).toBe(EXIT_USAGE);
+	});
+
+	it("--force replaces a foreign entry only for the agent it names, and needs --agent (P-1, R-1)", async () => {
+		const dir = home();
+		const claudeTarget = path.join(dir, ".claude", "skills", "review-panel");
+		const codexTarget = path.join(dir, ".codex", "skills", "review-panel");
+		mkdirSync(claudeTarget, { recursive: true });
+		writeFileSync(path.join(claudeTarget, "SKILL.md"), "mine");
+		mkdirSync(path.dirname(codexTarget), { recursive: true });
+		const foreign = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-foreign-")),
+		);
+		symlinkSync(foreign, codexTarget);
+		const kept = () => {
+			expect(readlinkSync(codexTarget)).toBe(foreign);
+			expect(existsSync(foreign)).toBe(true);
+		};
+
+		const h = harness({ home: dir });
+		expect(await h.run(["skill", "install"])).toBe(EXIT_FAILED);
+		expect(h.out()).toContain(
+			`Claude Code: skipped: ${claudeTarget} is a folder that is not this package's link. Re-run with --agent claude --force to replace it.`,
+		);
+		expect(h.out()).toContain("Re-run with --agent codex --force");
+		expect(readFileSync(path.join(claudeTarget, "SKILL.md"), "utf8")).toBe(
+			"mine",
+		);
+		kept();
+
+		expect(await h.run(["skill", "install", "--force"])).toBe(EXIT_USAGE);
+		expect(h.err()).toContain(
+			"skill install: --force needs --agent, so it replaces only the agents you name",
+		);
+		expect(readFileSync(path.join(claudeTarget, "SKILL.md"), "utf8")).toBe(
+			"mine",
+		);
+		kept();
+
+		const forced = harness({ home: dir });
+		expect(
+			await forced.run(["skill", "install", "--agent", "claude", "--force"]),
+		).toBe(EXIT_OK);
+		expect(realpathSync(claudeTarget)).toBe(realpathSync(SKILL_SOURCE));
+		expect(forced.out()).not.toContain("Codex");
+		kept();
+	});
+
+	it("uninstall removes the link it made", async () => {
+		const dir = home();
+		mkdirSync(path.join(dir, ".claude"));
+		const h = harness({ home: dir });
+		await h.run(["skill", "install"]);
+		expect(await h.run(["skill", "uninstall"])).toBe(EXIT_OK);
+		expect(
+			existsSync(path.join(dir, ".claude", "skills", "review-panel")),
+		).toBe(false);
+		expect(existsSync(path.join(SKILL_SOURCE, "SKILL.md"))).toBe(true);
+	});
+
+	it("skill with no subcommand, or --help, shows the help", async () => {
+		const h = harness();
+		expect(await h.run(["skill"])).toBe(EXIT_OK);
+		expect(h.out()).toContain("skill install");
+		expect(await h.run(["skill", "install", "--help"])).toBe(EXIT_OK);
 	});
 });

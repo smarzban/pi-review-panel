@@ -6,8 +6,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 export default function buildDist(): void {
-	execFileSync(process.execPath, ["build.mjs"], {
-		cwd: path.resolve(import.meta.dirname, ".."),
+	execFileSync(process.execPath, [path.join("scripts", "build.mjs")], {
+		cwd: path.resolve(import.meta.dirname, "..", ".."),
 		stdio: "inherit",
 	});
 }

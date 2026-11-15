@@ -7,7 +7,7 @@ import {
 	applyAgentDir,
 	chooseAgentDir,
 	describeAgentDir,
-} from "../src/agent-dir.js";
+} from "../../src/cli/agent-dir.js";
 
 function home(files: string[] = []): string {
 	const dir = mkdtempSync(path.join(tmpdir(), "rp-home-"));

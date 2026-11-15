@@ -5,32 +5,20 @@
  */
 import path from "node:path";
 
+import type { ActionContext, ActionResult } from "../actions/actions.js";
 import {
-	type ActionContext,
-	type ActionResult,
-	auditAction,
-	coerceJsonValue,
-	coerceStringList,
-	commentAction,
-	diagnoseAction,
-	parseAuditArguments,
-	parseCommentArguments,
-	parseDiagnoseArguments,
-	parseResumeArguments,
-	parseReviewArguments,
-	parseSuggestArguments,
-	parseVerifyArguments,
-	resumeAction,
-	reviewAction,
-	suggestAction,
-	verifyAction,
-} from "../../src/actions/actions.js";
+	type ActionFunctions,
+	CallArgumentError,
+	CallRepositoryError,
+	callAction,
+	coerceCallArguments,
+} from "../actions/call.js";
 import {
 	canonicalizeRepository,
 	resolveReviewRepository,
-} from "../../src/actions/repository.js";
-import { loadConfig } from "../../src/config/load.js";
-import { renderReviewProgress } from "../../src/tool/review-presentation.js";
+} from "../actions/repository.js";
+import { loadConfig } from "../config/load.js";
+import { renderReviewProgress } from "../tool/review-presentation.js";
 import { type AgentDirChoice, describeAgentDir } from "./agent-dir.js";
 import {
 	ACTIONS,
@@ -51,6 +39,12 @@ import {
 	renderStatus,
 	status,
 } from "./auth.js";
+import {
+	installSkill,
+	type SkillOptions,
+	skillStatus,
+	uninstallSkill,
+} from "./skill.js";
 
 export const EXIT_OK = 0;
 export const EXIT_FAILED = 1;
@@ -59,25 +53,7 @@ export const EXIT_USAGE = 2;
 /** A refusal that is not a usage mistake, such as comment without approval. */
 export class RefusalError extends Error {}
 
-export type ActionFunctions = {
-	diagnose: typeof diagnoseAction;
-	review: typeof reviewAction;
-	audit: typeof auditAction;
-	verify: typeof verifyAction;
-	resume: typeof resumeAction;
-	comment: typeof commentAction;
-	suggest: typeof suggestAction;
-};
-
-export const realActions: ActionFunctions = {
-	diagnose: diagnoseAction,
-	review: reviewAction,
-	audit: auditAction,
-	verify: verifyAction,
-	resume: resumeAction,
-	comment: commentAction,
-	suggest: suggestAction,
-};
+export { type ActionFunctions, realActions } from "../actions/call.js";
 
 export type RunIo = {
 	cwd: string;
@@ -99,20 +75,18 @@ export type RunDeps = {
 	actions: ActionFunctions;
 	authSdk: AuthSdk;
 	loadConfig?: typeof loadConfig;
+	/** This package's `skills/review-panel`, its version, and the platform. */
+	skillSource: { dir: string; version: string; platform: NodeJS.Platform };
 };
 
-const PARSERS: Record<
-	ActionName,
-	(args: Record<string, unknown>) => Record<string, unknown>
-> = {
-	diagnose: parseDiagnoseArguments,
-	review: parseReviewArguments,
-	audit: parseAuditArguments,
-	verify: parseVerifyArguments,
-	resume: parseResumeArguments,
-	comment: parseCommentArguments,
-	suggest: parseSuggestArguments,
-};
+function skillOptions(io: RunIo, deps: RunDeps): SkillOptions {
+	return {
+		home: io.home,
+		env: io.env,
+		platform: deps.skillSource.platform,
+		source: { dir: deps.skillSource.dir, version: deps.skillSource.version },
+	};
+}
 
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -121,7 +95,8 @@ function message(error: unknown): string {
 /**
  * `--repo` is taken strictly: a path that is not a Git repository is refused.
  * Without it, the Git top-level of the working folder is used. A `call`
- * object's `repository` is resolved exactly as the tool resolves it.
+ * object's `repository` may be omitted or a placeholder: the working folder's
+ * Git top-level is used then.
  */
 function resolveRepo(io: RunIo, flag: string | undefined): string {
 	return flag === undefined
@@ -156,11 +131,59 @@ async function dismissedText(
 	}
 }
 
-/** Validates the tool's argument record and runs one action. */
+/** What diagnose prints before the readiness report: this install's own state. */
+async function diagnoseHeader(io: RunIo, deps: RunDeps): Promise<string> {
+	return [
+		`review-panel ${deps.cliVersion} (Pi SDK ${await deps.sdkVersion()})`,
+		`Agent folder: ${describeAgentDir(deps.agentDir)}`,
+		"Skill (review-panel skill install links it into each agent):",
+		...skillStatus(skillOptions(io, deps)),
+	].join("\n");
+}
+
+/**
+ * Finds the `--repo` repository. When diagnose cannot (not a Git repository),
+ * it still prints the install's own state first, then fails as before.
+ */
+async function repositoryFor(
+	action: string,
+	find: () => string,
+	io: RunIo,
+	deps: RunDeps,
+	json: boolean,
+): Promise<string> {
+	try {
+		return find();
+	} catch (error) {
+		if (action === "diagnose") {
+			await printDiagnoseHeader(io, deps, json);
+		}
+		throw error;
+	}
+}
+
+async function printDiagnoseHeader(
+	io: RunIo,
+	deps: RunDeps,
+	json: boolean,
+): Promise<void> {
+	io.stdout(
+		render(
+			{ content: [{ type: "text", text: await diagnoseHeader(io, deps) }] },
+			json,
+		),
+	);
+}
+
+/**
+ * Validates one argument record and runs its action through `callAction`.
+ * `repoDir` is the `--repo` repository when given; otherwise `callAction`
+ * finds it from the record's `repository` or the working folder.
+ */
 async function runAction(
 	action: ActionName,
 	args: Record<string, unknown>,
-	repoDir: string,
+	repoDir: string | undefined,
 	io: RunIo,
 	deps: RunDeps,
 	json: boolean,
@@ -170,25 +193,34 @@ async function runAction(
 			"comment refused: pass --owner-approved (ownerApproved: true) only after the owner asked to post",
 		);
 	}
-	let input: Record<string, unknown>;
-	try {
-		input = PARSERS[action](args);
-	} catch (error) {
-		// A `call` object's unknown argument name may be a key pasted there.
-		throw new UsageError(
-			withoutKeyLikeNames(message(error), Object.keys(args)),
-		);
-	}
 	const context: ActionContext = {
 		signal: io.signal,
 		startedAt: Date.now(),
 		onProgress: (view) => io.stderr(`${renderReviewProgress(view)}\n`),
 	};
-	const run = deps.actions[action] as (
-		input: Record<string, unknown>,
-		context: ActionContext,
-	) => Promise<ActionResult>;
-	let result = await run({ repoDir, ...input }, context);
+	let result: ActionResult;
+	try {
+		result = await callAction(
+			{ ...args, action },
+			{
+				cwd: io.cwd,
+				...(repoDir === undefined ? {} : { repoDir }),
+				context,
+				actions: deps.actions,
+			},
+		);
+	} catch (error) {
+		if (error instanceof CallArgumentError) {
+			// A `call` object's unknown argument name may be a key pasted there.
+			throw new UsageError(
+				withoutKeyLikeNames(message(error), Object.keys(args)),
+			);
+		}
+		if (error instanceof CallRepositoryError && action === "diagnose") {
+			await printDiagnoseHeader(io, deps, json);
+		}
+		throw error;
+	}
 	if (io.signal.aborted) {
 		// A run that still returned after Ctrl-C is printed, but did not
 		// complete as asked.
@@ -196,10 +228,7 @@ async function runAction(
 		throw new Error("interrupted before the action finished");
 	}
 	if (action === "diagnose") {
-		const header = [
-			`review-panel ${deps.cliVersion} (Pi SDK ${await deps.sdkVersion()})`,
-			`Agent folder: ${describeAgentDir(deps.agentDir)}`,
-		].join("\n");
+		const header = await diagnoseHeader(io, deps);
 		result = { content: [{ type: "text", text: header }, ...result.content] };
 	}
 	io.stdout(render(result, json));
@@ -221,40 +250,7 @@ function parseCallPayload(text: string): Record<string, unknown> {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) {
 		throw new UsageError("call: the argument must be a JSON object");
 	}
-	return coerceLikeTheTool(value as Record<string, unknown>);
-}
-
-/**
- * The tool's `prepareArguments` coercions, so `call` accepts what the tool
- * accepts: a string for a list, JSON text for `dismissed`, and
- * `"true"`/`"false"` for `ownerApproved` and `prComment`.
- */
-function coerceLikeTheTool(
-	args: Record<string, unknown>,
-): Record<string, unknown> {
-	const next: Record<string, unknown> = { ...args };
-	for (const key of [
-		"seats",
-		"lenses",
-		"passes",
-		"keptFindingIds",
-		"lowAdvisory",
-	]) {
-		if (Object.hasOwn(next, key)) {
-			next[key] = coerceStringList(next[key]);
-		}
-	}
-	if (typeof next.dismissed === "string") {
-		next.dismissed = coerceJsonValue(next.dismissed);
-	}
-	for (const key of ["ownerApproved", "prComment"]) {
-		if (next[key] === "true") {
-			next[key] = true;
-		} else if (next[key] === "false") {
-			next[key] = false;
-		}
-	}
-	return next;
+	return coerceCallArguments(value as Record<string, unknown>);
 }
 
 async function execute(
@@ -274,7 +270,17 @@ async function execute(
 			if (command.dismissed !== undefined) {
 				args.dismissed = await dismissedText(command.dismissed, io);
 			}
-			const repoDir = resolveRepo(io, command.repo);
+			const repo = command.repo;
+			const repoDir =
+				repo === undefined
+					? undefined
+					: await repositoryFor(
+							command.action,
+							() => resolveRepo(io, repo),
+							io,
+							deps,
+							command.json,
+						);
 			return runAction(command.action, args, repoDir, io, deps, command.json);
 		}
 		case "call": {
@@ -297,10 +303,17 @@ async function execute(
 					'call: give the repository either as --repo or as "repository", not both',
 				);
 			}
+			const repo = command.repo;
 			const repoDir =
-				command.repo === undefined
-					? resolveReviewRepository(args.repository, io.cwd)
-					: resolveRepo(io, command.repo);
+				repo === undefined
+					? undefined
+					: await repositoryFor(
+							action,
+							() => resolveRepo(io, repo),
+							io,
+							deps,
+							command.json,
+						);
 			return runAction(
 				action as ActionName,
 				args,
@@ -333,6 +346,21 @@ async function execute(
 				})}\n`,
 			);
 			return EXIT_OK;
+		case "skill-install":
+		case "skill-uninstall": {
+			const options: SkillOptions = {
+				...skillOptions(io, deps),
+				...(command.agents === undefined ? {} : { agents: command.agents }),
+				dryRun: command.dryRun,
+				...(command.kind === "skill-install" ? { force: command.force } : {}),
+			};
+			const result =
+				command.kind === "skill-install"
+					? installSkill(options)
+					: uninstallSkill(options);
+			io.stdout(`${result.lines.join("\n")}\n`);
+			return result.ok ? EXIT_OK : EXIT_FAILED;
+		}
 		case "auth-status": {
 			const repoDir = resolveRepo(io, command.repo);
 			const config = (deps.loadConfig ?? loadConfig)({

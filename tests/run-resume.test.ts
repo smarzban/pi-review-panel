@@ -687,7 +687,7 @@ describe("resume refusals", () => {
 			expect(() =>
 				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
 			).toThrow(
-				/Resume refused: run ".*" lock .*run\.lock is being written by another process, or was left unfinished by one that crashed; if no review_panel run is active, delete it and try again/,
+				/Resume refused: run ".*" lock .*run\.lock is being written by another process, or was left unfinished by one that crashed; if no review-panel run is active, delete it and try again/,
 			);
 			expect(readFileSync(lockPath, "utf8")).toBe("");
 		} finally {
