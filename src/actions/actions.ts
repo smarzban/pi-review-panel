@@ -97,6 +97,7 @@ import {
 	accountCloseoutFindings,
 	assembleCloseoutComment,
 	type CloseoutJudgmentRow,
+	type CloseoutLinks,
 } from "../tool/closeout-comment.js";
 import {
 	assertFixedResolved,
@@ -107,6 +108,12 @@ import {
 	type PostCloseoutResult,
 	postCloseoutComment,
 } from "../tool/closeout-post.js";
+import {
+	cardRounds,
+	postedVerifyRounds,
+	roundCommentLinks,
+	type SignedVerifyRound,
+} from "../tool/closeout-rounds.js";
 import {
 	compactPanelRoster,
 	formatSuggestion,
@@ -357,6 +364,10 @@ export type CommentInput = {
 	dismissed: CloseoutJudgmentRow[];
 	lowAdvisory: string[];
 	verifyRunId?: string;
+	/**
+	 * Accepted as before; the card no longer shows a head ref, only the
+	 * short id of the commit the verify checked (or the review's head).
+	 */
 	head?: string;
 	pr?: number | string;
 };
@@ -1021,7 +1032,6 @@ export async function verifyAction(
 		{
 			result,
 			panel,
-			headRef: head,
 			dismissed,
 			lowAdvisory,
 			...(reviewFindings === undefined ? {} : { reviewFindings }),
@@ -1073,45 +1083,68 @@ export async function commentAction(
 		dismissed,
 		lowAdvisory,
 	});
-	if (accounted.fixed.length > 0) {
+	let verified: SignedVerifyRound | undefined;
+	if (accounted.resolved.length > 0) {
 		if (valid.verifyRunId === undefined) {
 			throw new Error(
-				`comment refused: ${accounted.fixed.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
+				`comment refused: ${accounted.resolved.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
 			);
 		}
-		assertFixedResolved(
+		verified = assertFixedResolved(
 			repoDir,
 			valid.verifyRunId,
-			accounted.fixed.map((row) => row.id),
+			accounted.resolved.map((row) => row.id),
 			facts.run.runId,
 			commentKey,
 		);
 	}
+	// The rounds and the head come from signed records only: the posted
+	// rounds the review record names, and the verify checked above.
+	const rounds = cardRounds(
+		postedVerifyRounds(repoDir, facts.run, commentKey),
+		verified,
+	);
 	const verifyRunId = markerVerifyId(repoDir, valid.verifyRunId);
-	const body = assembleCloseoutComment({
-		findings: facts.run.findings,
-		panel: facts.panel,
-		lost: facts.lost,
-		meta: facts.run.meta,
-		dismissed,
-		lowAdvisory,
-		...(valid.head === undefined ? {} : { headRef: valid.head }),
-		runIds: {
-			review: facts.run.runId,
-			...(verifyRunId === undefined ? {} : { verify: verifyRunId }),
-		},
-	});
+	const card = (links?: CloseoutLinks) =>
+		assembleCloseoutComment({
+			findings: facts.run.findings,
+			panel: facts.panel,
+			lost: facts.lost,
+			meta: {
+				...facts.run.meta,
+				headOid: verified?.headOid ?? facts.run.meta.headOid,
+			},
+			dismissed,
+			lowAdvisory,
+			rounds,
+			runIds: {
+				review: facts.run.runId,
+				...(verifyRunId === undefined ? {} : { verify: verifyRunId }),
+			},
+			...(links === undefined ? {} : { links }),
+		});
+	const body = card();
 	const posted = resolved.postComment({
 		repository: repoDir,
 		body,
+		render: (listing) =>
+			card(
+				roundCommentLinks(
+					listing.comments,
+					listing,
+					facts.run.runId,
+					rounds.map((round) => round.runId),
+				),
+			),
 		...(valid.pr === undefined ? {} : { pr: valid.pr }),
 	});
+	const shown = posted.body ?? body;
 	return textResult(
 		[
 			`Posted comment on PR #${posted.pr} (${posted.action})`,
 			posted.url,
 			"",
-			body,
+			shown,
 		].join("\n"),
 	);
 }

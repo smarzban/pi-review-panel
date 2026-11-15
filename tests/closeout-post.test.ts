@@ -75,6 +75,7 @@ describe("postCloseoutComment", () => {
 			commentId: 42,
 			pr: 29,
 			url: "https://github.com/smarzban/demo/issues/29#issuecomment-42",
+			body: BODY,
 		});
 
 		const create = calls.find((call) => is(call, "--method", "POST"));
@@ -127,6 +128,7 @@ describe("postCloseoutComment", () => {
 			commentId: 9,
 			pr: 7,
 			url: "https://github.com/smarzban/demo/issues/7#issuecomment-9",
+			body: BODY,
 		});
 
 		const patch = calls.find((call) => is(call, "--method", "PATCH"));
@@ -174,5 +176,52 @@ describe("postCloseoutComment reads every page of comments", () => {
 			"updated",
 		);
 		expect(calls.some((call) => is(call, "--method", "POST"))).toBe(false);
+	});
+
+	it("posts what render builds from the comment listing (T505)", () => {
+		const listed = [
+			{ id: 5, user: { login: "saeed" }, body: "## Review panel · review" },
+		];
+		const { calls, run } = posterWith((call) => {
+			if (is(call, "repo", "view")) {
+				return "smarzban/demo";
+			}
+			if (is(call, "user")) {
+				return "saeed";
+			}
+			if (is(call, "issues/7/comments") && !is(call, "--method")) {
+				return JSON.stringify(listed);
+			}
+			if (is(call, "--method", "POST")) {
+				return JSON.stringify({ id: 6, html_url: "u" });
+			}
+			throw new Error(`unexpected ${call.args.join(" ")}`);
+		});
+		const seen: unknown[] = [];
+		const result = run({
+			repository: "/repo",
+			pr: 7,
+			body: BODY,
+			render: (listing) => {
+				seen.push(listing);
+				return `${BODY}\nlinked`;
+			},
+		});
+		expect(seen).toEqual([
+			{ comments: listed, repo: "smarzban/demo", pr: 7, author: "saeed" },
+		]);
+		const create = calls.find((call) => is(call, "--method", "POST"));
+		expect(JSON.parse(create?.input ?? "{}")).toEqual({
+			body: `${BODY}\nlinked`,
+		});
+		expect(result.body).toBe(`${BODY}\nlinked`);
+		expect(() =>
+			run({
+				repository: "/repo",
+				pr: 7,
+				body: BODY,
+				render: () => "## Something else",
+			}),
+		).toThrow(/body must start with ## Review panel/);
 	});
 });

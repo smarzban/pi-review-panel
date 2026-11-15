@@ -355,28 +355,84 @@ export function markerTail(ids: {
 }
 
 /**
- * True when a body's last non-empty line is exactly the marker of this
- * review, with or without a verify id. Seat text cannot make that line:
- * posted text escapes `<`, and a code span starts with a backtick.
+ * The run ids of a body's marker, when its last non-empty line is exactly a
+ * marker holding only ids of the run-id character set. Seat text cannot
+ * make that line: posted text escapes `<`, and a code span starts with a
+ * backtick.
  */
-export function isRunMarkerFor(body: string, reviewRunId: string): boolean {
-	const review = markerId(reviewRunId);
-	if (review === undefined) {
-		return false;
-	}
+export function runMarkerIds(
+	body: string,
+): { review: string; verify?: string } | undefined {
 	const last = body
 		.split(/\r?\n/u)
 		.filter((line) => line.trim() !== "")
 		.at(-1);
 	if (last === undefined) {
-		return false;
+		return undefined;
 	}
 	const found = /^<!-- review-panel review=(\S+)(?: verify=(\S+))? -->$/u.exec(
 		last,
 	);
-	return (
-		found !== null &&
-		found[1] === review &&
-		(found[2] === undefined || markerId(found[2]) !== undefined)
-	);
+	const review = markerId(found?.[1]);
+	const verify = found?.[2];
+	if (
+		review === undefined ||
+		(verify !== undefined && markerId(verify) === undefined)
+	) {
+		return undefined;
+	}
+	return verify === undefined ? { review } : { review, verify };
+}
+
+/**
+ * True when a body's last non-empty line is exactly the marker of this
+ * review, with or without a verify id.
+ */
+export function isRunMarkerFor(body: string, reviewRunId: string): boolean {
+	const review = markerId(reviewRunId);
+	return review !== undefined && runMarkerIds(body)?.review === review;
+}
+
+/**
+ * A pull request comment's URL as GitHub gives it in `html_url`:
+ * `https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`, nothing more.
+ * No character in it can end a Markdown link destination or start markup.
+ */
+const PR_COMMENT_URL =
+	/^https:\/\/([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)\/([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)\/pull\/([1-9]\d{0,9})#issuecomment-([1-9]\d{0,19})$/u;
+
+/**
+ * `raw` when it is the URL of a comment on this PR (`place`), and of comment
+ * `id` when one is given: the `html_url` gh returned, never a URL taken from
+ * a body. Anything else is undefined, so it is never linked.
+ */
+export function prCommentUrl(
+	raw: unknown,
+	place: { repo: string; pr: number },
+	id?: unknown,
+): string | undefined {
+	if (typeof raw !== "string") {
+		return undefined;
+	}
+	const found = PR_COMMENT_URL.exec(raw);
+	if (
+		found === null ||
+		found[2] !== place.repo ||
+		found[3] !== String(place.pr) ||
+		(id !== undefined && found[4] !== String(id))
+	) {
+		return undefined;
+	}
+	return raw;
+}
+
+/**
+ * A Markdown link to a PR comment: the label as posted text, the URL only
+ * when it has the shape of {@link prCommentUrl}. Otherwise undefined, and
+ * the caller leaves the link out.
+ */
+export function postedLink(label: string, url: string): string | undefined {
+	return PR_COMMENT_URL.test(url)
+		? `[${postedText(label, 40)}](${url})`
+		: undefined;
 }

@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type ActionDependencies,
 	type ActionResult,
+	commentAction,
 	parseReviewArguments,
 	parseVerifyArguments,
 	reviewAction,
@@ -27,7 +28,10 @@ import { validateConfig } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
-import { parseJsonPages } from "../src/tool/closeout-post.js";
+import {
+	parseJsonPages,
+	postCloseoutComment,
+} from "../src/tool/closeout-post.js";
 import { postedCode, postedText } from "../src/tool/posted-text.js";
 import {
 	assertVerifyJudgment,
@@ -331,17 +335,54 @@ function writeVerifyRecord(
 		kind?: string;
 		signed?: boolean;
 		markerSigned?: boolean;
+		/** One voting seat's dispositions, recorded in verification.json. */
+		items?: Item[];
+		/** The verify seat that voted, recorded in panel.json. */
+		seat?: { rosterId: string; lens: string };
+		headOid?: string;
 	} = {},
 ): void {
 	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
 	writeFileSync(
 		path.join(recordPath, "meta.json"),
-		JSON.stringify({ runId, kind: options.kind ?? "verify", priorRunId }),
+		JSON.stringify({
+			runId,
+			kind: options.kind ?? "verify",
+			priorRunId,
+			...(options.headOid === undefined ? {} : { headOid: options.headOid }),
+		}),
 	);
+	const seat = {
+		provider: "ollama",
+		model: "glm-5.2",
+		lensPrompt: "",
+		...(options.seat ?? { rosterId: "glm", lens: "fix-verification" }),
+	};
+	if (options.items !== undefined) {
+		writeFileSync(
+			path.join(recordPath, "panel.json"),
+			JSON.stringify({ runId, baseRef: "main", seats: [seat] }),
+		);
+	}
 	writeFileSync(
 		path.join(recordPath, "verification.json"),
-		JSON.stringify({ priorRunId, keptFindingIds: [], outcomes: [] }),
+		JSON.stringify({
+			priorRunId,
+			keptFindingIds: (options.items ?? []).map((item) => item.id),
+			outcomes:
+				options.items === undefined
+					? []
+					: [
+							{
+								seat,
+								outcome: {
+									kind: "voted",
+									result: { items: options.items, regressions: [] },
+								},
+							},
+						],
+		}),
 	);
 	if (options.posted !== false) {
 		// An earlier verify whose comment reached the PR.
@@ -972,7 +1013,7 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			const card = bodyOf(posted[1]);
 			expect(card.split("\n")[0]).toBe("## Review panel · close-out");
 			expect(card).toContain(
-				"3 findings submitted · 1 fixed · 1 dismissed · 1 left as low/advisory",
+				"**3 findings** (1 high, 1 medium, 1 low) · **1 resolved** in 1 verify round · 1 dismissed · 1 left as low/advisory",
 			);
 			expect(card).toContain("out of scope for this PR");
 			expect(card).toContain(REVIEW_ID);
@@ -1047,8 +1088,8 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			expect(posted).toHaveLength(2);
 			const card = bodyOf(posted[1]);
 			expect(card.split("\n")[0]).toBe("## Review panel · close-out");
-			expect(card).toContain("**Seats:** holistic (terra)");
-			expect(card).toContain("**Lost:** none");
+			expect(card).toContain("**Review seats:** holistic (terra)");
+			expect(card).not.toContain("Lost");
 			expect(card).not.toContain("planted");
 		});
 	});
@@ -1544,10 +1585,17 @@ function expectInert(body: string): void {
 			// The tool's own hidden run marker.
 			continue;
 		}
-		// The tool's own bold labels: `**Seats:**` and the `- **F-1 …**` id.
+		// The tool's own bold labels: `**Seats:**` and the `- **F-1 …**` id,
+		// the close-out's `**3 findings**` and `**2 resolved**` counts, and
+		// its links to this PR's own comments.
 		const line = raw
 			.replace(/^(\s*)\*\*([A-Z][A-Za-z ]*:)\*\*/, "$1$2")
-			.replace(/^- \*\*((?:[^*\\]|\\.)*?)\*\*/, "- $1");
+			.replace(/^- \*\*((?:[^*\\]|\\.)*?)\*\*/, "- $1")
+			.replace(/\*\*(\d+ (?:findings?|resolved))\*\*/g, "$1")
+			.replace(
+				/ · \[(?:review|verify \d+)\]\(https:\/\/github\.com\/smarzban\/demo\/pull\/12#issuecomment-\d+\)/g,
+				"",
+			);
 		if (/^#{2,3} [A-Z]/.test(line)) {
 			// Our own headings: `## Review panel · …` and `### Kept` and so on.
 			expect(line).toMatch(
@@ -1678,8 +1726,9 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 				expectInert(bodyOf(call));
 			}
 			const card = bodyOf(posted[1]);
-			// A code span is inert on GitHub: no joiner hides in a copied ref.
-			expect(card).toContain("``x`@octocat`x``");
+			// The card shows the head as its short id, never the ref.
+			expect(card).not.toContain("octocat`x");
+			expect(card).toContain(`→ \`${head.slice(0, 7)}\``);
 		});
 	});
 
@@ -1743,7 +1792,6 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 			},
 			dismissed: [{ id: "F-2", reason: `r ${HOSTILE}` }],
 			lowAdvisory: ["F-3"],
-			headRef: HOSTILE_REF,
 		});
 		expectInert(card);
 		expect(card).toContain("``x`@octocat`x``");
@@ -1757,7 +1805,7 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 });
 
 describe("fix round 1: the close-out card keeps every line (H2)", () => {
-	it("a clean verify with nothing dismissed and no lows posts counts, Seats, Lost and the range", async () => {
+	it("a clean verify with nothing dismissed and no lows posts counts, seats and the range", async () => {
 		await withRepository(async (repo, head) => {
 			const rows: Row[] = [
 				{ id: "F-1", severity: "high" },
@@ -1784,14 +1832,14 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			expect(card).toHaveLength(1);
 			const lines = bodyOf(card[0]).split("\n");
 			expect(lines).toContain(
-				"2 findings submitted · 2 fixed · 0 dismissed · 0 left as low/advisory",
+				"**2 findings** (1 high, 1 medium) · **2 resolved** in 1 verify round",
 			);
-			expect(lines).toContain("**Seats:** holistic (terra)");
-			expect(lines).toContain("**Lost:** none");
+			expect(lines).toContain("**Review seats:** holistic (terra)");
+			expect(lines.some((line) => line.includes("Lost"))).toBe(false);
 			expect(
 				lines.some((line) =>
 					line.startsWith(
-						`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`HEAD\` (\``,
+						`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`${head.slice(0, 7)}\``,
 					),
 				),
 			).toBe(true);
@@ -1806,7 +1854,7 @@ describe("fix round 1: kept findings of any severity (M3)", () => {
 	];
 
 	for (const listed of [false, true]) {
-		it(`a kept low that is resolved counts as fixed${listed ? ", even when also listed in lowAdvisory" : ""}`, async () => {
+		it(`a kept low that is resolved counts as resolved${listed ? ", even when also listed in lowAdvisory" : ""}`, async () => {
 			await withRepository(async (repo, head) => {
 				writeReviewRecord(repo, REVIEW_ID, ROWS);
 				const gh = fakeGh({ pulls: [openPr(12, head)] });
@@ -1832,7 +1880,10 @@ describe("fix round 1: kept findings of any severity (M3)", () => {
 				const card = closeoutPosts(gh.calls);
 				expect(card).toHaveLength(1);
 				expect(bodyOf(card[0])).toContain(
-					"2 findings submitted · 2 fixed · 0 dismissed · 0 left as low/advisory",
+					"**2 findings** (1 high, 1 low) · **2 resolved** in 1 verify round",
+				);
+				expect(bodyOf(card[0])).toContain(
+					"- **F-3 [low]** F-3 title · resolved in verify 1",
 				);
 				expect(bodyOf(posts(gh.calls)[0])).not.toContain("### Low / advisory");
 				expect(textOf(result).split("\n").at(-1)).toMatch(
@@ -3520,10 +3571,12 @@ describe("T498: readable PR comments", () => {
 				[
 					"## Review panel · close-out",
 					"",
-					"2 findings submitted · 1 fixed · 1 dismissed · 0 left as low/advisory",
-					"**Seats:** holistic (terra)",
-					"**Lost:** none",
-					`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`HEAD\` (\`${head.slice(0, 7)}\`)`,
+					"**2 findings** (1 high, 1 medium) · **1 resolved** in 1 verify round · 1 dismissed",
+					"**Review seats:** holistic (terra)",
+					"**Verified by:** fix-verification (terra)",
+					`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`${head.slice(0, 7)}\` · [verify 1](https://github.com/smarzban/demo/pull/12#issuecomment-101)`,
+					"",
+					"- **F-1 [high]** F-1 title · resolved in verify 1",
 					"",
 					"### Dismissed",
 					"- **F-2** F-2 title — by design (ADR 4)",
@@ -3571,10 +3624,9 @@ describe("T498: readable PR comments", () => {
 			[
 				"## Review panel",
 				"",
-				"1 finding submitted · 0 fixed · 0 dismissed · 1 left as low/advisory",
-				"**Seats:** holistic (terra, glm), tests (terra)",
-				"**Lost:** none",
-				"`main` (`aaaaaaa`) → `HEAD` (`bbbbbbb`)",
+				"**1 finding** (1 low) · 1 left as low/advisory",
+				"**Review seats:** holistic (terra, glm), tests (terra)",
+				"`main` (`aaaaaaa`) → `bbbbbbb`",
 				"",
 				"### Low / advisory (not kept)",
 				"- **F-1** F-1 title",
@@ -3808,6 +3860,331 @@ describe("T502: the round number and the close-out read only signed records and 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+		});
+	});
+});
+
+describe("T505: the close-out card numbers, counts and links rounds from signed records only", () => {
+	const ROWS: Row[] = [
+		{ id: "F-1", severity: "high", title: "auth bypass" },
+		{ id: "F-2", severity: "medium", title: "missing timeout" },
+		{ id: "F-3", severity: "low", title: "rename helper" },
+	];
+	const PR = `https://github.com/${REPO_SLUG}/pull/12`;
+	const resolved = (id: string): Item => ({
+		id,
+		disposition: "resolved",
+		evidence: { file: "src/a.ts", explanation: "checked" },
+	});
+
+	function comment(id: number, login: string, body: string, url?: string) {
+		return {
+			id,
+			user: { login },
+			html_url: url ?? `${PR}#issuecomment-${id}`,
+			body,
+		};
+	}
+
+	const reviewComment = comment(
+		5,
+		"saeed",
+		`## Review panel · review\nbody\n\n<!-- review-panel review=${REVIEW_ID} -->`,
+	);
+	const verifyOneComment = comment(
+		6,
+		"saeed",
+		`## Review panel · verify 1\nbody\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+	);
+	/** Comments that look like rounds of this review but are not. */
+	const decoys = [
+		// Another author's copy of the review comment.
+		comment(
+			1,
+			"mallory",
+			`## Review panel · review\n\n<!-- review-panel review=${REVIEW_ID} -->`,
+		),
+		// The manual card carries the same marker as verify 1.
+		comment(
+			2,
+			"saeed",
+			`## Review panel\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+		),
+		// The marker only in the middle of the body.
+		comment(
+			3,
+			"saeed",
+			`## Review panel · verify 1\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->\nlater`,
+		),
+	];
+
+	/** An earlier verify v-0, posted as verify 1, that resolved F-2 only. */
+	function earlierVerify(
+		repo: string,
+		options: { markerSigned?: boolean; recordSigned?: boolean } = {},
+	): void {
+		writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+			items: [resolved("F-2"), { id: "F-1", disposition: "still present" }],
+			...(options.recordSigned === false ? { signed: false } : {}),
+		});
+		const reviewDir = reviewRecordDir(repo);
+		if (options.markerSigned === false) {
+			writeFileSync(
+				path.join(reviewDir, "round-1.posted"),
+				JSON.stringify({ verifyRunId: "v-0", pr: 12, round: 1 }),
+			);
+		} else {
+			writeSignedMarker(reviewDir, "round-1.posted", "v-0", {
+				pr: 12,
+				round: 1,
+			});
+		}
+	}
+
+	async function cleanVerify(repo: string, gh: ReturnType<typeof fakeGh>) {
+		return verifyAction(
+			{
+				repoDir: repo,
+				priorRunId: REVIEW_ID,
+				head: "HEAD",
+				keptFindingIds: ["F-1", "F-2"],
+				lowAdvisory: ["F-3"],
+			},
+			{
+				deps: deps(gh.runGh, {
+					runVerify: verifyRun(
+						repo,
+						"v-1",
+						REVIEW_ID,
+						[ROWS[0] as Row, ROWS[1] as Row],
+						[resolved("F-1"), resolved("F-2")],
+					),
+				}),
+			},
+		);
+	}
+
+	function rangeOf(repo: string): string {
+		const base = git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7);
+		const head = git(repo, ["rev-parse", "HEAD"]).slice(0, 7);
+		return `\`main\` (\`${base}\`) → \`${head}\``;
+	}
+
+	it("lists each kept id with the verify that first resolved it, the verify seats, and links to the review and each verify comment", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			earlierVerify(repo);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [...decoys, reviewComment, verifyOneComment],
+			});
+			const result = await cleanVerify(repo, gh);
+			const [verifyPost, card] = posts(gh.calls).map(bodyOf);
+			expect(verifyPost?.split("\n")[0]).toBe("## Review panel · verify 2");
+			expect(card).toBe(
+				[
+					"## Review panel · close-out",
+					"",
+					"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 2 verify rounds · 1 left as low/advisory",
+					"**Review seats:** holistic (terra)",
+					"**Verified by:** fix-verification (glm, terra)",
+					`${rangeOf(repo)} · [review](${PR}#issuecomment-5) · [verify 1](${PR}#issuecomment-6) · [verify 2](${PR}#issuecomment-101)`,
+					"",
+					"- **F-1 [high]** auth bypass · resolved in verify 2",
+					"- **F-2 [medium]** missing timeout · resolved in verify 1",
+					"",
+					"### Low / advisory (not kept)",
+					"- **F-3** rename helper",
+					"",
+					`<!-- review-panel review=${REVIEW_ID} verify=v-1 -->`,
+				].join("\n"),
+			);
+			expect(card).not.toMatch(/fixed/i);
+			expect(textOf(result).split("\n").at(-1)).toMatch(
+				/^PR close-out: posted to #12 \(/,
+			);
+		});
+	});
+
+	it("a PR without findable comments still gets the card, with no links", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			// The new verify comment comes back without a usable html_url too.
+			const gh = fakeGh({ pulls: [openPr(12, head)], htmlUrl: "" });
+			const result = await cleanVerify(repo, gh);
+			const card = bodyOf(posts(gh.calls)[1]);
+			const lines = card.split("\n");
+			expect(lines[2]).toBe(
+				"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 left as low/advisory",
+			);
+			expect(lines[4]).toBe("**Verified by:** fix-verification (terra)");
+			expect(lines[5]).toBe(rangeOf(repo));
+			expect(card).not.toContain("](");
+			expect(card).toContain(
+				"- **F-1 [high]** auth bypass · resolved in verify 1",
+			);
+			expect(textOf(result).split("\n").at(-1)).toMatch(
+				/^PR close-out: posted to #12/,
+			);
+		});
+	});
+
+	it("a comment whose html_url is not this PR's comment URL gets no link", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			earlierVerify(repo);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					comment(5, "saeed", reviewComment.body, "https://evil.test/x"),
+					comment(
+						6,
+						"saeed",
+						verifyOneComment.body,
+						`https://github.com/${REPO_SLUG}/pull/13#issuecomment-6`,
+					),
+				],
+			});
+			await cleanVerify(repo, gh);
+			const card = bodyOf(posts(gh.calls)[1]);
+			expect(card).toContain(
+				`${rangeOf(repo)} · [verify 2](${PR}#issuecomment-101)\n`,
+			);
+			expect(card).not.toContain("evil");
+			expect(card).not.toContain("pull/13");
+		});
+	});
+
+	for (const [name, options] of [
+		["an unsigned round-1.posted", { markerSigned: false }],
+		["an unsigned verify record", { recordSigned: false }],
+	] as const) {
+		it(`${name} is no round: not counted, numbered, listed or linked`, async () => {
+			await withRepository(async (repo, head) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				earlierVerify(repo, options);
+				const gh = fakeGh({
+					pulls: [openPr(12, head)],
+					comments: [reviewComment, verifyOneComment],
+				});
+				await cleanVerify(repo, gh);
+				const card = bodyOf(posts(gh.calls)[1]);
+				expect(card).toContain("**2 resolved** in 1 verify round");
+				expect(card).toContain("**Verified by:** fix-verification (terra)\n");
+				expect(card).not.toContain("verify 1");
+				expect(card).not.toContain("glm");
+			});
+		});
+	}
+
+	it("a signed round marker naming another review's verify is not a round of this one", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			writeVerifyRecord(repo, "v-other", "another-review", {
+				items: [resolved("F-2")],
+				posted: false,
+			});
+			writeSignedMarker(reviewRecordDir(repo), "round-1.posted", "v-other", {
+				pr: 12,
+				round: 1,
+			});
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await cleanVerify(repo, gh);
+			const card = bodyOf(posts(gh.calls)[1]);
+			expect(card).toContain("**2 resolved** in 1 verify round");
+			expect(card).not.toContain("glm");
+		});
+	});
+
+	describe("the manual comment card", () => {
+		const VERIFY_HEAD = `c0ffee1${"0".repeat(33)}`;
+
+		async function manual(
+			repo: string,
+			gh: ReturnType<typeof fakeGh>,
+		): Promise<{ text: string; body: string }> {
+			const result = await commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: REVIEW_ID,
+					verifyRunId: "v-0",
+					dismissed: [],
+					lowAdvisory: ["F-3"],
+					pr: 12,
+				},
+				{
+					deps: deps(gh.runGh, {
+						postComment: (input) =>
+							postCloseoutComment({
+								...input,
+								runGh: gh.runGh as (
+									args: readonly string[],
+									options?: { cwd?: string; input?: string },
+								) => string,
+							}),
+					}),
+				},
+			);
+			return { text: textOf(result), body: bodyOf(posts(gh.calls)[0]) };
+		}
+
+		it("shows the named verify's signed head, its round number and links", async () => {
+			await withRepository(async (repo) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+					items: [resolved("F-1"), resolved("F-2")],
+					headOid: VERIFY_HEAD,
+				});
+				writeSignedMarker(reviewRecordDir(repo), "round-1.posted", "v-0", {
+					pr: 12,
+					round: 1,
+				});
+				// Not decoy 2: it is this author's manual card, which comment
+				// would update in place.
+				const gh = fakeGh({
+					comments: [decoys[0], decoys[2], reviewComment, verifyOneComment],
+				});
+				const { text, body } = await manual(repo, gh);
+				const base = git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7);
+				expect(body).toBe(
+					[
+						"## Review panel",
+						"",
+						"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 left as low/advisory",
+						"**Review seats:** holistic (terra)",
+						"**Verified by:** fix-verification (glm)",
+						`\`main\` (\`${base}\`) → \`c0ffee1\` · [review](${PR}#issuecomment-5) · [verify 1](${PR}#issuecomment-6)`,
+						"",
+						"- **F-1 [high]** auth bypass · resolved in verify 1",
+						"- **F-2 [medium]** missing timeout · resolved in verify 1",
+						"",
+						"### Low / advisory (not kept)",
+						"- **F-3** rename helper",
+						"",
+						`<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+					].join("\n"),
+				);
+				// The reply shows the body that was posted.
+				expect(text.endsWith(body)).toBe(true);
+			});
+		});
+
+		it("a verify that never posted counts as a round with no number, and nothing is linked", async () => {
+			await withRepository(async (repo) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+					items: [resolved("F-1"), resolved("F-2")],
+					headOid: VERIFY_HEAD,
+					posted: false,
+				});
+				const gh = fakeGh({ comments: [] });
+				const { body } = await manual(repo, gh);
+				expect(body).toContain("**2 resolved** in 1 verify round");
+				expect(body).toContain("- **F-1 [high]** auth bypass · resolved\n");
+				expect(body).not.toContain("](");
+				expect(body).not.toMatch(/fixed/i);
+			});
 		});
 	});
 });

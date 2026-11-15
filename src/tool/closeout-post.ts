@@ -7,9 +7,23 @@ export type GhRunner = (
 	options?: { cwd?: string; input?: string },
 ) => string;
 
+/** The PR's comments as gh listed them, and where they are. */
+export type CommentListing = {
+	comments: readonly unknown[];
+	repo: string;
+	pr: number;
+	author: string;
+};
+
 export type PostCloseoutInput = {
 	repository: string;
+	/** The card as posted when there is no `render`. */
 	body: string;
+	/**
+	 * Builds the card from the PR's comment listing (to link earlier rounds),
+	 * replacing `body`. It must not throw for a listing it cannot use.
+	 */
+	render?: (listing: CommentListing) => string;
 	pr?: number | string;
 	runGh?: GhRunner;
 };
@@ -19,6 +33,8 @@ export type PostCloseoutResult = {
 	commentId: number;
 	pr: number;
 	url: string;
+	/** The body that was posted. */
+	body?: string;
 };
 
 type IssueComment = {
@@ -217,7 +233,16 @@ export function postCloseoutComment(
 			comment.user?.login === author && hasCloseoutHeading(comment.body),
 	);
 
-	const payload = JSON.stringify({ body: input.body });
+	const body =
+		input.render === undefined
+			? input.body
+			: input.render({ comments, repo, pr, author });
+	if (!body.trimStart().startsWith(CLOSEOUT_HEADING)) {
+		throw new Error(
+			`comment refused: body must start with ${CLOSEOUT_HEADING}`,
+		);
+	}
+	const payload = JSON.stringify({ body });
 	if (existing !== undefined) {
 		const updated = parseCreated(
 			call(
@@ -237,6 +262,7 @@ export function postCloseoutComment(
 			commentId: updated.id,
 			pr,
 			url: updated.url,
+			body,
 		};
 	}
 
@@ -258,5 +284,6 @@ export function postCloseoutComment(
 		commentId: created.id,
 		pr,
 		url: created.url,
+		body,
 	};
 }

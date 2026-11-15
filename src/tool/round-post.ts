@@ -38,9 +38,19 @@ import {
 	accountCloseoutFindings,
 	assembleCloseoutParts,
 	type CloseoutJudgmentRow,
+	type CloseoutLinks,
+	type CloseoutVerifyRound,
 } from "./closeout-comment.js";
 import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
+import {
+	cardRounds,
+	dispositionsOf,
+	postedVerifyRounds,
+	REVIEW_ROUND_HEADING,
+	resolvedIdsOf,
+	roundCommentLinks,
+} from "./closeout-rounds.js";
 import {
 	type CommentGroupRow,
 	fitCommentBody,
@@ -48,6 +58,7 @@ import {
 	markerTail,
 	postedCode,
 	postedText,
+	prCommentUrl,
 } from "./posted-text.js";
 import {
 	CLOSEOUT_GENERATIONS,
@@ -471,7 +482,7 @@ type Built = {
 async function postOne(
 	ctx: RoundContext,
 	build: (gh: Gh) => Built | Promise<Built>,
-): Promise<{ line: string; target?: PrTarget; gh: Gh }> {
+): Promise<{ line: string; target?: PrTarget; url?: string; gh: Gh }> {
 	const gh = ghOf(ctx);
 	const gate = gateReason(ctx);
 	if (gate !== undefined) {
@@ -512,7 +523,7 @@ async function postOne(
 		};
 	}
 	built.settle?.(target);
-	return { line: posted("PR comment", target, url), target, gh };
+	return { line: posted("PR comment", target, url), target, url, gh };
 }
 
 function findingRow(
@@ -577,7 +588,7 @@ export type ReviewRoundFacts = {
 export function renderReviewRound(facts: ReviewRoundFacts): string {
 	const [, summary, seats] = reviewHeadLines("", facts);
 	const head = [
-		"## Review panel · review",
+		REVIEW_ROUND_HEADING,
 		`${safeCode(facts.baseRef)} (\`${shortOid(facts.baseOid)}\`) → \`${shortOid(facts.headOid)}\``,
 		ownLine(summary as string),
 		boldLabel(ownLine(seats as string)),
@@ -687,8 +698,6 @@ export function verifyRoundNumber(
 export type VerifyRoundFacts = {
 	result: RunVerifyResult;
 	panel: readonly PlannedSeat[];
-	/** The verify call's `head`, as the close-out card shows it. */
-	headRef: string;
 	dismissed: readonly CloseoutJudgmentRow[];
 	lowAdvisory: readonly string[];
 	/** The review record's findings, for titles; absent when unreadable. */
@@ -883,14 +892,22 @@ function commentRefusal(error: unknown): string {
 type IssueComment = { user?: { login?: unknown }; body?: unknown };
 
 type CloseoutCard = {
-	body: string;
+	/** The card, linking the rounds whose comments were found. */
+	render: (links?: CloseoutLinks) => string;
+	rounds: readonly CloseoutVerifyRound[];
 	reviewRecord: string;
 	reviewRunId: string;
 };
 
-/** The close-out card for this review, or why it cannot be built. */
+/**
+ * The close-out card for this review, or why it cannot be built. Its
+ * rounds are this verify (`round`, from its claim) and the posted rounds
+ * before it, from signed records only.
+ */
 function buildCloseout(
 	facts: VerifyRoundFacts,
+	repoDir: string,
+	round: number,
 ): CloseoutCard | { reason: string } {
 	const { result } = facts;
 	let review: CloseoutRunFacts;
@@ -917,7 +934,7 @@ function buildCloseout(
 		return { reason: commentRefusal(error) };
 	}
 	const resolved = new Set(kept);
-	const unaccounted = accounted.fixed
+	const unaccounted = accounted.resolved
 		.map((row) => row.id)
 		.filter((id) => !resolved.has(id));
 	if (unaccounted.length > 0) {
@@ -933,9 +950,18 @@ function buildCloseout(
 	const verifyLost = result.outcomes
 		.filter((row) => row.outcome.kind === "failed")
 		.map((row) => `${row.seat.rosterId}/${row.seat.lens}`);
-	let parts: ReturnType<typeof assembleCloseoutParts>;
-	try {
-		parts = assembleCloseoutParts({
+	const verifyRunId = runIdOf(result.recordPath);
+	const rounds = cardRounds(
+		postedVerifyRounds(repoDir, review.run, facts.recordKey),
+		{
+			runId: verifyRunId,
+			round,
+			seats: facts.panel,
+			resolved: resolvedIdsOf(dispositionsOf(result.outcomes)),
+		},
+	);
+	const render = (links?: CloseoutLinks) => {
+		const parts = assembleCloseoutParts({
 			findings: review.run.findings,
 			panel: review.panel,
 			lost: review.lost,
@@ -944,29 +970,29 @@ function buildCloseout(
 			dismissed: facts.dismissed,
 			lowAdvisory: facts.lowAdvisory,
 			kept,
-			headRef: facts.headRef,
+			rounds,
 			heading: CLOSEOUT_ROUND_HEADING,
-			runIds: {
-				review: review.run.runId,
-				verify: runIdOf(result.recordPath),
-			},
+			runIds: { review: review.run.runId, verify: verifyRunId },
+			...(links === undefined ? {} : { links }),
 		});
+		return fitCommentBody(parts.head, parts.rows, parts.tail, "row");
+	};
+	try {
+		// Refused here, before any claim, rather than at posting time.
+		render();
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}
 	return {
-		body: fitCommentBody(parts.head, parts.rows, parts.tail, "row"),
+		render,
+		rounds,
 		reviewRecord: review.run.recordPath,
 		reviewRunId: review.run.runId,
 	};
 }
 
-/** Is a close-out for this review already on the PR, by this author? */
-async function closeoutAlreadyPosted(
-	gh: Gh,
-	target: PrTarget,
-	reviewRunId: string,
-): Promise<boolean> {
+/** Every comment on the PR, across pages. */
+async function listComments(gh: Gh, target: PrTarget): Promise<unknown[]> {
 	const comments = parseJsonPages(
 		await gh([
 			"api",
@@ -977,6 +1003,15 @@ async function closeoutAlreadyPosted(
 	if (comments === undefined) {
 		throw new RoundSkip("gh returned unreadable comments");
 	}
+	return comments;
+}
+
+/** Is a close-out for this review among the comments, by this author? */
+function hasCloseoutFor(
+	comments: readonly unknown[],
+	target: PrTarget,
+	reviewRunId: string,
+): boolean {
 	return comments.some((raw) => {
 		const comment = raw as IssueComment | null;
 		if (comment?.user?.login !== target.author) {
@@ -994,6 +1029,41 @@ async function closeoutAlreadyPosted(
 			isRunMarkerFor(body, reviewRunId) || second?.startsWith(legacy) === true
 		);
 	});
+}
+
+/** Is a close-out for this review already on the PR, by this author? */
+async function closeoutAlreadyPosted(
+	gh: Gh,
+	target: PrTarget,
+	reviewRunId: string,
+): Promise<boolean> {
+	return hasCloseoutFor(await listComments(gh, target), target, reviewRunId);
+}
+
+/**
+ * Links to the review comment and each counted verify comment found among
+ * the PR's comments; this verify's own comment, just posted, by the URL gh
+ * gave for it when the listing does not hold it yet.
+ */
+function closeoutLinks(
+	comments: readonly unknown[],
+	target: PrTarget,
+	card: CloseoutCard,
+	verifyRunId: string,
+	verifyUrl: string | undefined,
+): CloseoutLinks {
+	const links = roundCommentLinks(
+		comments,
+		target,
+		card.reviewRunId,
+		card.rounds.map((round) => round.runId),
+	);
+	const verify = new Map(links.verify);
+	const own = prCommentUrl(verifyUrl, target);
+	if (!verify.has(verifyRunId) && own !== undefined) {
+		verify.set(verifyRunId, own);
+	}
+	return { ...links, verify };
 }
 
 /**
@@ -1119,7 +1189,7 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", blocker));
 		return lines;
 	}
-	const card = buildCloseout(facts);
+	const card = buildCloseout(facts, ctx.repoDir, round);
 	if ("reason" in card) {
 		lines.push(notPosted("PR close-out", card.reason));
 		return lines;
@@ -1142,9 +1212,8 @@ export async function postVerifyRound(
 		return lines;
 	}
 	try {
-		if (
-			await closeoutAlreadyPosted(verify.gh, verify.target, card.reviewRunId)
-		) {
+		const comments = await listComments(verify.gh, verify.target);
+		if (hasCloseoutFor(comments, verify.target, card.reviewRunId)) {
 			// An automatic close-out is there already (one whose marker a
 			// crash lost): record it, and post nothing.
 			settleCloseout(claim, true);
@@ -1156,7 +1225,10 @@ export async function postVerifyRound(
 			);
 			return lines;
 		}
-		const url = await createComment(verify.gh, verify.target, card.body);
+		const body = card.render(
+			closeoutLinks(comments, verify.target, card, verifyRunId, verify.url),
+		);
+		const url = await createComment(verify.gh, verify.target, body);
 		settleCloseout(claim, true);
 		lines.push(posted("PR close-out", verify.target, url));
 	} catch (error) {

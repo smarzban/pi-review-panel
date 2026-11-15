@@ -7,8 +7,11 @@ import {
 	isRunMarkerFor,
 	POSTED_TEXT_CHARS,
 	postedCode,
+	postedLink,
 	postedText,
+	prCommentUrl,
 	runMarker,
+	runMarkerIds,
 } from "../src/tool/posted-text.js";
 
 const ZWJ = "\u200d";
@@ -277,5 +280,73 @@ describe("a run id with --", () => {
 		expect(
 			isRunMarkerFor(`## x\n\n<!-- review-panel review=${id} -->`, id),
 		).toBe(true);
+	});
+});
+
+describe("a link to this PR's own comment (T505)", () => {
+	const place = { repo: "smarzban/demo", pr: 35 };
+	const good = "https://github.com/smarzban/demo/pull/35#issuecomment-123";
+
+	it("takes only the comment URL gh gave for this PR and comment id", () => {
+		expect(prCommentUrl(good, place, 123)).toBe(good);
+		expect(prCommentUrl(good, place)).toBe(good);
+		// A GitHub Enterprise host is still the PR's own URL.
+		expect(
+			prCommentUrl(
+				"https://ghe.example.com/smarzban/demo/pull/35#issuecomment-9",
+				place,
+				9,
+			),
+		).toBe("https://ghe.example.com/smarzban/demo/pull/35#issuecomment-9");
+	});
+
+	it("refuses anything else", () => {
+		for (const raw of [
+			undefined,
+			42,
+			"",
+			"http://github.com/smarzban/demo/pull/35#issuecomment-123",
+			"https://github.com/smarzban/other/pull/35#issuecomment-123",
+			"https://github.com/smarzban/demo/pull/36#issuecomment-123",
+			"https://github.com/smarzban/demo/issues/35#issuecomment-123",
+			"https://github.com/smarzban/demo/pull/35#issuecomment-124",
+			`${good})`,
+			`${good} "title"`,
+			`${good}\n[x](https://evil.test)`,
+			"javascript:alert(1)",
+			"https://user@github.com/smarzban/demo/pull/35#issuecomment-123",
+			"https://github.com:443/smarzban/demo/pull/35#issuecomment-123",
+			"https://github.com/smarzban/demo/pull/35?x=1#issuecomment-123",
+		]) {
+			expect(prCommentUrl(raw, place, 123)).toBeUndefined();
+		}
+	});
+
+	it("posts a link only for such a URL, with its label as posted text", () => {
+		expect(postedLink("verify 2", good)).toBe(`[verify 2](${good})`);
+		expect(postedLink("[x]", good)).toBe(`[\\[x\\]](${good})`);
+		expect(postedLink("review", "javascript:alert(1)")).toBeUndefined();
+		expect(postedLink("review", `${good})`)).toBeUndefined();
+	});
+});
+
+describe("the run ids a marker carries (T505)", () => {
+	it("reads the review and verify ids from the last non-empty line only", () => {
+		expect(
+			runMarkerIds("## x\n\n<!-- review-panel review=r-1 verify=v-1 -->\n"),
+		).toEqual({ review: "r-1", verify: "v-1" });
+		expect(runMarkerIds("## x\n\n<!-- review-panel review=r-1 -->")).toEqual({
+			review: "r-1",
+		});
+		expect(
+			runMarkerIds("## x\n<!-- review-panel review=r-1 -->\nlater"),
+		).toBeUndefined();
+		// Only ids of the run-id character set.
+		expect(
+			runMarkerIds("## x\n<!-- review-panel review=../x -->"),
+		).toBeUndefined();
+		expect(
+			runMarkerIds("## x\n<!-- review-panel review=a b -->"),
+		).toBeUndefined();
 	});
 });
