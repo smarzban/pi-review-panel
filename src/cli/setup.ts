@@ -627,7 +627,7 @@ export async function listModels(input: {
 				throw error;
 			}
 			problems.push(
-				`${group.label === undefined ? "The model catalog" : `Extension ${group.label}`} failed to load: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+				`${group.label === undefined ? "The model catalog" : `Extension ${group.label}`} failed to load: ${(group.redact ?? redactSecrets)(error instanceof Error ? error.message : String(error))}`,
 			);
 			continue;
 		}
@@ -651,7 +651,9 @@ export async function listModels(input: {
 		}
 		for (const failure of loaded.extensionFailures) {
 			problems.push(
-				`Extension ${redactSecrets(failure.extension)} failed to load: ${redactSecrets(failure.message)}`,
+				// A recorded source's own credential is hidden here too: the
+				// path and the loader's message can both hold its folder name.
+				`Extension ${(group.redact ?? redactSecrets)(failure.extension)} failed to load: ${(group.redact ?? redactSecrets)(failure.message)}`,
 			);
 		}
 		const shownPaths = group.extensionPaths.map(group.redact ?? redactSecrets);
