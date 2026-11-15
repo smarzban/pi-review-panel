@@ -353,9 +353,7 @@ key:
 When a call names a G-id, it expands only from the grouping in the review's signed
 `execution.json`; G-ids are refused, asking for F-ids, when that grouping is absent or lost.
 
-One reader of the record is not covered: a review's persistence flags (which earlier findings
-look repeated) still count unsigned earlier records. They do not decide what verify checks or what
-`comment` lists as resolved. The verify round number and the close-out read only signed records and
+A review reads no earlier record. The verify round number and the close-out read only signed records and
 signed markers (see [Posting rounds to the pull request](#posting-rounds-to-the-pull-request)).
 
 ## Posting rounds to the pull request

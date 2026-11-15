@@ -49,7 +49,6 @@ import {
 	planConsolidator,
 	recordedGrouping,
 } from "../run/grouping.js";
-import { discoverPriorRecords } from "../run/prior-records.js";
 import {
 	loadPriorRun,
 	type PriorRun,
@@ -1182,9 +1181,6 @@ export async function reviewAction(
 			headRevision,
 			revision: headRevision,
 			seats: panel,
-			priorRecordPaths: discoverPriorRecords(repoDir).map(
-				(record) => record.path,
-			),
 			...(scopingNote === undefined ? {} : { scopingNote }),
 			...(config.defaults.seatBudgetMs === undefined
 				? {}

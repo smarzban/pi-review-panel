@@ -21,37 +21,6 @@ export type RunMeta = {
 };
 
 /**
- * A persistence flag on one current finding: it co-locates with an earlier
- * discard, carrying the prior reason (ADR-0002). Produced by the persistence
- * flagger (flag.ts) and rendered inline on the flagged finding (AC-16).
- */
-export type FindingFlag = {
-	findingId: string;
-	reason: string;
-};
-
-/**
- * A prior discard ledger that could not be read: surfaced in the report,
- * never skipped silently (AC-33). Produced by the persistence flagger
- * (flag.ts) and rendered in the loud unreadable-ledger section.
- */
-export type LedgerNotice = {
-	recordPath: string;
-	reason: string;
-};
-
-/**
- * The persistence flagger's output for this run, passed in by the core
- * (run-review.ts). The renderer draws each flag inline on its finding and
- * every notice in a loud section. Absent means no annotations, and nothing
- * annotation-related is rendered.
- */
-export type RunAnnotations = {
-	flags: FindingFlag[];
-	notices: LedgerNotice[];
-};
-
-/**
  * Everything the renderer needs for the two artifacts. Pure data in, text
  * out: the caller writes the files (T-15).
  */
@@ -59,7 +28,6 @@ export type RenderInput = {
 	meta: RunMeta;
 	stamped: StampedFinding[];
 	outcomes: SeatOutcomeFacts[];
-	annotations?: RunAnnotations;
 	/** Durable snapshot-cleanup failure notice (AC-19), when any. */
 	cleanupError?: string;
 	/** Present only when a resume finished this record. */
@@ -139,25 +107,20 @@ const SEVERITY_RANK: Record<Finding["severity"], number> = {
 };
 
 /**
- * Renders the report.md text. Unreadable-ledger notices first, when any,
- * in a loud section ahead of everything else (AC-33); then findings,
- * ordered by the severity the submitting seat stated (high, medium, low)
- * and attributed to that seat with the run-stamped id (AC-14), each flagged
- * finding carrying its persistence flag and the prior discard reason inline
- * (AC-16); then one section per planned seat with its identity and outcome
+ * Renders the report.md text. Findings first, ordered by the severity the
+ * submitting seat stated (high, medium, low) and attributed to that seat
+ * with the run-stamped id (AC-14); then one section per planned seat with its identity and outcome
  * — voted with its finding count (zero allowed, AC-10, AC-11) or failed
  * with class and reason — and, for every seat that ran, the replay command
  * byte-identical to the command that ran (AC-15).
  *
  * Presentation only, per the constitution's "the tool never judges": no
  * verdict, no quorum, no agreement counting, no recomputed severity (NC-1).
- * Annotations are the flagger's mechanical prose, displayed attributed; a
- * flag's reason is carried verbatim, never reworded or ranked. Ordering by
+ * Ordering by
  * a seat's STATED severity is presentation; nothing here derives a new one.
  * Pure: no filesystem, no clock, no process.
  */
 export function renderReport(input: RenderInput): string {
-	const annotations = input.annotations ?? { flags: [], notices: [] };
 	const lines = [
 		`# Review run ${input.meta.runId}`,
 		"",
@@ -167,8 +130,7 @@ export function renderReport(input: RenderInput): string {
 		"",
 		...renderResumeSection(input.resume),
 		...renderCleanupSection(input.cleanupError),
-		...renderLedgerNoticesSection(annotations.notices),
-		...renderFindingsSection(input.stamped, annotations.flags, input.grouping),
+		...renderFindingsSection(input.stamped, input.grouping),
 		...renderSeatsSection(input.outcomes),
 		...renderGroupingSection(input.grouping, input.stamped.length),
 	];
@@ -200,49 +162,14 @@ export function renderFindingsJson(stamped: StampedFinding[]): string {
 	return `${JSON.stringify(stamped, null, 2)}\n`;
 }
 
-/**
- * Unreadable-ledger notices in one loud section ahead of the findings
- * (AC-33): a complete prior record whose ledger could not be read is never
- * skipped silently, so the section leads the body and states plainly which
- * record and why.
- */
-function renderLedgerNoticesSection(notices: LedgerNotice[]): string[] {
-	if (notices.length === 0) {
-		return [];
-	}
-	const lines = [
-		"## Unreadable discard ledgers",
-		"",
-		"Each prior run record below is marked complete, but its discard ledger",
-		"could not be read. Its discards were not used for flagging; this is",
-		"surfaced here rather than skipped silently.",
-		"",
-	];
-	for (const notice of notices) {
-		lines.push(
-			`- Record: ${notice.recordPath}`,
-			`- Reason: ${notice.reason}`,
-			"",
-		);
-	}
-	return lines;
-}
-
 function renderFindingsSection(
 	stamped: StampedFinding[],
-	flags: FindingFlag[],
 	grouping?: GroupingFacts,
 ): string[] {
 	const lines = ["## Findings", ""];
 	if (stamped.length === 0) {
 		lines.push("No findings were submitted.", "");
 		return lines;
-	}
-
-	// The flagger emits at most one flag per finding; the map mirrors that.
-	const reasonByFinding = new Map<string, string>();
-	for (const flag of flags) {
-		reasonByFinding.set(flag.findingId, flag.reason);
 	}
 
 	const lost = groupingLostLine(grouping);
@@ -262,12 +189,7 @@ function renderFindingsSection(
 			const [only] = group.members;
 			if (group.members.length === 1 && only !== undefined) {
 				lines.push(
-					...renderFinding(
-						only,
-						reasonByFinding.get(only.id),
-						`${group.id} / ${only.id}`,
-						"###",
-					),
+					...renderFinding(only, `${group.id} / ${only.id}`, "###"),
 					"",
 				);
 				continue;
@@ -277,15 +199,7 @@ function renderFindingsSection(
 				"",
 			);
 			for (const entry of group.members) {
-				lines.push(
-					...renderFinding(
-						entry,
-						reasonByFinding.get(entry.id),
-						entry.id,
-						"####",
-					),
-					"",
-				);
+				lines.push(...renderFinding(entry, entry.id, "####"), "");
 			}
 		}
 		return lines;
@@ -303,31 +217,23 @@ function renderFindingsSection(
 			SEVERITY_RANK[a.finding.severity] - SEVERITY_RANK[b.finding.severity],
 	);
 	for (const entry of ordered) {
-		lines.push(...renderFinding(entry, reasonByFinding.get(entry.id)), "");
+		lines.push(...renderFinding(entry), "");
 	}
 	return lines;
 }
 
 function renderFinding(
 	entry: StampedFinding,
-	priorReason: string | undefined,
 	label = entry.id,
 	heading = "###",
 ): string[] {
-	const lines = [
+	return [
 		`${heading} ${label} [${entry.finding.severity}] ${inertLine(entry.finding.title)}`,
 		"",
 		`- Seat: ${seatLabel(entry.seat)}`,
 		`- Location: ${inertLine(location(entry.finding))}`,
 		`- Evidence: ${inertLine(entry.finding.evidence)}`,
 	];
-	if (priorReason !== undefined) {
-		lines.push(
-			"- Flag: co-locates with a finding discarded in a prior run.",
-			`- Prior discard reason: ${inertLine(priorReason)}`,
-		);
-	}
-	return lines;
 }
 
 /** Outcomes come one per planned seat, in planned order. */

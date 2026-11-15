@@ -11,7 +11,6 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DISCARD_LEDGER_FILE } from "../src/run/flag.js";
 import { COMPLETE_MARKER, PANEL_FILE } from "../src/run/record.js";
 import {
 	RunReviewError,
@@ -95,35 +94,6 @@ function removeFixture(...paths: string[]): void {
 			rmSync(fixture, { recursive: true, force: true });
 		}
 	}
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-	let count = 0;
-	let index = haystack.indexOf(needle);
-	while (index !== -1) {
-		count += 1;
-		index = haystack.indexOf(needle, index + needle.length);
-	}
-	return count;
-}
-
-/**
- * A synthetic completed prior record: a directory bearing the COMPLETE
- * marker and, optionally, a discard ledger written verbatim. The flagger
- * consumes exactly this shape (feature 4 authors real ledgers later).
- */
-function makePriorRecord(
-	root: string,
-	name: string,
-	ledgerContent?: string,
-): string {
-	const recordPath = path.join(root, name);
-	mkdirSync(recordPath);
-	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
-	if (ledgerContent !== undefined) {
-		writeFileSync(path.join(recordPath, DISCARD_LEDGER_FILE), ledgerContent);
-	}
-	return recordPath;
 }
 
 describe("runReview", () => {
@@ -423,147 +393,6 @@ describe("runReview", () => {
 
 			// The snapshot was still released on the fatal path.
 			expect(worktreeCount(repo)).toBe(1);
-		} finally {
-			removeFixture(repo, root);
-		}
-	});
-
-	it("flags co-located current findings in report.md with the prior discard reason (AC-16, full stack)", async () => {
-		const repo = createHostRepo();
-		const root = mkdtempSync(path.join(tmpdir(), "run-review-flag-"));
-
-		// A completed prior record whose ledger co-locates with the stub
-		// finding (src/example.ts:1; ledger line 10 is inside the 20-line
-		// ADR-0002 window).
-		const prior = makePriorRecord(
-			root,
-			"prior-record",
-			JSON.stringify([
-				{
-					id: "F-9",
-					file: "src/example.ts",
-					line: 10,
-					reason: "discarded as a false positive last run",
-				},
-			]),
-		);
-
-		try {
-			const result = await withSdkResponses(DEFAULT_RESPONSES, () =>
-				runReview(
-					{
-						repoDir: repo,
-						baseRef: "origin/main",
-						seats: twoSeats(),
-						priorRecordPaths: [prior],
-					},
-					{},
-				),
-			);
-
-			expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
-				true,
-			);
-			const report = readFileSync(
-				path.join(result.recordPath, "report.md"),
-				"utf8",
-			);
-
-			// Both seats submitted the SAME co-located finding, so F-1 and
-			// F-2 each carry the flag and the prior reason verbatim.
-			expect(
-				countOccurrences(
-					report,
-					"- Flag: co-locates with a finding discarded in a prior run.",
-				),
-			).toBe(2);
-			expect(
-				countOccurrences(
-					report,
-					"- Prior discard reason: discarded as a false positive last run",
-				),
-			).toBe(2);
-
-			// Annotations live in report.md only: findings.json stays the
-			// stamped set, untouched by the flagger.
-			const findings = readFileSync(
-				path.join(result.recordPath, "findings.json"),
-				"utf8",
-			);
-			expect(findings).not.toContain("discarded as a false positive last run");
-			expect(JSON.parse(findings).map((row: { id: string }) => row.id)).toEqual(
-				["F-1", "F-2"],
-			);
-		} finally {
-			removeFixture(repo, root);
-		}
-	});
-
-	it("surfaces an unreadable prior ledger in the report instead of skipping it (AC-33, full stack)", async () => {
-		const repo = createHostRepo();
-		const root = mkdtempSync(path.join(tmpdir(), "run-review-notice-"));
-
-		// A completed prior record whose ledger is corrupt.
-		const prior = makePriorRecord(root, "prior-record", "{{{ this is not json");
-
-		try {
-			const result = await withSdkResponses(DEFAULT_RESPONSES, () =>
-				runReview(
-					{
-						repoDir: repo,
-						baseRef: "origin/main",
-						seats: twoSeats(),
-						priorRecordPaths: [prior],
-					},
-					{},
-				),
-			);
-
-			// The unreadable ledger does not abort the run.
-			expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
-				true,
-			);
-			const report = readFileSync(
-				path.join(result.recordPath, "report.md"),
-				"utf8",
-			);
-
-			// The notice is unmissable: its section names the record and the
-			// reason, ahead of the findings, which still render.
-			expect(report).toContain("## Unreadable discard ledgers");
-			expect(report).toContain(`- Record: ${prior}`);
-			expect(report).toContain(
-				"- Reason: discard-ledger.json is not valid JSON",
-			);
-			expect(report.indexOf("## Unreadable discard ledgers")).toBeLessThan(
-				report.indexOf("## Findings"),
-			);
-			expect(report).toContain("### F-1 [low]");
-			expect(report).not.toContain("- Flag:");
-		} finally {
-			removeFixture(repo, root);
-		}
-	});
-
-	it("renders no annotations when no prior record paths are configured (AC-17, full stack)", async () => {
-		const repo = createHostRepo();
-		const root = mkdtempSync(path.join(tmpdir(), "run-review-noprior-"));
-
-		try {
-			const result = await withSdkResponses(DEFAULT_RESPONSES, () =>
-				runReview(
-					{ repoDir: repo, baseRef: "origin/main", seats: twoSeats() },
-					{},
-				),
-			);
-
-			const report = readFileSync(
-				path.join(result.recordPath, "report.md"),
-				"utf8",
-			);
-			expect(report).not.toContain("## Unreadable discard ledgers");
-			expect(report).not.toContain("- Flag:");
-			expect(report).toContain("### F-1 [low]");
 		} finally {
 			removeFixture(repo, root);
 		}

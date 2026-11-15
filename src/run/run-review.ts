@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";
-import { flagPersistence } from "./flag.js";
 import { type GroupingFacts, runGroupingStep } from "./grouping.js";
 import {
 	acquireRunLock,
@@ -181,9 +180,6 @@ export async function runReview(
 			...(config.seatBudgetMs === undefined
 				? {}
 				: { seatBudgetMs: config.seatBudgetMs }),
-			...(config.priorRecordPaths === undefined
-				? {}
-				: { priorRecordPaths: config.priorRecordPaths }),
 			...(config.consolidator === undefined
 				? {}
 				: { consolidator: config.consolidator }),
@@ -312,8 +308,6 @@ export async function executeReview(
 		const stamped = collectFindings(outcomes);
 		// The exact findings.json text, fixed now and written below.
 		const findingsText = renderFindingsJson(stamped);
-		stage = "flag";
-		const annotations = flagPersistence(stamped, config.priorRecordPaths ?? []);
 		stage = "group";
 		// The groups live only in execution.json, signed under record.mac:
 		// verify and comment take G-ids from there, never from another file.
@@ -368,7 +362,6 @@ export async function executeReview(
 				meta,
 				stamped,
 				outcomes,
-				annotations,
 				...(grouping === undefined ? {} : { grouping }),
 				...(cleanupError === undefined ? {} : { cleanupError }),
 				...(resumedSeats === undefined

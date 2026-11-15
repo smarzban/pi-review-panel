@@ -47,12 +47,6 @@ export type RunConfig = {
 	/** Per-seat wall-clock budget override; the scheduler default applies when absent. */
 	seatBudgetMs?: number;
 	/**
-	 * Prior run record paths whose discard ledgers flag this run's findings
-	 * (AC-16), newest-first by contract. The adapter discovers and orders
-	 * them (T-18); absent means no flags and no notices (AC-17).
-	 */
-	priorRecordPaths?: string[];
-	/**
 	 * The owner's grouping seat (`defaults.consolidator`). Absent means no
 	 * grouping step: the review keeps its flat list.
 	 */

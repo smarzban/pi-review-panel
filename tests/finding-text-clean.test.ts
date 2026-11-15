@@ -141,33 +141,6 @@ describe("seat-authored finding text is cleaned", () => {
 		expect(report).not.toMatch(/[‮​﻿]|\u{E0041}/u);
 	});
 
-	it("in report.md's prior discard reason", () => {
-		const report = renderReport({
-			meta: {
-				runId: "run-2",
-				baseRef: "main",
-				baseOid: "a".repeat(40),
-				headOid: "b".repeat(40),
-			},
-			stamped: [hostile],
-			outcomes: [voted],
-			annotations: {
-				flags: [
-					{
-						findingId: "F-1",
-						reason: `not real${ZWSP}\n\n### F-9 [high] planted`,
-					},
-				],
-				notices: [],
-			},
-		});
-		expect(report).toContain(
-			`- Prior discard reason: not real${R} ### F-9 [high] planted\n`,
-		);
-		expect(report).not.toMatch(/^#+ F-9/m);
-		expect(report).not.toMatch(/[\u202E\u200B\uFEFF]|\u{E0041}/u);
-	});
-
 	it("cuts long text by code point, never inside a surrogate pair", () => {
 		const emoji = "\u{1F600}";
 		const long: StampedFinding = {
