@@ -78,6 +78,8 @@ export type SetupSdk = {
 		source: string;
 		progress(line: string): void;
 	}): Promise<boolean>;
+	/** The source as Pi's package manager parses it, installing nothing. */
+	parseSource(source: string): Promise<ParsedSource>;
 };
 
 /** A refusal the runner reports with exit code 1. */
@@ -99,10 +101,10 @@ export class SetupError extends Error {}
  */
 export function redactSecrets(text: string): string {
 	return text
-		.replace(/(\bhttps?:\/\/)[^\s/@?#]+@/gi, "$1***@")
+		.replace(/(\b(?:git\+)?https?:\/\/)[^\s/@?#]+@/gi, "$1***@")
 		.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@?#:]+:[^\s/@?#]*@/gi, "$1***@")
-		.replace(/(\bgit:)[^\s/@:]+:[^\s/@]+@/gi, "$1***@")
-		.replace(/(\bgit:)(?!git@)[^\s/@:]+@(?=[^\s/:@]+\/)/gi, "$1***@")
+		.replace(/(\bgit:\s*)[^\s/@:]+:[^\s/@]+@/gi, "$1***@")
+		.replace(/(\bgit:\s*)(?!git@)[^\s/@:]+@(?=[^\s/@]+\/)/gi, "$1***@")
 		.replace(/\/(?!git@|\*\*\*@)[^\s/@]+@(?=[^\s/@]+\/)/g, "/***@")
 		.replace(
 			/([?&][^=&#\s/]*(?:token|key|secret|passw|pwd|auth|sig|credential)[^=&#\s/]*=)[^&#\s/]*/gi,
@@ -110,20 +112,142 @@ export function redactSecrets(text: string): string {
 		);
 }
 
-/** A source Pi treats as a local path: no `npm:`, `git:` or URL prefix. */
-function isLocalSource(source: string): boolean {
-	return !/^(npm|git|github|http|https|ssh|builtin):/.test(source.trim());
+/** A source as Pi's own package manager parses it (`parseSource`). */
+export type ParsedSource =
+	| { type: "npm"; spec: string; name: string; version?: string }
+	| { type: "git"; repo: string; host: string; path: string; ref?: string }
+	| { type: "local"; path: string };
+
+const SSH_SCHEMES = new Set(["ssh", "git+ssh", "ssh+git"]);
+
+/** The scheme, user info and query of a `scheme://` URL, when it is one. */
+function urlParts(
+	url: string,
+): { scheme: string; userinfo?: string; query: boolean } | undefined {
+	const match = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)[^?#]*(\?[^#]*)?/i.exec(
+		url.trim(),
+	);
+	if (match === null) {
+		return undefined;
+	}
+	const authority = match[2] as string;
+	const at = authority.lastIndexOf("@");
+	return {
+		scheme: (match[1] as string).toLowerCase(),
+		...(at === -1 ? {} : { userinfo: authority.slice(0, at) }),
+		query: match[3] !== undefined,
+	};
 }
 
 /**
- * True when a non-local source carries a credential that `redactSecrets`
- * would hide. Such a source is never installed: Pi would keep the credential
- * in settings.json and, for a scheme-less `git:` source, in the clone
- * folder's name, and git would print that folder.
+ * Why `extension install` refuses a source, decided on what Pi's own package
+ * manager parses from it (`parsed`), never on the raw text, or undefined when
+ * it may be installed. Pi keeps a git source's user info in the clone
+ * folder's name and a query in its path, records the source in settings.json,
+ * and git prints the folder, so a source is refused when:
+ *
+ * - a git source has user info that can hold a secret: a password, any user
+ *   name on an `http(s)://` URL (a token often sits there alone), or an `@`
+ *   anywhere else in its host. An SSH user name (`git@host:owner/repo`,
+ *   `ssh://deploy@host/...`) is an account, not a secret, and is allowed;
+ * - a git source has a query string (it can carry a token, and Pi keeps it in
+ *   the folder name). A `#ref` or `@ref` pins a ref and is allowed;
+ * - an `npm:` source's version is a URL with user info or a query;
+ * - Pi reads it as a local path although it starts with a scheme (`HTTPS://`,
+ *   `git+https://`, `github:`, a `git:` form its parser rejects): Pi would
+ *   look for a folder of that name and print it in its error.
  */
-export function carriesCredential(source: string): boolean {
-	const trimmed = source.trim();
-	return !isLocalSource(trimmed) && redactSecrets(trimmed) !== trimmed;
+/**
+ * The exact credential text in a parsed source: user info that can hold a
+ * secret (with its `@`) and query strings (with their `?`). Printing a source,
+ * or a folder Pi named after it, hides these.
+ */
+export function credentialParts(parsed: ParsedSource): string[] {
+	const parts: string[] = [];
+	const fromUrl = (url: string, allowSshUser: boolean) => {
+		const found = urlParts(url);
+		if (
+			found?.userinfo !== undefined &&
+			(/[:@]/.test(found.userinfo) ||
+				!(allowSshUser && SSH_SCHEMES.has(found.scheme)))
+		) {
+			parts.push(`${found.userinfo}@`);
+		}
+		const query = /\?[^#\s]*/.exec(url);
+		if (query !== null) {
+			parts.push(query[0]);
+		}
+	};
+	if (parsed.type === "git") {
+		const at = parsed.host.lastIndexOf("@");
+		if (at !== -1) {
+			parts.push(parsed.host.slice(0, at + 1));
+		}
+		fromUrl(parsed.repo, true);
+		const query = /\?[^#\s/]*/.exec(parsed.path);
+		if (query !== null) {
+			parts.push(query[0]);
+		}
+	} else if (parsed.type === "npm") {
+		fromUrl(parsed.version ?? "", false);
+	}
+	return [...new Set(parts)]
+		.filter((part) => part !== "@" && part !== "?")
+		.sort((a, b) => b.length - a.length);
+}
+
+/** `text` with each credential part shown as `***`. */
+export function hideParts(text: string, parts: readonly string[]): string {
+	let result = text;
+	for (const part of parts) {
+		result = result.replaceAll(part, part.startsWith("?") ? "?***" : "***@");
+	}
+	return result;
+}
+
+export function sourceProblem(
+	raw: string,
+	parsed: ParsedSource,
+): string | undefined {
+	const shown = redactSecrets(hideParts(raw.trim(), credentialParts(parsed)));
+	const credential = `${shown} carries a credential (a user name, password or token in the source). review-panel does not install it, so the credential never lands in settings.json, a folder name or the output. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.`;
+	const query = `${shown} has a query string, which can carry a token and which Pi would keep in the clone folder's name; review-panel does not install it. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).`;
+	switch (parsed.type) {
+		case "local":
+			return /^\s*[a-z][a-z0-9+.-]+:/i.test(raw)
+				? `${shown} is not a source Pi can read: it would look for a local folder of that name. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.`
+				: undefined;
+		case "npm": {
+			const url = urlParts(parsed.version ?? "");
+			if (url?.userinfo !== undefined) {
+				return credential;
+			}
+			return url?.query ? query : undefined;
+		}
+		case "git": {
+			if (parsed.repo.includes("?") || parsed.path.includes("?")) {
+				return query;
+			}
+			if (parsed.host.includes("@")) {
+				return credential;
+			}
+			const url = urlParts(parsed.repo);
+			if (url !== undefined) {
+				if (url.userinfo === undefined) {
+					return undefined;
+				}
+				return /[:@]/.test(url.userinfo) || !SSH_SCHEMES.has(url.scheme)
+					? credential
+					: undefined;
+			}
+			// scp-style SSH (user@host:path): the user is an account.
+			const scp = /^([^@\s/:]+)@[^@\s/:]+:/.exec(parsed.repo);
+			if (scp !== null) {
+				return undefined;
+			}
+			return parsed.repo.includes("@") ? credential : undefined;
+		}
+	}
 }
 
 function redactedExtension(entry: InstalledExtension): InstalledExtension {
@@ -316,7 +440,9 @@ export function absoluteSource(
 	home: string,
 ): string {
 	const trimmed = source.trim();
-	if (/^(npm|git|github|http|https|ssh|builtin):/.test(trimmed)) {
+	// Anything with a scheme (any case; `file:` aside) goes to Pi as given, and
+	// install refuses what Pi cannot read (`sourceProblem`).
+	if (/^[a-z][a-z0-9+.-]+:/i.test(trimmed) && !/^file:/i.test(trimmed)) {
 		return trimmed;
 	}
 	if (/^[^\s/:@]+@[^\s/:]+:/.test(trimmed)) {
@@ -676,10 +802,9 @@ export async function installExtension(input: {
 	signal?: AbortSignal;
 }): Promise<string> {
 	const source = absoluteSource(input.source, input.cwd, input.home);
-	if (carriesCredential(source)) {
-		throw new SetupError(
-			`${redactSecrets(source)} carries a credential (a password or token in the source). review-panel does not install it, so the credential never lands in settings.json, a folder name or the output. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.`,
-		);
+	const problem = sourceProblem(source, await input.sdk.parseSource(source));
+	if (problem !== undefined) {
+		throw new SetupError(problem);
 	}
 	const shownSource = redactSecrets(source);
 	let installed: InstalledExtension;

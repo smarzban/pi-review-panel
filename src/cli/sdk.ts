@@ -18,6 +18,7 @@ import type { AuthInteraction } from "./sdk-types.js";
 import {
 	type CatalogModel,
 	type InstalledExtension,
+	type ParsedSource,
 	type ProviderLogin,
 	type ProviderRow,
 	redactSecrets,
@@ -415,6 +416,23 @@ export const realSetupSdk: SetupSdk = {
 			);
 		}
 		return found;
+	},
+	async parseSource(source) {
+		const sdk = await loadSdk();
+		// The same parse `pi install` runs (npm spec, local path or Pi's git URL
+		// parser). It is not exported, so it is reached on a manager that
+		// touches no folder; the bundled SDK is pinned, and tests cover the forms.
+		const manager = new sdk.DefaultPackageManager({
+			cwd: path.sep,
+			agentDir: path.sep,
+			settingsManager: sdk.SettingsManager.inMemory({}),
+		}) as unknown as { parseSource?: (source: string) => ParsedSource };
+		if (typeof manager.parseSource !== "function") {
+			throw new Error(
+				"the bundled Pi SDK no longer parses package sources the way this version expects",
+			);
+		}
+		return manager.parseSource(source);
 	},
 	async removeExtension(input) {
 		const { settingsManager, manager } = packageManager(

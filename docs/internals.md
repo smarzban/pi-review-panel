@@ -112,12 +112,16 @@ gives no handle on its git or npm, so this is what stops it from recording a sou
 stop; the install's message reads `settings.json` to say whether it already had); the per-group timer stays referenced while it waits (an extension that awaits a promise
 that never settles holds no handle, and an unreferenced timer would let Node end the process
 with the top-level await unsettled). Install and remove set `GIT_TERMINAL_PROMPT=0`. `extension
-install` refuses a non-local source that carries a credential (`carriesCredential`: anything
-`redactSecrets` would change) before the package manager runs, because Pi's generic Git parser
-keeps a scheme-less source's user info in the clone folder's host segment and a query in its
-path, stores the source in `settings.json`, and git prints the folder. Every printed source and
-path, `--json` included, still goes through `redactSecrets` for sources recorded earlier; the
-package manager gets the source as given.
+install` refuses a source on what Pi's own package manager parses from it (`sourceProblem` over
+`DefaultPackageManager.parseSource`, the parse `pi install` runs), before the package manager
+runs, because Pi's generic Git parser keeps a scheme-less source's user info in the clone
+folder's host segment and a query in its path, stores the source in `settings.json`, and git
+prints the folder. Refused: a git source with user info that can hold a secret (a password, any
+user name on `http(s)://`, an `@` in the parsed host; an SSH user is allowed), any query on a
+git source, an `npm:` URL version with user info or a query, and a source with a scheme that Pi
+parses as a local path. Printed text goes through `redactSecrets` (source strings only) and,
+for a recorded source, `hideParts` with the credential parts of its parse; the package manager
+gets the source as given.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
@@ -242,6 +246,11 @@ Verified against the bundled 1.5.2 SDK.
   agent folder as that `cwd`. `resolve(onMissing)` installs nothing when `onMissing` answers
   `"skip"` for user-scope sources. `git` and `npm` run with `stdio: "inherit"`
   (`takeOverStdout` is not exported).
+- `DefaultPackageManager.parseSource` (not exported; reached on a manager built over an
+  in-memory settings manager) trims after `git:`, falls back to a local path for anything its
+  npm and git parsers reject (uppercase `HTTPS://`, `git+https://`, `github:`, some `git:` forms),
+  splits a trailing `@ref` or `#ref` off `repo`, and for a scheme-less non-hosted source builds
+  `https://<rest>` with the user info and port in `host`.
 - An extension path given to the resource loader as a `git:` or `npm:` source is a temporary
   package that is refreshed from the network on every load, so a roster row names the
   installed entry file, never a source.

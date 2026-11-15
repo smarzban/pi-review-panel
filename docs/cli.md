@@ -262,14 +262,26 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
   appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   any value in a `call` object, such as `repository` or `priorRunId`, and the source of
-  `extension install` or `remove`. `extension install` refuses a source that carries a
-  credential: the user info of an `https://` URL, a password in any other URL, a scheme-less
-  `git:user:token@host/...` or `git:token@host/...`, or a query parameter named like a secret
-  (`?private_token=...`). Pi would store it in `settings.json`, name the clone folder after it
-  and git would print that folder. Give git the token through a credential helper, use an SSH
-  source (`git:git@host:owner/repo`), or put an npm token in `.npmrc`. As a second guard, every
-  printed source and path (progress, result, list, `models`, errors and `--json`) shows such a
-  credential as `***`, for a source that Pi or an earlier version recorded.
+  `extension install` or `remove`. `extension install` decides on what Pi's own package
+  manager parses from the source (the same parse `pi install` runs) and refuses, before
+  anything is cloned or recorded:
+  - a git source with user info that can hold a secret: a password, any user name on an
+    `http(s)://` URL (a token often sits there alone, as in `https://<token>@host/...`), or a
+    scheme-less `git:user:token@host/...` / `git:token@host/...` however it is spaced, cased or
+    ported. An SSH user name (`git:git@host:owner/repo`, `ssh://deploy@host/...`) is an
+    account, not a secret, and installs;
+  - a git source with any query string (`?...`); pin a ref with `@<ref>` or `#<ref>` instead
+    (`git:host/owner/repo@release/1.0` installs);
+  - an `npm:` source whose version is a URL with user info or a query;
+  - a source with a scheme that Pi cannot read as git or npm (`HTTPS://...`, `git+https://...`,
+    `github:...`): Pi would look for a local folder of that name and print it.
+
+  Pi would store such a source in `settings.json`, name the clone folder after the credential,
+  and git would print that folder, so the refusal is what keeps a credential out of git's and
+  npm's own output, which passes through unchanged. Give git the token through a credential
+  helper, use an SSH source, or put an npm token in `.npmrc`. review-panel's own lines
+  (progress, result, list, `models`, errors and `--json`) also show a credential as `***`, for
+  a source that Pi or an earlier version recorded.
 
 | Exit code | Meaning |
 |---|---|
