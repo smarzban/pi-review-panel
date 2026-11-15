@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The skill is about 1.2 KB shorter: it no longer repeats what the command's own report and refusals say (the record-key check, how groups are laid out, what each PR comment holds, resume's refusal list).
 - A review's reply says why each lost seat was lost, one line per seat under `Lost:` (`- sol/holistic: 401 unauthorized`), cut at 200 characters. The reason was only in `report.md`. The PR comment still names the seats alone.
 - The publish workflow installs the packed tarball and runs it (`npm run smoke:installed`) before it publishes, and refuses a tag whose commit is not on `main`. CI and publish use the same action versions.
 - Every review lens ends with one shared closing rule, pinned by a test so the copies cannot drift. It now asks for issues the change introduces, including in code it does not touch (it said "in the changed code"), and says what high, medium and low mean: high for lost or corrupted data, a security hole or a broken main path; medium for a wrong result or a failure on a reachable side path; low for the rest. A lens that sets its own severity, as `tests` does, keeps it. The skill states the same scale.
