@@ -35,7 +35,8 @@ review) `plan.mac` check out with the owner's key, which they never create, the 
 an unsigned, foreign, copied or pre-signing record is refused with "run a new review", before any
 seat runs or post. They use only the bytes they authenticated (the close-out card and G-ids too).
 Review and resume reply and post the findings the run stamped, never `findings.json` read back.
-`groups.mac` binds the run id, the plan's MAC and the exact `findings.json` bytes it grouped.
+A review's groups live only in its signed `execution.json` (`grouping`); there is no
+`groups.json` or `groups.mac` any more, and one left in an older record is never read.
 Verify reads those trees and writes only its posting claims and markers into the review's record
 (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
@@ -81,15 +82,16 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Grouping (`src/run/grouping.ts`) only groups. With `defaults.consolidator` set and two or more
   findings, one grouping seat runs after every reviewer settles, on the same snapshot with the
   read-only tools and `submit_groups`, which refuses any submission that does not place every F-id
-  in exactly one group. It never drops, rewrites or re-rates a finding: `groups.json` holds ids
+  in exactly one group. It never drops, rewrites or re-rates a finding: the groups hold ids
   only, every member keeps its F-id, seat, stated severity and evidence, and a group shows the
   highest severity a seat stated. Groups are numbered `G-1`, … by that severity, then the lowest
   member F-id; size never ranks and is never shown as agreement. A failed, invalid or timed-out
   grouping keeps the flat list and adds `Lost: grouping (<roster id>, <class>)`. The grouping seat
   is not a reviewer: it is never in `outcomes`, a vote count or lost reviewer coverage. G-ids in
-  `keptFindingIds`, `dismissed` and `lowAdvisory` expand to F-ids before any seat runs, only from a
-  `groups.json` with a valid `groups.mac` that groups every F-id once; verify itself sees F-ids.
-  Resume always runs the grouping step again, and a run removes any earlier `groups.json` first.
+  `keptFindingIds`, `dismissed` and `lowAdvisory` expand to F-ids before any seat runs, only from
+  the grouping the review's signed `execution.json` records (the one its reply showed), and only
+  when it grouped every F-id once; no grouping step or a lost grouping refuses G-ids. Verify itself
+  sees F-ids. Resume always runs the grouping step again and rewrites `execution.json`.
   Audit never groups.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.

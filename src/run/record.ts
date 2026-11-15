@@ -96,8 +96,6 @@ export const RECORD_OUTPUT_FILES = [
 	"findings.json",
 	"meta.json",
 	"cleanup-error.txt",
-	"groups.json",
-	"groups.mac",
 	RECORD_MAC_FILE,
 ] as const;
 

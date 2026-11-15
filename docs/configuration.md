@@ -157,22 +157,23 @@ as one row with both ids. The summary line counts both (`8 findings in 5 groups`
 line names the grouping seat (`grouping (claude)`). A group too long for the PR comment posts its header and the
 members that fit, then a line counting the members left out (all of them are in `report.md`), and
 the groups after it still post when they fit. `findings.json` stays the flat stamped list.
-The groups go in `groups.json` beside it: `version`, `runId`, the grouping seat (`rosterId`,
-`provider`, `model`) and `groups`, each `{ "id": "G-1", "findingIds": ["F-1", "F-3"] }`. A review
-signed with the record key also writes `groups.mac`, the MAC of the exact `groups.json` bytes, bound to
-the run id, the plan's MAC and the SHA-256 of the exact `findings.json` bytes it grouped.
-`execution.json` records the grouping seat's timing and outcome under `grouping`, and the reply's
-time and cost include it.
+The groups are recorded in one place, `execution.json`, under `grouping`: the grouping seat, its
+timing and its outcome, which for a grouping that worked holds `groups`, each
+`{ "id": "G-1", "findingIds": ["F-1", "F-3"] }`. `record.mac` signs it with the rest of the
+finished record, so it is the grouping the reply and the PR comment showed. No other file holds
+groups: the `groups.json` and `groups.mac` that earlier releases wrote are neither written nor read,
+and one left in an older record is ignored. The reply's time and cost include the grouping seat.
 
 If the grouping seat fails, times out, runs out of budget or never submits a valid grouping, the
-review keeps the flat list and adds one line, `Lost: grouping (<roster id>, <failure class>)`. No
-`groups.json` is written.
+review keeps the flat list and adds one line, `Lost: grouping (<roster id>, <failure class>)`.
+`execution.json` records the grouping as lost, with no groups.
 
 `verify` (`keptFindingIds`, `dismissed`, `lowAdvisory`) and `comment` (`dismissed`, `lowAdvisory`)
 accept G-ids as well as F-ids. A G-id stands for all of its member F-ids, and a G-id in `dismissed`
-gives its reason to each member. The G-ids are checked against `groups.json` before any seat runs:
-it must carry a valid `groups.mac` from the owner's record key and group exactly the F-ids in
-`findings.json`, or G-ids are refused and the message asks for F-ids. An id that names neither a
+gives its reason to each member. The G-ids are checked before any seat runs against the grouping
+the review's signed `execution.json` records: it must have grouped exactly the F-ids in
+`findings.json`, each once. A review with no grouping step or a lost grouping has no G-ids, so they
+are refused, and the message says why and asks for F-ids. An id that names neither a
 finding nor a group is refused as before, and so is a list that names one F-id twice, such as
 a G-id and one of its own members. Verify itself still checks F-ids, so the verify comment
 and the close-out card list F-ids.
@@ -196,11 +197,10 @@ with a key only the owner holds:
   `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
   It never lives in the reviewed repository, and nothing secret is written to the record.
 - The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
-- It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`), a review's grouping
-  (`groups.mac`, the MAC of the exact `groups.json` bytes bound to the run id, the plan's MAC and the
-  `findings.json` bytes it grouped, so a grouping made before a resume regrouped cannot be put
-  back), and every finished
-  review and verify record (`record.mac`, written just before `COMPLETE`).
+- It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`), and every finished review
+  and verify record (`record.mac`, written just before `COMPLETE`, which covers a review's
+  grouping in `execution.json`). It also signs the posted markers of PR rounds (see
+  [Posting rounds to the pull request](#posting-rounds-to-the-pull-request)).
 - A key that is a symlink, not a regular file, readable by group or other users, owned by another
   user, not exactly 32 bytes, or inside the reviewed repository is refused, and so is the run that
   needs it. So is a key folder that other users can write, sticky bit or not: whoever can write the
@@ -293,8 +293,8 @@ Resume takes the run lock before it re-reads the record, pins the recorded head 
 the planned seats with no settled outcome, then writes `panel.json` (from the signed plan),
 `execution.json`, `report.md`, `findings.json`, `meta.json`, `record.mac` and `COMPLETE` as a first
 run would, so a resumed review can be verified. With a `consolidator` set, the
-grouping step runs again at the end over the finished list, so `groups.json` always matches the
-final F-ids. The report has a "Resumed run"
+grouping step runs again at the end over the finished list, and the grouping `execution.json`
+records (none, without a `consolidator`) always matches the final F-ids. The report has a "Resumed run"
 section naming the seats kept, the seats run again and the seats lost, and `execution.json` lists
 the re-run seats under `resumedSeats`. Resume refuses a complete record, an unknown run, a record
 whose `run.lock` names a live process, a record with no `plan.json` (a run that stopped before its
@@ -345,8 +345,8 @@ key:
 - Records written before records were signed have no `record.mac`, and cannot be told apart from
   planted ones, so they are refused too: run a new review.
 
-When a call names a G-id, the review's `groups.mac` is checked as well, and G-ids are refused,
-asking for F-ids, when it does not check out.
+When a call names a G-id, it expands only from the grouping in the review's signed
+`execution.json`; G-ids are refused, asking for F-ids, when that grouping is absent or lost.
 
 Two readers of the record are not covered: a review's persistence flags (which earlier findings
 look repeated) and the verify round number in a PR comment still count unsigned earlier records.

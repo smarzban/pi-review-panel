@@ -39,11 +39,7 @@ import {
 	ROUND_DEADLINE_MS,
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
-import {
-	signGroups,
-	signReviewRecord,
-	TEST_RECORD_KEY,
-} from "./fixtures/record-key.js";
+import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import {
 	createSdkReviewRunner,
 	SDK_FINDING,
@@ -789,19 +785,26 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			];
 			writeReviewRecord(repo, REVIEW_ID, rows);
 			const recordPath = path.join(repo, ".review-panel", "runs", REVIEW_ID);
+			// The grouping the review recorded, signed in execution.json.
 			writeFileSync(
-				path.join(recordPath, "groups.json"),
-				`${JSON.stringify({
-					version: 1,
-					runId: REVIEW_ID,
-					groups: [
-						{ id: "G-1", findingIds: ["F-1"] },
-						{ id: "G-2", findingIds: ["F-2", "F-3"] },
-						{ id: "G-3", findingIds: ["F-4", "F-5"] },
-					],
-				})}\n`,
+				path.join(recordPath, "execution.json"),
+				JSON.stringify({
+					cancelled: false,
+					lostCoverage: [],
+					outcomes: [],
+					grouping: {
+						outcome: {
+							kind: "grouped",
+							groups: [
+								{ id: "G-1", findingIds: ["F-1"] },
+								{ id: "G-2", findingIds: ["F-2", "F-3"] },
+								{ id: "G-3", findingIds: ["F-4", "F-5"] },
+							],
+						},
+					},
+				}),
 			);
-			signGroups(recordPath);
+			signReviewRecord(recordPath);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
