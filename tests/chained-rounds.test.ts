@@ -727,7 +727,13 @@ describe("the final check before the card (S-6)", () => {
 		const v3 = await lastRound({ items: [], regressions: [UNDONE] });
 		expect(closeouts()).toEqual([]);
 		const check = posted().at(-1) as string;
-		expect(check.split("\n")[0]).toBe("## Review panel · verify 4");
+		expect(check.split("\n").slice(0, 5)).toEqual([
+			"## Review panel · verify 4",
+			`\`${commits[1]?.slice(0, 7)}\` → \`${commits[4]?.slice(0, 7)}\``,
+			"1/1 voted · no kept ids · 1 regression",
+			"**Seats:** fix-verification (terra)",
+			"**Final check:** the whole change, from the reviewed head, for fixes that no longer hold or conflict",
+		]);
 		expect(check).toContain("**Open after this round:** V4-R1");
 		expect(check).toContain("V4-R1");
 		expect(check).toContain("undoes");
