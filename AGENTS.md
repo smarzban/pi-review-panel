@@ -143,8 +143,10 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   counts only complete verify records signed with that key (`record.mac`) whose signed meta names
   the review and that hold a signed `round.posted`. Claims are not signed: a planted stale-looking
   `round-<N>.claim` is skipped and bumps `verify N`, a planted live-looking claim can stop an
-  automatic post (never forge one or post a second card), and deleting genuine markers can repeat
-  a `verify N`; these are documented limits. The close-out posts
+  automatic post, as can five planted stale-looking close-out claims (`comment` still works; never
+  forge one or post a second card), deleting genuine markers can repeat a `verify N`, and markers
+  written before signing count as none, so a PR reviewed before this change can see its `verify N`
+  numbering start again; these are documented limits. The close-out posts
   at most once per review, with two exceptions set aside: a crash between GitHub accepting the
   card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
   whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a

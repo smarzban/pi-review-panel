@@ -3702,6 +3702,30 @@ describe("T502: the round number and the close-out read only signed records and 
 		).toEqual(["## Review panel · verify 1"]);
 	});
 
+	it("counts a genuine signed, posted verify of this review (control for the edited-meta case)", async () => {
+		expect(
+			await headingAfter((repo) => writeVerifyRecord(repo, "v-1", REVIEW_ID)),
+		).toEqual(["## Review panel · verify 2"]);
+	});
+
+	it("a genuine signed verify of another review, its meta.json edited to name this review, does not change N", async () => {
+		// The record keeps its own signed round.posted, so only the record
+		// signature over meta.json can refuse it.
+		expect(
+			await headingAfter((repo) => {
+				writeVerifyRecord(repo, "v-1", "another-review");
+				writeFileSync(
+					path.join(repo, ".review-panel", "runs", "v-1", "meta.json"),
+					JSON.stringify({
+						runId: "v-1",
+						kind: "verify",
+						priorRunId: REVIEW_ID,
+					}),
+				);
+			}),
+		).toEqual(["## Review panel · verify 1"]);
+	});
+
 	it("a planted round-1.posted in the review record neither skips verify 1 nor stays, and the next verify is verify 2", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
