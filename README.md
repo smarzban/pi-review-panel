@@ -38,7 +38,7 @@ What you get instead:
 - **Each round on the PR.** When the head is an open PR, the review and each
   verify post a new comment there. The close-out card is posted once, at the end,
   when asked (`verify --close-out` when nothing is left open, or `comment` when the
-  owner stops the rounds): counts by severity, each id with the verify round that
+  owner stops the rounds), after one final check of the whole change: counts by severity, each id with the verify round that
   resolved it or listed as still open, the verify seats, dismissals with reasons,
   leftover lows, and links to the review and verify comments. Never “fixed”, never
   “ready to merge.” Turn it off per run

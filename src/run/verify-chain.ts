@@ -71,6 +71,12 @@ export type ChainLink = {
 	seats: ChainSeat[];
 	/** Seats that were lost, as `rosterId/lens`. */
 	lost: string[];
+	/**
+	 * The final check before the card: the review head to this link's head,
+	 * no kept ids, every resolved id under the undo guard. What it finds is a
+	 * regression like any round's.
+	 */
+	final?: true;
 };
 
 /** Where an id stands after the chain's last link. */
@@ -314,6 +320,7 @@ export type LinkParts = {
 	dismissed?: readonly JudgmentRow[];
 	lowAdvisory?: readonly string[];
 	outcomes: unknown;
+	final?: true;
 };
 
 /**
@@ -340,6 +347,7 @@ export function makeLink(parts: LinkParts): ChainLink {
 		regressions: regressionsOf(parts.outcomes, parts.link),
 		seats: votedSeatsOf(parts.outcomes),
 		lost,
+		...(parts.final === true ? { final: true as const } : {}),
 	};
 }
 
@@ -378,6 +386,7 @@ export function rawLinkOf(
 		dismissed: judgmentRows(verification.dismissed),
 		lowAdvisory: stringList(verification.lowAdvisory),
 		outcomes: verification.outcomes,
+		...(meta.final === true ? { final: true as const } : {}),
 	};
 }
 

@@ -440,7 +440,15 @@ function verifyRun(
 	regressions: Array<{ title: string; file: string; evidence?: string }> = [],
 	onCall?: () => void,
 ) {
-	return async (input: { headRevision: string; seats?: string[] }) => {
+	return async (input: {
+		headRevision: string;
+		seats?: string[];
+		final?: true;
+	}) => {
+		if (input.final === true) {
+			// The final check before the card finds nothing here.
+			return finalCheckFound(repo, `${runId}-final`, priorRunId, input);
+		}
 		onCall?.();
 		const recordPath = path.join(repo, ".review-panel", "runs", runId);
 		mkdirSync(recordPath, { recursive: true });
@@ -1513,7 +1521,11 @@ function verifyRunSeats(
 	kept: Row[],
 	votes: SeatVote[],
 ) {
-	return async (input: { headRevision: string }) => {
+	return async (input: { headRevision: string; final?: true }) => {
+		if (input.final === true) {
+			// The final check before the card finds nothing here.
+			return finalCheckFound(repo, `${runId}-final`, priorRunId, input);
+		}
 		const recordPath = path.join(repo, ".review-panel", "runs", runId);
 		mkdirSync(recordPath, { recursive: true });
 		// `v-2` is the second link of its chain: its round is verify 2.
@@ -1560,6 +1572,50 @@ function verifyRunSeats(
 				};
 			}),
 		} as unknown as RunVerifyResult;
+	};
+}
+
+/** A final check's result: one seat voted, with the regressions given. */
+function finalCheckFound(
+	repo: string,
+	runId: string,
+	priorRunId: string,
+	input: { headRevision: string },
+	regressions: number = 0,
+): RunVerifyResult {
+	const recordPath = path.join(repo, ".review-panel", "runs", runId);
+	mkdirSync(recordPath, { recursive: true });
+	return {
+		recordPath,
+		priorRunId,
+		priorHeadOid: "a".repeat(40),
+		headOid: input.headRevision,
+		kept: [],
+		final: true,
+		outcomes: [
+			{
+				seat: {
+					rosterId: "terra",
+					provider: "openai-codex",
+					model: "gpt-5.6-terra",
+					lens: "fix-verification",
+					lensPrompt: "",
+				},
+				outcome: {
+					kind: "voted",
+					result: {
+						items: [],
+						regressions: Array.from({ length: regressions }, (_, index) => ({
+							regressionId: `R-${index + 1}`,
+							title: "broke",
+							file: "src/c.ts",
+							line: 1,
+							evidence: "e",
+						})),
+					},
+				},
+			},
+		],
 	};
 }
 
@@ -2630,7 +2686,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 						"utf8",
 					),
 				),
-			).toMatchObject({ verifyRunId: "v-1" });
+			).toMatchObject({ verifyRunId: "v-1-final" });
 		});
 	});
 
@@ -3395,6 +3451,8 @@ describe("T498: readable PR comments", () => {
 			);
 			const [verify, card] = posts(gh.calls).map(bodyOf);
 			const marker = `<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN} -->`;
+			// The card is built after the final check, and names it.
+			const cardMarker = `<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN}-final -->`;
 			expect(verify).toBe(
 				[
 					"## Review panel · verify 1",
@@ -3419,6 +3477,7 @@ describe("T498: readable PR comments", () => {
 					"**2 findings** (1 high, 1 medium) · **1 resolved** in 1 verify round · 1 dismissed",
 					"**Review seats:** holistic (terra)",
 					"**Verified by:** fix-verification (terra)",
+					"**Final check:** verify 2, from the reviewed head to the final head",
 					`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`${head.slice(0, 7)}\` · [verify 1](https://github.com/smarzban/demo/pull/12#issuecomment-101)`,
 					"",
 					"- **F-1 [high]** F-1 title · resolved in verify 1",
@@ -3426,7 +3485,7 @@ describe("T498: readable PR comments", () => {
 					"### Dismissed",
 					"- **F-2** F-2 title — by design (ADR 4)",
 					"",
-					marker,
+					cardMarker,
 				].join("\n"),
 			);
 			for (const body of [verify, card]) {
@@ -3584,8 +3643,8 @@ describe("T502: the round number and the close-out read only signed records and 
 				/^PR close-out: posted to #12/,
 			);
 			expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({
-				verifyRunId: "v-1",
-				mac: testPostedMac(REVIEW_ID, CLOSEOUT_POSTED_MARKER, "v-1"),
+				verifyRunId: "v-1-final",
+				mac: testPostedMac(REVIEW_ID, CLOSEOUT_POSTED_MARKER, "v-1-final"),
 			});
 			// The signed marker now stops a later verify.
 			const again = await verifyOnce(repo, gh, "v-2", clean);
@@ -3780,6 +3839,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 2 verify rounds · 1 left as low/advisory",
 					"**Review seats:** holistic (terra)",
 					"**Verified by:** fix-verification (glm, terra)",
+					"**Final check:** verify 3, from the reviewed head to the final head",
 					`${rangeOf(repo)} · [review](${PR}#issuecomment-5) · [verify 1](${PR}#issuecomment-6) · [verify 2](${PR}#issuecomment-101)`,
 					"",
 					"- **F-1 [high]** auth bypass · resolved in verify 2",
@@ -3788,7 +3848,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					"### Low / advisory (not kept)",
 					"- **F-3** rename helper",
 					"",
-					`<!-- review-panel review=${REVIEW_ID} verify=v-1 -->`,
+					`<!-- review-panel review=${REVIEW_ID} verify=v-1-final -->`,
 				].join("\n"),
 			);
 			expect(card).not.toMatch(/fixed/i);
@@ -3810,7 +3870,10 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 left as low/advisory",
 			);
 			expect(lines[4]).toBe("**Verified by:** fix-verification (terra)");
-			expect(lines[5]).toBe(rangeOf(repo));
+			expect(lines[5]).toBe(
+				"**Final check:** verify 2, from the reviewed head to the final head",
+			);
+			expect(lines[6]).toBe(rangeOf(repo));
 			expect(card).not.toContain("](");
 			expect(card).toContain(
 				"- **F-1 [high]** auth bypass · resolved in verify 1",
@@ -3939,6 +4002,11 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				},
 				{
 					deps: deps(gh.runGh, {
+						// These records' heads are not commits here: the final
+						// check is answered without a record, so the card is the
+						// chain as these tests wrote it.
+						runVerify: async (input) =>
+							finalCheckFound(repo, "unrecorded", REVIEW_ID, input),
 						postComment: (input) =>
 							postCloseoutComment({
 								...input,
@@ -4000,6 +4068,11 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				},
 				{
 					deps: deps(gh.runGh, {
+						// These records' heads are not commits here: the final
+						// check is answered without a record, so the card is the
+						// chain as these tests wrote it.
+						runVerify: async (input) =>
+							finalCheckFound(repo, "unrecorded", REVIEW_ID, input),
 						postComment: (input) =>
 							postCloseoutComment({
 								...input,

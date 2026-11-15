@@ -176,8 +176,22 @@ and releases the claim in a `finally`, signed or not. Staleness is the posting-c
 or this host's pid gone); a stale generation stays and the next is tried (at most 100), so a
 crash never ends the chain. The fork refusal in `loadVerifyChain` stays as a backstop: a verify
 paused for over 65 s (a sleeping laptop, a stopped process) has a claim that looks stale, so a
-second verify can claim the next generation and both can sign. `comment` reads no claim, only
-signed records.
+second verify can claim the next generation and both can sign. `comment` reads no claim; it
+takes one only through the final check it runs, and a live one refuses it with the holder named.
+
+The final check (S-6) is `runVerify` with `final: true`, from the tip at the tip's head: base is
+the review head, no kept ids, `undoableIds` = every resolved id, one seat
+(`planVerifySeats(config).slice(0, 1)`, never the caller's), the package-owned
+`buildFinalCheckScope` note, and `final: true` in the signed meta (`ChainLink.final`).
+`chainState` needs no new transition: its regressions are open, and resolved ids keep their
+round. `verify --close-out` runs it inside `postVerifyRound`, through `facts.finalCheck`, after
+every refusal that costs no seat; a regression or a lost seat posts the final round and blocks
+the card, a clean one posts no round and the card is built and claimed after it (its marker names
+the final check; the card's links still use the round's own comment URL). `commentAction`
+builds the card once first (its refusals), then runs it when `finalCheckDue` (something resolved,
+and the tip is not a final check that lost no seat), reloads the chain, and rebuilds the card;
+nothing it finds blocks the card. The card shows `**Final check:** verify N` when its last round
+is final, and leaves that round out of the round count.
 
 ## Posted text
 

@@ -81,6 +81,8 @@ import {
 } from "../run/run-verify.js";
 import type { PlannedSeat, RunConfig } from "../run/types.js";
 import {
+	type ChainLink,
+	type ChainState,
 	chainState,
 	defaultKeptIds,
 	judgeRound,
@@ -970,9 +972,74 @@ export async function verifyAction(
 			recordKey: verifyKey,
 			chain: chain.links,
 			...(valid.closeOut === undefined ? {} : { closeOut: valid.closeOut }),
+			...(valid.closeOut === true
+				? {
+						finalCheck: () =>
+							runFinalCheck(
+								resolved,
+								repoDir,
+								config,
+								verifyKey,
+								{
+									runId: path.basename(result.recordPath),
+									headOid: result.headOid,
+								},
+								context.signal,
+							),
+					}
+				: {}),
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));
+}
+
+/**
+ * The final check before the card (S-6): one seat, the owner's first verify
+ * seat, from the review head to the latest verify's head, every resolved id
+ * under the undo guard. It is a signed link of the chain.
+ */
+async function runFinalCheck(
+	resolved: ReturnType<typeof resolveDependencies>,
+	repoDir: string,
+	config: ReturnType<typeof loadOwnerConfig>,
+	key: Buffer,
+	from: { runId: string; headOid: string },
+	signal: AbortSignal | undefined,
+): Promise<RunVerifyResult> {
+	return await resolved.verify(
+		{
+			repoDir,
+			config,
+			priorRunId: from.runId,
+			headRevision: from.headOid,
+			keptFindingIds: [],
+			final: true,
+			...(config.defaults.seatBudgetMs === undefined
+				? {}
+				: { seatBudgetMs: config.defaults.seatBudgetMs }),
+		},
+		{
+			recordKey: key,
+			...(signal === undefined ? {} : { abortSignal: signal }),
+		},
+	);
+}
+
+/**
+ * Whether `comment` runs the final check: some round resolved an id, and
+ * the chain does not already end in a final check that lost no seat.
+ */
+function finalCheckDue(
+	state: ChainState,
+	links: readonly ChainLink[],
+): boolean {
+	const tip = links.at(-1);
+	if (tip?.final === true && tip.lost.length === 0) {
+		return false;
+	}
+	return [...state.items.values()].some(
+		(item) => item.state.status === "resolved",
+	);
 }
 
 /** A refusal worded as comment's own. */
@@ -1004,13 +1071,15 @@ export async function commentAction(
 	);
 	// The card shows where the review's verify chain left every id, from
 	// the owner's signed records only: the chain must be one line of links.
-	let links: ReturnType<typeof loadVerifyChain>;
-	try {
-		links = loadVerifyChain(repoDir, facts.run.runId, commentKey);
-	} catch (error) {
-		throw commentError(error);
-	}
-	const tip = links.at(-1);
+	const chainNow = () => {
+		try {
+			return loadVerifyChain(repoDir, facts.run.runId, commentKey);
+		} catch (error) {
+			throw commentError(error);
+		}
+	};
+	let links = chainNow();
+	let tip = links.at(-1);
 	if (valid.verifyRunId !== undefined) {
 		// A named verify is authenticated as a verify of this review, and
 		// must be the chain's latest: the card is about where the rounds
@@ -1028,10 +1097,10 @@ export async function commentAction(
 			);
 		}
 	}
-	const state = chainState(facts.run.findings, links);
 	// The rounds and the head come from signed records only: the chain's
-	// links, numbered by the posted rounds the review record names.
-	const rounds = chainRounds(links);
+	// links, each numbered by its place.
+	let state = chainState(facts.run.findings, links);
+	let rounds = chainRounds(links);
 	const headOid =
 		tip !== undefined && isOid(tip.headOid)
 			? tip.headOid
@@ -1053,11 +1122,39 @@ export async function commentAction(
 			},
 			...(links === undefined ? {} : { links }),
 		});
-	let body: string;
-	try {
-		body = card();
-	} catch (error) {
-		throw commentError(error);
+	const built = () => {
+		try {
+			return card();
+		} catch (error) {
+			throw commentError(error);
+		}
+	};
+	// Every refusal that costs no seat comes first.
+	let body = built();
+	let latest: string | undefined;
+	if (tip !== undefined && finalCheckDue(state, links)) {
+		// The final check reports and never blocks the owner's card: what it
+		// finds is open on it, and a lost seat is named on `Lost:`.
+		await requireReady(resolved, repoDir);
+		const config = loadOwnerConfig(resolved, repoDir);
+		try {
+			await runFinalCheck(
+				resolved,
+				repoDir,
+				config,
+				commentKey,
+				tip,
+				context.signal,
+			);
+		} catch (error) {
+			throw commentError(error);
+		}
+		links = chainNow();
+		tip = links.at(-1);
+		latest = tip?.final === true ? tip.runId : undefined;
+		state = chainState(facts.run.findings, links);
+		rounds = chainRounds(links);
+		body = built();
 	}
 	const posted = resolved.postComment({
 		repository: repoDir,
@@ -1079,6 +1176,11 @@ export async function commentAction(
 		[
 			`Posted comment on PR #${posted.pr} (${posted.action})`,
 			posted.url,
+			...(latest === undefined
+				? []
+				: [
+						`Latest verify: \`${latest}\` (the final check); verify against it next`,
+					]),
 			"",
 			shown,
 		].join("\n"),

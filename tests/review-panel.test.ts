@@ -30,6 +30,7 @@ import {
 	MAX_PRESENTATION_BYTES,
 	renderReviewProgress,
 } from "../src/tool/review-presentation.js";
+import { unrecordedFinalCheck } from "./fixtures/final-check.js";
 import { createPanelCaller } from "./fixtures/panel-call.js";
 import {
 	signPlan,
@@ -1152,6 +1153,7 @@ describe("the comment action", () => {
 			writeVerifyRecord(repository, "verify-1", ["F-1"]);
 			let body = "";
 			const tool = toolWith({
+				runVerify: unrecordedFinalCheck().runVerify,
 				postComment: (input) => {
 					body = input.body;
 					return {

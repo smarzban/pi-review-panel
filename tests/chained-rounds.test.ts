@@ -255,7 +255,7 @@ function recordOf(reply: string): string {
 /** The manual card, as `comment` would post it. */
 async function stopWith(extra: Record<string, unknown>) {
 	const bodies: string[] = [];
-	await commentAction(
+	const reply = await commentAction(
 		{
 			repoDir: repo,
 			ownerApproved: true,
@@ -279,7 +279,12 @@ async function stopWith(extra: Record<string, unknown>) {
 			},
 		},
 	);
-	return { body: bodies[0] ?? "" };
+	return { body: bodies[0] ?? "", reply: textOf(reply) };
+}
+
+/** The run id a reply names as the latest verify: the final check it ran. */
+function latestOf(reply: string): string {
+	return /^Latest verify: `([^`]+)`/mu.exec(reply)?.[1] ?? "";
 }
 
 function posted(): string[] {
@@ -404,8 +409,12 @@ describe("three chained verify rounds on one PR", () => {
 			"**5 findings** (2 high, 2 medium, 1 low) · **4 resolved** in 3 verify rounds · 1 dismissed · 1 left as low/advisory",
 		);
 		expect(card).not.toMatch(/fixed|ready to merge/iu);
+		// The final check ran from verify 3; the card is for it.
+		expect(card).toContain(
+			"**Final check:** verify 4, from the reviewed head to the final head",
+		);
 		expect(card.split("\n").at(-1)).toBe(
-			`<!-- review-panel review=${REVIEW} verify=${v3.runId} -->`,
+			`<!-- review-panel review=${REVIEW} verify=${latestOf(v3.reply)} -->`,
 		);
 	});
 
@@ -644,17 +653,28 @@ describe("a verify that lost a seat", () => {
 });
 
 describe("the final check before the card (S-6)", () => {
-	/** Verify 3 at fix3, from verify 2: F-2 resolved, nothing left open. */
-	async function lastRound(extra: Record<string, unknown> = {}) {
+	/**
+	 * Verify 3 at fix3, from verify 2, with --close-out: F-2 resolved,
+	 * nothing left open; then `check` is the final check's answer.
+	 */
+	async function lastRound(check: Answer, extra: Record<string, unknown> = {}) {
 		const v1 = await round1();
 		const v2 = await round2(v1.runId);
-		return await verify(
-			{ priorRunId: v2.runId, head: commits[4], closeOut: true, ...extra },
-			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		answers.push({ items: [{ id: "F-2", disposition: "resolved" }] }, check);
+		const reply = textOf(
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: v2.runId,
+					head: commits[4] as string,
+					closeOut: true,
+					...extra,
+				},
+				{ deps: deps() },
+			),
 		);
+		return { reply, runId: recordOf(reply) };
 	}
-	const latestOf = (reply: string) =>
-		/^Latest verify: `([^`]+)`/mu.exec(reply)?.[1] ?? "";
 	const UNDONE: Regression = {
 		file: "src/cache.ts",
 		line: 3,
@@ -664,8 +684,7 @@ describe("the final check before the card (S-6)", () => {
 	};
 
 	it("--close-out checks the review head to the final head once, with one seat, before the card; when it finds nothing the card posts", async () => {
-		answers.push({ items: [] });
-		const v3 = await lastRound();
+		const v3 = await lastRound({ items: [] });
 		const check = specs[3];
 		expect(specs).toHaveLength(4);
 		expect(check?.baseRef).toBe(commits[1]);
@@ -680,12 +699,12 @@ describe("the final check before the card (S-6)", () => {
 		expect(check?.scopingNote).toContain(
 			`Final check of the whole change: ${commits[1]}...${commits[4]}`,
 		);
+		// A clean final check posts no round of its own: the card names it.
 		const headings = posted().map((body) => body.split("\n")[0]);
 		expect(headings).toEqual([
 			"## Review panel · verify 1",
 			"## Review panel · verify 2",
 			"## Review panel · verify 3",
-			"## Review panel · verify 4",
 			"## Review panel · close-out",
 		]);
 		const final = latestOf(v3.reply);
@@ -704,8 +723,7 @@ describe("the final check before the card (S-6)", () => {
 	});
 
 	it("a fix that no longer holds blocks the card, and is posted as a regression with an id; the next verify checks it", async () => {
-		answers.push({ items: [], regressions: [UNDONE] });
-		const v3 = await lastRound();
+		const v3 = await lastRound({ items: [], regressions: [UNDONE] });
 		expect(closeouts()).toEqual([]);
 		const check = posted().at(-1) as string;
 		expect(check.split("\n")[0]).toBe("## Review panel · verify 4");
@@ -724,8 +742,7 @@ describe("the final check before the card (S-6)", () => {
 	});
 
 	it("a lost seat blocks the card, and the reply names comment, which checks again and posts it", async () => {
-		answers.push({ items: [], lost: true });
-		const v3 = await lastRound();
+		const v3 = await lastRound({ items: [], lost: true });
 		expect(closeouts()).toEqual([]);
 		expect(v3.reply).toContain(
 			"PR close-out: not posted (lost verify coverage: terra/fix-verification)",
@@ -798,8 +815,7 @@ describe("the final check before the card (S-6)", () => {
 		});
 		expect(specs).toHaveLength(0);
 		// After a --close-out that ran it, comment runs no seat again.
-		answers.push({ items: [] });
-		await lastRound();
+		await lastRound({ items: [] });
 		expect(specs).toHaveLength(4);
 		const card = await stopWith({});
 		expect(specs).toHaveLength(4);
@@ -890,7 +906,7 @@ describe("comment when the owner stops the rounds", () => {
 	async function stop(extra: Record<string, unknown> = {}) {
 		const bodies: string[] = [];
 		const heads: string[] = [];
-		await commentAction(
+		const reply = await commentAction(
 			{
 				repoDir: repo,
 				ownerApproved: true,
@@ -915,13 +931,13 @@ describe("comment when the owner stops the rounds", () => {
 				},
 			},
 		);
-		return { body: bodies[0] ?? "", head: heads[0] };
+		return { body: bodies[0] ?? "", head: heads[0], reply: textOf(reply) };
 	}
 
 	it("lists what is still open, from the latest verify, never as fixed", async () => {
 		const v1 = await round1();
 		const v2 = await round2(v1.runId);
-		const { body, head } = await stop();
+		const { body, head, reply } = await stop();
 		expect(head).toBe(commits[3]);
 		const lines = body.split("\n");
 		expect(lines).toContain(
@@ -934,8 +950,14 @@ describe("comment when the owner stops the rounds", () => {
 			"- **V1-R1 [regression]** the new key builder drops the null check · resolved in verify 2",
 		);
 		expect(body).not.toMatch(/fixed|ready to merge/iu);
+		// The final check comment ran from verify 2 is the card's verify.
+		const final = latestOf(reply);
+		expect(final).not.toBe(v2.runId);
+		expect(lines).toContain(
+			"**Final check:** verify 3, from the reviewed head to the final head",
+		);
 		expect(lines.at(-1)).toBe(
-			`<!-- review-panel review=${REVIEW} verify=${v2.runId} -->`,
+			`<!-- review-panel review=${REVIEW} verify=${final} -->`,
 		);
 	});
 
@@ -968,8 +990,10 @@ describe("comment when the owner stops the rounds", () => {
 		};
 		const sorted = (line: string) => line.split(", ").sort().join(", ");
 		const v1 = await round1();
-		expect(openSection((await stop()).body)).toBe(sorted(openLine(v1.body)));
-		const v2 = await round2(v1.runId);
+		const first = await stop();
+		expect(openSection(first.body)).toBe(sorted(openLine(v1.body)));
+		// The next verify chains from the final check comment ran.
+		const v2 = await round2(latestOf(first.reply));
 		expect(openSection((await stop()).body)).toBe(sorted(openLine(v2.body)));
 	});
 

@@ -30,6 +30,7 @@ import { runVerify } from "../src/run/run-verify.js";
 import { pinSnapshot } from "../src/run/snapshot.js";
 import { assertFixedResolved } from "../src/tool/closeout-from-run.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
+import { unrecordedFinalCheck } from "./fixtures/final-check.js";
 import {
 	interruptedReviewRecord,
 	plannedSeats,
@@ -376,7 +377,7 @@ describe("comment refuses a record not signed by the owner's key", () => {
 			// The genuine verify record itself is accepted.
 			await commentAction(
 				{ repoDir: repo, ...commentCall("real-1", "v-1") },
-				{ deps: deps({ postComment }) },
+				{ deps: deps({ postComment, ...unrecordedFinalCheck() }) },
 			);
 			expect(bodies).toHaveLength(1);
 		});
@@ -444,11 +445,28 @@ describe("the owner's own records still work", () => {
 				existsSync(path.join(recordOf(repo, verifyId), "record.mac")),
 			).toBe(true);
 			const { bodies, postComment } = poster();
-			await commentAction(
+			// Comment runs the final check before its card, a signed link too.
+			const reply = await commentAction(
 				{ repoDir: repo, ...commentCall(reviewId as string, verifyId) },
-				{ deps: deps({ postComment }) },
+				{
+					deps: deps({
+						postComment,
+						runVerify: (input, options) =>
+							runVerify(input, {
+								...options,
+								runAdvisorySeat: createAdvisorySeatRunner(),
+							}),
+					}),
+				},
 			);
 			expect(bodies).toHaveLength(1);
+			const finalId = /^Latest verify: `([^`]+)`/mu.exec(
+				reply.content[0]?.text ?? "",
+			)?.[1] as string;
+			expect(existsSync(path.join(recordOf(repo, finalId), "record.mac"))).toBe(
+				true,
+			);
+			expect(bodies[0]).toContain("**Final check:** verify 2");
 		});
 	});
 

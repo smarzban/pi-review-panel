@@ -436,6 +436,17 @@ it, against the diff from that verify's head:
    its title, file and the verifier's note, and asked whether the new commits touch or undo any
    of those fixes. A hit is a regression whose `undoes` names that id; the seat's channel
    accepts only those ids there.
+6. The final check, before the close-out card: one more link, run by `verify --close-out` and
+   by `comment`, never named by the caller. One seat (the owner's first `defaults.verifySeats`
+   row, or the first `defaults.seats` row when that is unset; the caller's `seats` are not
+   read) checks the whole change, from the review head to the latest verify's head, with no
+   kept ids and every resolved id under the undo guard: does each fix still hold, and do any
+   two conflict? What it finds is a regression with an id (`V<link>-R<n>`, with `undoes` when
+   it names a fix), open like any round's; it never moves a resolved id. Its record is signed
+   (`final: true` in its `meta.json`), and the next verify chains from it like any link. It
+   runs only when some round resolved an id, and not again while the chain ends in a final
+   check that lost no seat. A clean final check posts no round of its own: the card names it
+   on a `**Final check:**` line and leaves it out of the round count.
 
 Each verify records, in its signed `meta.json`, the review (`priorRunId`, as before), the record
 it chained from (`previousRunId`: the review for the first link) and its place (`link`), and in
@@ -528,14 +539,26 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   seat voted (none was lost), each marked every id it checked resolved, none reported a
   regression, and nothing is open after it: every review finding resolved in some round,
   dismissed or left as low/advisory, and every regression resolved or dismissed. A kept finding
-  of any severity counts as resolved; a kept low need not be listed in `lowAdvisory`. Otherwise
+  of any severity counts as resolved; a kept low need not be listed in `lowAdvisory`. Then,
+  after every check that costs no seat (the verify comment reached a PR, nothing is open, the
+  card is not posted already), it runs the final check (see
+  [Verify rounds chain](#verify-rounds-chain)), and the reply names it:
+  `Final check: verify N reported nothing` and
+  ``Latest verify: `<run id>` (the final check); verify against it next``. A final check that
+  reports a regression or loses its seat blocks the card: its round is posted like any verify
+  round, and the reply says why (`PR close-out: not posted (1 regression)`); after a lost seat
+  the `Final check:` line names `review-panel comment`, which checks again. Otherwise
   only the verify comment is posted, and the reply says why, such as
   `PR close-out: not posted (F-2 is still present)`, `PR close-out: not posted (still open: F-2)`
   or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. Without
   `closeOut`, a verify that leaves nothing open names the command that posts the card:
   `review-panel comment --prior-run-id <review> --owner-approved`, once the owner says the
   rounds are done (a verify cannot be run again at the same head). When the owner
-  stops the rounds with ids still open, `comment` posts the card listing them as open. See
+  stops the rounds with ids still open, `comment` posts the card listing them as open. `comment`
+  runs the final check too, after its own refusals and before the card, when it is due; it
+  reports and never blocks the owner's card: what it finds is listed as open, a lost seat is
+  named on `Lost:`, and the reply names it as the latest verify. A verify running from the
+  chain's latest link refuses it, naming that verify. See
   [The close-out card](#the-close-out-card) for what it shows.
 - The close-out posts at most once per review, by these rules and with the exceptions below:
   - A signed `closeout.posted` in the review's run record means it is posted. The verify does not

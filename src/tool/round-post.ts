@@ -66,7 +66,9 @@ import {
 	CLOSEOUT_POSTED_FILE,
 	claimCloseout,
 	claimRound,
+	closeoutPostedFile,
 	type HeldClaim,
+	isSignedMarker,
 	ROUND_DEADLINE_MS,
 	type RoundClaim,
 	settleCloseout,
@@ -673,6 +675,12 @@ export type VerifyRoundFacts = {
 	 * after it. Never automatic: the owner asks for it.
 	 */
 	closeOut?: boolean;
+	/**
+	 * Runs the final check from this verify (see `RunVerifyInput.final`).
+	 * Called only after every refusal that costs no seat, when the card
+	 * would otherwise post and a round resolved something.
+	 */
+	finalCheck?: () => Promise<RunVerifyResult>;
 };
 
 function runIdOf(recordPath: string): string {
@@ -700,6 +708,7 @@ function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
 			dismissed: facts.dismissed,
 			lowAdvisory: facts.lowAdvisory,
 			outcomes: result.outcomes,
+			...(result.final === true ? { final: true as const } : {}),
 		}),
 	];
 }
@@ -1101,10 +1110,137 @@ export async function postVerifyRound(
 	facts: VerifyRoundFacts,
 ): Promise<string[]> {
 	const { result } = facts;
+	const verify = await postRoundComment(ctx, facts);
+	const lines = [verify.line];
+	if (verify.target === undefined) {
+		// The `PR comment:` line already says why nothing was posted.
+		return lines;
+	}
+	const blocker = closeoutBlocker(result);
+	if (facts.closeOut !== true) {
+		// Never automatic: say so only when it could have been asked for.
+		if (blocker === undefined && stateAfter(facts).open.length === 0) {
+			lines.push(
+				notPosted(
+					"PR close-out",
+					`not asked for; nothing is open: once the owner says the rounds are done, post it with ${commentCommand(facts)}`,
+				),
+			);
+		}
+		return lines;
+	}
+	if (blocker !== undefined) {
+		lines.push(notPosted("PR close-out", blocker));
+		return lines;
+	}
+	let card = buildCloseout(facts);
+	if ("reason" in card) {
+		lines.push(notPosted("PR close-out", card.reason));
+		return lines;
+	}
+	// The card is claimed by the verify it is built after (the final check,
+	// when one ran); it links this round's comment by the URL gh gave.
+	const roundRunId = runIdOf(result.recordPath);
+	let cardRunId = roundRunId;
+	const resolvedSome = [...stateAfter(facts).items.values()].some(
+		(item) => item.state.status === "resolved",
+	);
+	if (facts.finalCheck !== undefined && resolvedSome) {
+		if (
+			isSignedMarker(closeoutPostedFile(card.reviewRecord), facts.recordKey)
+		) {
+			lines.push(
+				notPosted("PR close-out", "this review's close-out is already posted"),
+			);
+			return lines;
+		}
+		// The final check, after every refusal that costs no seat.
+		let checked: RunVerifyResult;
+		try {
+			checked = await facts.finalCheck();
+		} catch (error) {
+			lines.push(
+				notPosted(
+					"PR close-out",
+					`the final check could not run: ${inert(truncateCodePoints(oneLine(errorText(error)), 200))}`,
+				),
+			);
+			return lines;
+		}
+		const finalFacts: VerifyRoundFacts = {
+			...facts,
+			result: checked,
+			panel: checked.outcomes.map((row) => row.seat),
+			dismissed: [],
+			lowAdvisory: [],
+			chain: chainWithOwn(facts),
+		};
+		const finalRunId = runIdOf(checked.recordPath);
+		lines.push(
+			replyLine(finalCheckLine(finalFacts)),
+			replyLine(
+				`Latest verify: \`${finalRunId}\` (the final check); verify against it next`,
+			),
+		);
+		const finalBlocker = closeoutBlocker(checked);
+		if (finalBlocker !== undefined) {
+			// What blocks the card is posted like any round: its regressions
+			// with their ids, or its lost seat. A clean check posts no round
+			// of its own; the card names it.
+			lines.push(
+				(await postRoundComment(ctx, finalFacts)).line,
+				notPosted("PR close-out", finalBlocker),
+			);
+			return lines;
+		}
+		card = buildCloseout(finalFacts);
+		if ("reason" in card) {
+			lines.push(notPosted("PR close-out", card.reason));
+			return lines;
+		}
+		cardRunId = finalRunId;
+	}
+	return [
+		...lines,
+		await postCloseoutCard(
+			card,
+			cardRunId,
+			{ runId: roundRunId, url: verify.url },
+			verify,
+			facts.recordKey,
+		),
+	];
+}
+
+/** The command that posts the card by hand, for the owner to run. */
+function commentCommand(facts: VerifyRoundFacts): string {
+	return `\`review-panel comment --prior-run-id ${facts.result.priorRunId} --owner-approved\``;
+}
+
+/** What the final check reported, for the reply. */
+function finalCheckLine(facts: VerifyRoundFacts): string {
+	const round = roundOf(facts);
+	if (facts.result.outcomes.some((row) => row.outcome.kind === "failed")) {
+		return `Final check: verify ${round} lost its seat, so it checked nothing; check again and post the card with ${commentCommand(facts)}`;
+	}
+	const open = stateAfter(facts).open.filter((id) =>
+		id.startsWith(`V${round}-`),
+	);
+	return open.length === 0
+		? `Final check: verify ${round} reported nothing`
+		: `Final check: verify ${round} reported ${open.join(", ")}, now open`;
+}
+
+/** Posts one verify round's comment, claimed so it posts at most once. */
+async function postRoundComment(
+	ctx: RoundContext,
+	facts: VerifyRoundFacts,
+): Promise<{ line: string; target?: PrTarget; url?: string; gh: Gh }> {
+	const { result } = facts;
 	const verifyRunId = runIdOf(result.recordPath);
 	// One number per round: the verify's place in the review's chain.
 	const round = roundOf(facts);
-	const verify = await postOne(ctx, async () => {
+	return await postOne(ctx, async () => {
 		const claim: RoundClaim | { reason: string } = await claimRound(
 			path.join(ctx.repoDir, ".review-panel", "runs", result.priorRunId),
 			round,
@@ -1132,73 +1268,55 @@ export async function postVerifyRound(
 			},
 		};
 	});
-	const lines = [verify.line];
-	if (verify.target === undefined) {
-		// The `PR comment:` line already says why nothing was posted.
-		return lines;
-	}
-	const blocker = closeoutBlocker(result);
-	if (facts.closeOut !== true) {
-		// Never automatic: say so only when it could have been asked for.
-		if (blocker === undefined && stateAfter(facts).open.length === 0) {
-			lines.push(
-				notPosted(
-					"PR close-out",
-					`not asked for; nothing is open: once the owner says the rounds are done, post it with \`review-panel comment --prior-run-id ${facts.result.priorRunId} --owner-approved\``,
-				),
-			);
-		}
-		return lines;
-	}
-	if (blocker !== undefined) {
-		lines.push(notPosted("PR close-out", blocker));
-		return lines;
-	}
-	const card = buildCloseout(facts);
-	if ("reason" in card) {
-		lines.push(notPosted("PR close-out", card.reason));
-		return lines;
-	}
+}
+
+/**
+ * Claims and posts the close-out card on the PR the round posted to, once
+ * per review, linking the rounds whose comments were found. Returns the
+ * reply line; never throws.
+ */
+async function postCloseoutCard(
+	card: CloseoutCard,
+	verifyRunId: string,
+	round: { runId: string; url?: string | undefined },
+	verify: { target?: PrTarget; gh: Gh },
+	key: Buffer,
+): Promise<string> {
+	const target = verify.target as PrTarget;
 	let claim: HeldClaim | { reason: string };
 	try {
 		claim = await claimReviewCloseout(
 			card,
 			verifyRunId,
 			verify.gh,
-			verify.target,
-			facts.recordKey,
+			target,
+			key,
 		);
 	} catch (error) {
-		lines.push(notPosted("PR close-out", ghReason(error)));
-		return lines;
+		return notPosted("PR close-out", ghReason(error));
 	}
 	if ("reason" in claim) {
-		lines.push(notPosted("PR close-out", claim.reason));
-		return lines;
+		return notPosted("PR close-out", claim.reason);
 	}
 	try {
-		const comments = await listComments(verify.gh, verify.target);
-		if (hasCloseoutFor(comments, verify.target, card.reviewRunId)) {
+		const comments = await listComments(verify.gh, target);
+		if (hasCloseoutFor(comments, target, card.reviewRunId)) {
 			// An automatic close-out is there already (one whose marker a
 			// crash lost): record it, and post nothing.
 			settleCloseout(claim, true);
-			lines.push(
-				notPosted(
-					"PR close-out",
-					`a close-out for this review is already on PR #${verify.target.pr}`,
-				),
+			return notPosted(
+				"PR close-out",
+				`a close-out for this review is already on PR #${target.pr}`,
 			);
-			return lines;
 		}
 		const body = card.render(
-			closeoutLinks(comments, verify.target, card, verifyRunId, verify.url),
+			closeoutLinks(comments, target, card, round.runId, round.url),
 		);
-		const url = await createComment(verify.gh, verify.target, body);
+		const url = await createComment(verify.gh, target, body);
 		settleCloseout(claim, true);
-		lines.push(posted("PR close-out", verify.target, url));
+		return posted("PR close-out", target, url);
 	} catch (error) {
 		settleCloseout(claim, false);
-		lines.push(notPosted("PR close-out", ghReason(error)));
+		return notPosted("PR close-out", ghReason(error));
 	}
-	return lines;
 }

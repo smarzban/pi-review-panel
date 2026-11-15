@@ -23,6 +23,7 @@ import type { Config } from "../src/config/schema.js";
 import type { RunVerifyInput } from "../src/run/run-verify.js";
 import type { RunConfig } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
+import { unrecordedFinalCheck } from "./fixtures/final-check.js";
 import {
 	signReviewRecord,
 	signVerifyRecord,
@@ -615,7 +616,7 @@ describe("comment takes G-ids as well as F-ids", () => {
 					lowAdvisory: ["G-3"],
 					pr: 7,
 				},
-				{ deps: deps({ postComment }) },
+				{ deps: deps({ postComment, ...unrecordedFinalCheck() }) },
 			);
 			const body = bodies[0] ?? "";
 			expect(

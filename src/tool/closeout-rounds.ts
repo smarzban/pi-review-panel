@@ -33,6 +33,7 @@ export function chainRounds(
 		seats: link.seats,
 		resolved: link.resolved,
 		lost: link.lost,
+		...(link.final === true ? { final: true as const } : {}),
 	}));
 }
 

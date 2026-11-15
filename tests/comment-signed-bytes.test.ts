@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { commentAction } from "../src/actions/actions.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
+import { unrecordedFinalCheck } from "./fixtures/final-check.js";
 import {
 	signReviewRecord,
 	signVerifyRecord,
@@ -169,6 +170,7 @@ describe("comment builds its card from the authenticated review bytes (panel P-3
 						env: {},
 						home: "/tmp/comment-signed-bytes-home",
 						recordKey: () => TEST_RECORD_KEY,
+						...unrecordedFinalCheck(),
 						postComment: (input: PostCloseoutInput) => {
 							bodies.push(input.body);
 							return {

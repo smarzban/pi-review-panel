@@ -63,6 +63,13 @@ export type RunVerifyInput = {
 	seats?: string[];
 	scopingNote?: string;
 	seatBudgetMs?: number;
+	/**
+	 * The final check before the card: from the latest verify, at its head,
+	 * against the review head, with no kept ids and every resolved id under
+	 * the undo guard, on one seat (the owner's first verify seat; `seats` is
+	 * not read).
+	 */
+	final?: true;
 };
 
 /**
@@ -94,6 +101,8 @@ export type RunVerifyResult = {
 	kept: VerifyItem[];
 	outcomes: VerifySeatOutcome[];
 	cleanupError?: string;
+	/** This verify was the final check (see {@link RunVerifyInput.final}). */
+	final?: true;
 };
 
 export type VerifyProgressEvent = {
@@ -213,6 +222,44 @@ export function buildVerifyScope(input: {
 		lines.push("", input.extraNote);
 	}
 	return lines.join("\n");
+}
+
+/**
+ * The final check's scope: the whole change, from the review head to the
+ * final head, one question. Package-owned text only.
+ */
+export function buildFinalCheckScope(input: {
+	reviewHeadOid: string;
+	headOid: string;
+	undoable: readonly string[];
+}): string {
+	return [
+		`Final check of the whole change: ${input.reviewHeadOid}...${input.headOid}, from the reviewed head to the final head.`,
+		`Verify rounds marked these ids resolved: ${input.undoable.join(", ")}.`,
+		"For each, check that its fix still holds at the final head. Report each one that does not as a regression whose undoes field is that id.",
+		"Also report any place where two of these fixes conflict, as a regression.",
+		"There are no kept findings to answer. Do not rediscover the original change.",
+	].join("\n");
+}
+
+/** The final check runs from the latest verify, at its head, with no kept ids. */
+function assertFinalCheck(
+	input: RunVerifyInput,
+	previous: ChainLink | undefined,
+): void {
+	if (previous === undefined) {
+		throw new Error(
+			"Verify refused: the final check runs from a verify; this review has none",
+		);
+	}
+	if (input.headRevision !== previous.headOid) {
+		throw new Error(
+			`Verify refused: the final check runs at the latest verify's head, ${previous.headOid}`,
+		);
+	}
+	if (input.keptFindingIds.length > 0) {
+		throw new Error("Verify refused: the final check takes no kept ids");
+	}
 }
 
 /** An id an earlier round resolved, with what the verifier said about it. */
@@ -337,35 +384,58 @@ export async function runVerify(
 	const prior = chain.review;
 	const previous = chain.previous;
 	const link = chain.links.length + 1;
-	// The diff base is the head of the record this verify chains from.
-	const baseOid = previous?.headOid ?? prior.meta.headOid;
+	const final = input.final === true;
+	if (final) {
+		assertFinalCheck(input, previous);
+	}
+	// The diff base is the head of the record this verify chains from; the
+	// final check's is the review head, so it sees the whole change.
+	const baseOid = final
+		? prior.meta.headOid
+		: (previous?.headOid ?? prior.meta.headOid);
 	if (baseOid === input.headRevision) {
 		throw new Error(
 			"Verify refused: head resolves to the same commit as the prior run",
 		);
 	}
-	const dismissed = input.dismissed ?? [];
+	const dismissed = final ? [] : (input.dismissed ?? []);
 	const state = chainState(prior.findings, chain.links);
 	// The first verify's lows that it leaves out are recorded as advisory.
-	const lowAdvisory = judgeRound(
-		state,
-		chain.links,
-		input.keptFindingIds,
-		dismissed,
-		input.lowAdvisory ?? [],
-	);
+	const lowAdvisory = final
+		? []
+		: judgeRound(
+				state,
+				chain.links,
+				input.keptFindingIds,
+				dismissed,
+				input.lowAdvisory ?? [],
+			);
 	const kept = input.keptFindingIds.map((id) =>
 		verifyItemOf(state.items.get(id) as ChainItem),
 	);
 	const undoable = undoableOf(state.items.values(), chain.links);
-	const panel = planVerifySeats(input.config, input.seats);
-	const scope = buildVerifyScope({
-		priorHeadOid: baseOid,
-		headOid: input.headRevision,
-		kept,
-		undoable: undoable.map((row) => row.id),
-		extraNote: input.scopingNote,
-	});
+	if (final && undoable.length === 0) {
+		throw new Error(
+			"Verify refused: no round resolved anything, so the final check has nothing to check",
+		);
+	}
+	// The final check's one seat is the owner's, never the caller's.
+	const panel = final
+		? planVerifySeats(input.config).slice(0, 1)
+		: planVerifySeats(input.config, input.seats);
+	const scope = final
+		? buildFinalCheckScope({
+				reviewHeadOid: baseOid,
+				headOid: input.headRevision,
+				undoable: undoable.map((row) => row.id),
+			})
+		: buildVerifyScope({
+				priorHeadOid: baseOid,
+				headOid: input.headRevision,
+				kept,
+				undoable: undoable.map((row) => row.id),
+				extraNote: input.scopingNote,
+			});
 	const findingData =
 		kept.length === 0 && undoable.length === 0
 			? undefined
@@ -564,6 +634,7 @@ export async function runVerify(
 					priorRunId: prior.runId,
 					previousRunId,
 					link,
+					...(final ? { final: true } : {}),
 				},
 				null,
 				2,
@@ -583,6 +654,7 @@ export async function runVerify(
 			kept,
 			outcomes,
 			...(cleanupError === undefined ? {} : { cleanupError }),
+			...(final ? { final: true as const } : {}),
 		};
 	}
 }

@@ -48,6 +48,8 @@ export type CloseoutVerifyRound = {
 	resolved: ReadonlySet<string>;
 	/** Its verify seats that were lost, as `rosterId/lens`. */
 	lost?: readonly string[];
+	/** The final check before the card: the review head to the final head. */
+	final?: true;
 };
 
 /**
@@ -295,12 +297,20 @@ export function closeoutCardParts(
 		),
 	];
 	const verifiedBy = seatGroups(rounds.flatMap((round) => round.seats));
+	// Shown only when the card's last round is the final check.
+	const last = (input.rounds ?? []).at(-1);
+	const finalCheck =
+		last?.final === true && last.round !== undefined
+			? `**Final check:** verify ${last.round}, from the reviewed head to the final head`
+			: undefined;
 	const head = [
 		input.heading ?? "## Review panel",
 		"",
-		countsLine(input, rounds.length),
+		// The final check resolves nothing: it has its own line.
+		countsLine(input, rounds.filter((round) => round.final !== true).length),
 		`**Review seats:** ${seatGroups(input.seats) ?? "none"}`,
 		...(verifiedBy === undefined ? [] : [`**Verified by:** ${verifiedBy}`]),
+		...(finalCheck === undefined ? [] : [finalCheck]),
 		...(lostNames.length === 0 ? [] : [`**Lost:** ${lostNames.join(", ")}`]),
 		rangeLine(input),
 	];

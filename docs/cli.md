@@ -246,15 +246,18 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   [Verify rounds chain](../docs/configuration.md#verify-rounds-chain).
 - `review` and `verify` post their round to the open pull request whose head is the run's
   head, as a new comment, through `gh`. A verify posts the close-out card only with
-  `--close-out`, and then only when nothing is open after it and no seat was lost; the
-  reply says why otherwise. `--no-pr-comment` turns posting
+  `--close-out`, and then only when nothing is open after it and no seat was lost, and after one
+  final check from the review head (one seat, the owner's) reports nothing; the reply says why
+  otherwise, and names the final check as the latest verify. `--no-pr-comment` turns posting
   off for one run, and `--pr` names the PR. When the owner config sets
   `defaults.prComment: "ownerApproved"`, a round posts only with `--owner-approved`. A post
   that cannot be made ends the report with one line saying why, and the exit code does not
   change. See [Posting rounds to the pull request](../docs/configuration.md#posting-rounds-to-the-pull-request).
 - `comment` posts or updates the manual close-out card on the pull request, from the
   review's whole verify chain: each id resolved (with the round that resolved it), dismissed,
-  low/advisory, or still open when the owner stops the rounds. `--verify-run-id`, when given,
+  low/advisory, or still open when the owner stops the rounds. When a round resolved an id, it
+  first runs the final check (one seat, the owner's, minutes like a verify) and lists what it
+  finds as open; it does not block the card. `--verify-run-id`, when given,
   must be the latest verify. It is refused
   without `--owner-approved`: pass that flag only after the owner said to post. It posts only to an
   open pull request whose head is the commit the card is about (the latest verify's, or else the review's):
