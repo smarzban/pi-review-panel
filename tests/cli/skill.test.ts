@@ -345,16 +345,36 @@ describe("skill install", () => {
 	});
 });
 
-/** The frontmatter of the old host skill the 0.3.0 README told users to copy. */
-const OLD_HOST_SKILL =
-	'---\nname: review-panel\ndescription: "Run the review-panel CLI on a PR or a local change, read its report, and judge each finding keep or skip."\n---\n\n# Review panel from the command line\n';
+/**
+ * Two of the eight versions ever shipped at host-skills/review-panel/SKILL.md
+ * (the first and the last), byte for byte, as a user would have copied them.
+ */
+const OLD_HOST_SKILLS = ["first", "last"].map((name) =>
+	readFileSync(
+		path.join(
+			import.meta.dirname,
+			"..",
+			"fixtures",
+			"old-host-skill",
+			`${name}.md`,
+		),
+	),
+);
+const LAST_OLD_HOST_SKILL = OLD_HOST_SKILLS[1] as Buffer;
+
+/** A review-panel folder holding exactly this SKILL.md. */
+function skillFolder(skills: string, bytes: Buffer | string): string {
+	mkdirSync(target(skills), { recursive: true });
+	writeFileSync(path.join(target(skills), "SKILL.md"), bytes);
+	return target(skills);
+}
 
 describe("upgrades from earlier installs (R-2)", () => {
-	function earlierInstall(present: boolean): string {
-		const prefix = tempDir("rp-old-prefix-");
+	function earlierInstall(present: boolean, ...under: string[]): string {
+		const root = tempDir("rp-old-");
 		const dir = path.join(
-			prefix,
-			"lib",
+			root,
+			...under,
 			"node_modules",
 			"pi-review-panel",
 			"skills",
@@ -367,13 +387,17 @@ describe("upgrades from earlier installs (R-2)", () => {
 		return dir;
 	}
 
-	for (const present of [true, false]) {
-		it(`replaces a ${present ? "" : "broken "}link into an earlier pi-review-panel install without --force`, () => {
+	for (const [kind, present, under] of [
+		["a global npm prefix", true, ["lib"]],
+		["a removed global npm prefix (broken)", false, ["lib"]],
+		["the npx cache", true, [".npm", "_npx", "0123abcd"]],
+	] as const) {
+		it(`replaces a link into an earlier install in ${kind} without --force`, () => {
 			const home = tempDir("rp-home-");
 			const source = fakePackage();
 			const skills = path.join(home, ".codex", "skills");
 			mkdirSync(skills, { recursive: true });
-			const old = earlierInstall(present);
+			const old = earlierInstall(present, ...under);
 			symlinkSync(old, target(skills));
 
 			expect(skillStatus(options(home, source, { agents: ["codex"] }))).toEqual(
@@ -397,7 +421,7 @@ describe("upgrades from earlier installs (R-2)", () => {
 		const home = tempDir("rp-home-");
 		const skills = path.join(home, ".grok", "skills");
 		mkdirSync(skills, { recursive: true });
-		const old = earlierInstall(true);
+		const old = earlierInstall(true, "lib");
 		symlinkSync(old, target(skills));
 		const result = uninstallSkill(options(home, fakePackage()));
 		expect(result.lines).toContain(`Grok: removed ${target(skills)}`);
@@ -405,32 +429,80 @@ describe("upgrades from earlier installs (R-2)", () => {
 		expect(existsSync(path.join(old, "SKILL.md"))).toBe(true);
 	});
 
-	it("replaces the old host-skill copy without --force, and names it", () => {
-		const home = tempDir("rp-home-");
-		const source = fakePackage();
-		const skills = path.join(home, ".claude", "skills");
-		mkdirSync(target(skills), { recursive: true });
-		writeFileSync(path.join(target(skills), "SKILL.md"), OLD_HOST_SKILL);
+	for (const [index, bytes] of OLD_HOST_SKILLS.entries()) {
+		it(`replaces an exact copy of a shipped host skill (${index === 0 ? "first" : "last"} version) without --force, and names it`, () => {
+			const home = tempDir("rp-home-");
+			const source = fakePackage();
+			const skills = path.join(home, ".claude", "skills");
+			skillFolder(skills, bytes);
 
-		expect(skillStatus(options(home, source, { agents: ["claude"] }))).toEqual([
-			`- Claude Code: ${target(skills)} is the old review-panel host-skill copy; run review-panel skill install to replace it`,
-		]);
-		expect(uninstallSkill(options(home, source)).lines).toContain(
-			`Claude Code: left alone: ${target(skills)} is the old review-panel host-skill copy; review-panel skill install replaces it.`,
-		);
-		const result = installSkill(options(home, source));
-		expect(result.ok).toBe(true);
-		expect(result.lines.join("\n")).toContain(
-			`Claude Code: replaced the old review-panel host-skill copy: linked ${target(skills)} -> ${source}`,
-		);
-		expect(readlinkSync(target(skills))).toBe(source);
-	});
+			expect(
+				skillStatus(options(home, source, { agents: ["claude"] })),
+			).toEqual([
+				`- Claude Code: ${target(skills)} is the old review-panel host-skill copy; run review-panel skill install to replace it`,
+			]);
+			expect(uninstallSkill(options(home, source)).lines).toContain(
+				`Claude Code: left alone: ${target(skills)} is the old review-panel host-skill copy; review-panel skill install replaces it.`,
+			);
+			const result = installSkill(options(home, source));
+			expect(result.ok).toBe(true);
+			expect(result.lines.join("\n")).toContain(
+				`Claude Code: replaced the old review-panel host-skill copy: linked ${target(skills)} -> ${source}`,
+			);
+			expect(readlinkSync(target(skills))).toBe(source);
+		});
+	}
 
-	it("still refuses a review-panel folder with anything beside that SKILL.md", () => {
+	for (const [kind, bytes] of [
+		[
+			"an edited copy (a shipped version plus the user's own notes)",
+			Buffer.concat([LAST_OLD_HOST_SKILL, Buffer.from("\n\nMy own notes.\n")]),
+		],
+		[
+			"the shipped name and description over another body",
+			Buffer.concat([
+				LAST_OLD_HOST_SKILL.subarray(
+					0,
+					LAST_OLD_HOST_SKILL.indexOf("\n---\n") + 5,
+				),
+				Buffer.from("\n# My own review skill\n"),
+			]),
+		],
+		[
+			"only the name: review-panel frontmatter",
+			"---\nname: review-panel\ndescription: mine\n---\n\nmine\n",
+		],
+		[
+			"a shipped version with Windows line endings",
+			LAST_OLD_HOST_SKILL.toString("utf8").replaceAll("\n", "\r\n"),
+		],
+	] as const) {
+		it(`keeps ${kind}, and reports it as not this package's`, () => {
+			const home = tempDir("rp-home-");
+			const source = fakePackage();
+			const skills = path.join(home, ".claude", "skills");
+			const folder = skillFolder(skills, bytes);
+
+			const result = installSkill(options(home, source));
+			expect(result.ok).toBe(false);
+			expect(result.lines.join("\n")).toContain(
+				`Claude Code: skipped: ${folder} is a folder that is not this package's link. Re-run with --agent claude --force to replace it.`,
+			);
+			expect(readFileSync(path.join(folder, "SKILL.md"))).toEqual(
+				Buffer.from(bytes),
+			);
+			expect(
+				skillStatus(options(home, source, { agents: ["claude"] })),
+			).toEqual([
+				`- Claude Code: ${folder} is a folder that is not this package's; run review-panel skill install --agent claude --force to replace it`,
+			]);
+		});
+	}
+
+	it("still refuses a shipped host skill with anything beside its SKILL.md", () => {
 		const home = tempDir("rp-home-");
 		const skills = path.join(home, ".claude", "skills");
-		mkdirSync(target(skills), { recursive: true });
-		writeFileSync(path.join(target(skills), "SKILL.md"), OLD_HOST_SKILL);
+		skillFolder(skills, LAST_OLD_HOST_SKILL);
 		writeFileSync(path.join(target(skills), "notes.md"), "mine");
 		const result = installSkill(options(home, fakePackage()));
 		expect(result.ok).toBe(false);

@@ -17,6 +17,7 @@
  * removes only this package's own link or copy. Old `pi-review` skills are
  * named, never deleted.
  */
+import { createHash } from "node:crypto";
 import {
 	cpSync,
 	existsSync,
@@ -164,7 +165,10 @@ type TargetState =
 	/** A link (live or broken) into another pi-review-panel install's skill. */
 	| { kind: "earlier-link"; to: string }
 	| { kind: "ours-copy"; version: string }
-	/** The 0.3.0 host skill, copied by hand: one SKILL.md and nothing else. */
+	/**
+	 * An exact copy of a host-skills/review-panel/SKILL.md this repository
+	 * shipped before the one skill (never in a release): one SKILL.md, nothing else.
+	 */
 	| { kind: "old-host-copy" }
 	| { kind: "other" };
 
@@ -178,10 +182,24 @@ function isEarlierInstall(to: string): boolean {
 	return parts.slice(-3).join("/") === `${PACKAGE_NAME}/skills/${SKILL_NAME}`;
 }
 
-const OLD_HOST_DESCRIPTION =
-	'description: "Run the review-panel CLI on a PR or a local change';
+/**
+ * The sha256 of every version ever committed at
+ * host-skills/review-panel/SKILL.md (`git log -- host-skills/review-panel/SKILL.md`,
+ * eight blobs, 0ec3ca3 to 1cfd865). A folder counts as that old copy only when
+ * its SKILL.md is byte for byte one of these; an edited copy is the user's.
+ */
+const OLD_HOST_SKILL_SHA256 = new Set([
+	"880c4a5d79cfaa39c692d1c3c64de6e853ee3dd4a4d8d8447c17d139b652772f",
+	"47783f9acf46ed4f8ba9ea2813594f47e861c5893a560e672b7d9551189b96ac",
+	"3f616f94afb18e11abadd96b2ca6de96624e8d48fa3b7f9e66883976908c0963",
+	"13691acfe7cdb85d78c43008490de2013f10c2a7b4e6995fdd65b30e739d8c8f",
+	"035a812c0fdca70e8178c2aa71e242a309984ab1eeadf1a5374c864adac7a47d",
+	"0d7b5a5e93d5d07bd86b70ceaa4bb1313070ff2cc0f613338f4328018661b4ad",
+	"64a4b3d20cd0201979207acf382860e196299babe81da0585f13234cc85d2e44",
+	"957cca0db3e46eae2b7f6ba469a2f8784b062e300afb9e2e00cf7909be46389a",
+]);
 
-/** The old host skill: a folder holding only a SKILL.md with its frontmatter. */
+/** A folder holding only a SKILL.md whose bytes are a shipped host skill. */
 function isOldHostCopy(dir: string): boolean {
 	try {
 		if (readdirSync(dir).join("/") !== "SKILL.md") {
@@ -191,16 +209,10 @@ function isOldHostCopy(dir: string): boolean {
 		if (!lstatSync(file).isFile()) {
 			return false;
 		}
-		const text = readFileSync(file, "utf8");
-		const end = text.indexOf("\n---", 4);
-		if (!text.startsWith("---\n") || end === -1) {
-			return false;
-		}
-		const lines = text.slice(4, end).split("\n");
-		return (
-			lines.includes(`name: ${SKILL_NAME}`) &&
-			lines.some((line) => line.startsWith(OLD_HOST_DESCRIPTION))
-		);
+		const digest = createHash("sha256")
+			.update(readFileSync(file))
+			.digest("hex");
+		return OLD_HOST_SKILL_SHA256.has(digest);
 	} catch {
 		return false;
 	}
