@@ -5,6 +5,8 @@
  * a local folder and a local Git repository (a `git:` URL rewritten to it), and
  * npm runs offline, so nothing reaches the owner's folders or the network.
  */
+
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -16,9 +18,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+	afterAll,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
-import { realSetupSdk } from "../../src/cli/sdk.js";
+import { providerRows, realSetupSdk } from "../../src/cli/sdk.js";
 import {
 	resolveSeatRuntime,
 	type SeatServicesSdk,
@@ -41,6 +51,8 @@ const ENV_NAMES = [
 	"npm_config_audit",
 	"npm_config_fund",
 	"npm_config_update_notifier",
+	"GIT_TERMINAL_PROMPT",
+	"PATH",
 ];
 const saved = Object.fromEntries(
 	ENV_NAMES.map((name) => [name, process.env[name]]),
@@ -261,9 +273,9 @@ describe("extension packages through Pi's package manager", () => {
 		expect(existsSync(clone)).toBe(false);
 	});
 
-	it("never lists or loads the working folder's Pi project settings or extensions", async () => {
-		const listed = await realSetupSdk.listExtensions({ agentDir });
-		expect(listed).toEqual([]);
+	// extension list takes no working folder at all; the built-bin test runs it
+	// from a hostile folder.
+	it("models never loads the working folder's Pi project settings or extensions", async () => {
 		const base = await realSetupSdk.models({
 			agentDir,
 			cwd: hostileCwd,
@@ -281,5 +293,127 @@ describe("extension packages through Pi's package manager", () => {
 				progress,
 			}),
 		).toBe(false);
+	});
+});
+
+describe("offline: no request lists models or checks a login (F-8)", () => {
+	it("auth providers and models make no network request", async () => {
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			path.join(agentDir, "auth.json"),
+			JSON.stringify({ anthropic: { type: "api_key", key: "not-a-key" } }),
+		);
+		const requests: string[] = [];
+		const fetchSentinel = vi.fn(async (input: unknown) => {
+			requests.push(String(input instanceof Request ? input.url : input));
+			throw new Error("the setup commands must not reach the network");
+		});
+		vi.stubGlobal("fetch", fetchSentinel);
+		try {
+			await realSetupSdk.providers(agentDir);
+			const listed = await realSetupSdk.models({
+				agentDir,
+				cwd: hostileCwd,
+				extensionPaths: [],
+			});
+			expect(listed.models.length).toBeGreaterThan(0);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+		expect(requests).toEqual([]);
+	});
+});
+
+describe("git never prompts for a password (R-4)", () => {
+	it("install runs git with GIT_TERMINAL_PROMPT=0", async () => {
+		const bin = path.join(root, "git-recorder");
+		mkdirSync(bin, { recursive: true });
+		const record = path.join(root, "git-prompt.txt");
+		const realGit = execFileSync("sh", ["-c", "command -v git"], {
+			encoding: "utf8",
+		}).trim();
+		writeFileSync(
+			path.join(bin, "git"),
+			`#!/bin/sh\necho "prompt=$GIT_TERMINAL_PROMPT" >> "${record}"\nexec "${realGit}" "$@"\n`,
+			{ mode: 0o755 },
+		);
+		delete process.env.GIT_TERMINAL_PROMPT;
+		process.env.PATH = `${bin}${path.delimiter}${saved.PATH ?? ""}`;
+		try {
+			await realSetupSdk.installExtension({
+				agentDir,
+				source: FIXTURE_GIT_SOURCE,
+				progress,
+			});
+		} finally {
+			process.env.PATH = saved.PATH;
+		}
+		const lines = readFileSync(record, "utf8").trim().split("\n");
+		expect(lines.length).toBeGreaterThan(0);
+		expect(new Set(lines)).toEqual(new Set(["prompt=0"]));
+	});
+});
+
+describe("one provider's failing check does not hide the others (R-5)", () => {
+	function fakeRuntime() {
+		const providers = [
+			{
+				id: "anthropic",
+				name: "Anthropic",
+				auth: { oauth: {}, apiKey: { login: () => {} } },
+			},
+			{ id: "broken", name: "Broken", auth: { apiKey: { login: () => {} } } },
+			{ id: "env", name: "Env", auth: { apiKey: { login: () => {} } } },
+			{ id: "none", name: "None", auth: { apiKey: { login: () => {} } } },
+		];
+		return {
+			getProviders: () => providers,
+			listCredentials: async () => [
+				{ providerId: "anthropic", type: "api_key" },
+			],
+			// The whole availability pass fails when any one check throws.
+			getAvailable: async () => {
+				throw new Error("API key auth check failed for provider broken");
+			},
+			getProviderAuthStatus: () => ({ configured: false }),
+			checkAuth: async (id: string) => {
+				if (id === "broken") {
+					throw new Error("API key auth check failed for provider broken");
+				}
+				return id === "env"
+					? { type: "api_key", source: "ENV_API_KEY" }
+					: undefined;
+			},
+		};
+	}
+
+	it("checks each provider on its own and marks only the failing one", async () => {
+		const rows = await providerRows(
+			fakeRuntime() as unknown as Parameters<typeof providerRows>[0],
+		);
+		expect(rows).toEqual([
+			{
+				id: "anthropic",
+				name: "Anthropic",
+				logins: ["account", "api-key"],
+				loggedIn: true,
+				how: "stored credential",
+			},
+			{
+				id: "broken",
+				name: "Broken",
+				logins: ["api-key"],
+				loggedIn: false,
+				checkError: "API key auth check failed for provider broken",
+			},
+			{
+				id: "env",
+				name: "Env",
+				logins: ["api-key"],
+				loggedIn: true,
+				how: "ENV_API_KEY",
+			},
+			{ id: "none", name: "None", logins: ["api-key"], loggedIn: false },
+		]);
 	});
 });

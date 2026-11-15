@@ -202,6 +202,7 @@ try {
 	});
 	if (
 		ready.status !== 0 ||
+		!ready.stdout.includes("- Status: ready") ||
 		ready.stdout.includes("review-panel-fixture") ||
 		ready.stdout.includes("extension ")
 	) {

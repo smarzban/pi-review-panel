@@ -10,11 +10,7 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const PROVIDER_EXTENSION = path.join(
-	import.meta.dirname,
-	"extension-provider",
-	"provider-extension.ts",
-);
+const EXTENSION_FIXTURES = path.join(import.meta.dirname, "extension-provider");
 
 /** The `git:` source that `gitSourceEnv` rewrites to the local repository. */
 export const FIXTURE_GIT_SOURCE = "git:example.invalid/fixture/pi-ext";
@@ -22,7 +18,11 @@ export const FIXTURE_GIT_URL = "https://example.invalid/fixture/pi-ext";
 
 export function writeExtensionPackage(
 	dir: string,
-	options: { git?: boolean } = {},
+	options: {
+		git?: boolean;
+		/** A file in tests/fixtures/extension-provider; the provider fixture by default. */
+		extension?: string;
+	} = {},
 ): string {
 	mkdirSync(path.join(dir, "extensions"), { recursive: true });
 	writeFileSync(
@@ -33,7 +33,10 @@ export function writeExtensionPackage(
 			pi: { extensions: ["./extensions/index.ts"] },
 		})}\n`,
 	);
-	copyFileSync(PROVIDER_EXTENSION, path.join(dir, "extensions", "index.ts"));
+	copyFileSync(
+		path.join(EXTENSION_FIXTURES, options.extension ?? "provider-extension.ts"),
+		path.join(dir, "extensions", "index.ts"),
+	);
 	if (options.git) {
 		const git = (args: string[]) =>
 			execFileSync("git", args, { cwd: dir, stdio: "ignore" });

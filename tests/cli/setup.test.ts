@@ -16,10 +16,11 @@ import {
 	type RunIo,
 	run,
 } from "../../src/cli/run.js";
-import type {
-	InstalledExtension,
-	ModelGroup,
-	SetupSdk,
+import {
+	type InstalledExtension,
+	type ModelGroup,
+	redactSecrets,
+	type SetupSdk,
 } from "../../src/cli/setup.js";
 
 const HOME = "/home/user";
@@ -156,6 +157,7 @@ function harness(
 ) {
 	let stdout = "";
 	let stderr = "";
+	const controller = new AbortController();
 	const terminal: AuthTerminal = {
 		interactive: false,
 		write: () => {},
@@ -177,7 +179,7 @@ function harness(
 		readFile: () => {
 			throw new Error("ENOENT");
 		},
-		signal: new AbortController().signal,
+		signal: controller.signal,
 		terminal,
 	};
 	const deps: RunDeps = {
@@ -196,6 +198,7 @@ function harness(
 		run: (argv: string[]) => run(argv, io, deps),
 		out: () => stdout,
 		err: () => stderr,
+		controller,
 	};
 }
 
@@ -630,5 +633,320 @@ describe("help", () => {
 		]) {
 			expect(h.out()).toContain(command);
 		}
+	});
+});
+
+const SECRET = "tok-SECRET-1234";
+const CREDENTIAL_SOURCES = [
+	`https://someone:${SECRET}@git.example.com/o/r.git`,
+	`git:https://${SECRET}@git.example.com/o/r`,
+	`git:git.example.com/o/r?private_token=${SECRET}`,
+];
+
+describe("credentials in an extension source are never printed (F-2, F-7)", () => {
+	it("redactSecrets hides URL user info and token-looking query values", () => {
+		expect(
+			redactSecrets(
+				`git clone https://u:${SECRET}@h/x.git?ref=main&access_token=${SECRET} /dir failed`,
+			),
+		).toBe(
+			"git clone https://***@h/x.git?ref=main&access_token=*** /dir failed",
+		);
+		expect(redactSecrets(`git:https://${SECRET}@h/o/r`)).toBe(
+			"git:https://***@h/o/r",
+		);
+		expect(redactSecrets("git:github.com/o/r")).toBe("git:github.com/o/r");
+		expect(redactSecrets("npm:@scope/name@1.2.3")).toBe(
+			"npm:@scope/name@1.2.3",
+		);
+		expect(redactSecrets("/home/user/my ext")).toBe("/home/user/my ext");
+	});
+
+	it.each(CREDENTIAL_SOURCES)("install: %s", async (source) => {
+		const given: string[] = [];
+		const { sdk } = fakeSdk({
+			installExtension: async (input) => {
+				given.push(input.source);
+				input.progress(`Installing ${input.source}...`);
+				return {
+					source: input.source,
+					installedPath: "/agent/git/git.example.com/o/r",
+					filtered: false,
+					entries: ["/agent/git/git.example.com/o/r/index.ts"],
+				};
+			},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "install", source])).toBe(EXIT_OK);
+		expect(h.out() + h.err()).not.toContain(SECRET);
+		expect(h.out()).toContain("***");
+		// The package manager still gets the source it needs.
+		expect(given).toEqual([source]);
+	});
+
+	it.each(CREDENTIAL_SOURCES)("a failed install: %s", async (source) => {
+		const { sdk } = fakeSdk({
+			installExtension: async (input) => {
+				throw new Error(
+					`git clone ${input.source} /agent/x failed with code 128`,
+				);
+			},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "install", source])).toBe(EXIT_FAILED);
+		expect(h.err()).toContain("failed with code 128");
+		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+
+	it.each(CREDENTIAL_SOURCES)(
+		"list, list --json, models and remove: %s",
+		async (source) => {
+			const installed: InstalledExtension[] = [
+				{
+					source,
+					installedPath: "/agent/git/git.example.com/o/r",
+					filtered: false,
+					entries: [CLAUDE_CODE_ENTRY],
+				},
+			];
+			const removed: string[] = [];
+			const { sdk } = fakeSdk({
+				listExtensions: async () => installed,
+				removeExtension: async (input) => {
+					removed.push(input.source);
+					input.progress(`Removing ${input.source}...`);
+					return input.source === source;
+				},
+			});
+			for (const argv of [
+				["extension", "list"],
+				["extension", "list", "--json"],
+				["models", "claude-code"],
+				["models", "--json"],
+				["extension", "remove", source],
+				["extension", "remove", `${source}-other`],
+			]) {
+				const h = harness({ sdk });
+				await h.run(argv);
+				expect(h.out() + h.err(), argv.join(" ")).not.toContain(SECRET);
+			}
+			// The package manager still gets the source it needs.
+			expect(removed[0]).toBe(source);
+		},
+	);
+
+	it("a problem line from a credential-bearing package is redacted", async () => {
+		const source = CREDENTIAL_SOURCES[0] as string;
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{ source, installedPath: "/x", filtered: false, entries: ["/x/a.ts"] },
+			],
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: new Promise<ModelGroup>(() => {}),
+		});
+		const h = harness({ sdk, extensionTimeoutMs: 20 });
+		expect(await h.run(["models"])).toBe(EXIT_OK);
+		expect(h.out()).toContain("did not finish loading");
+		expect(h.out()).not.toContain(SECRET);
+	});
+});
+
+describe("load problems explain a missing provider (F-3, F-12, R-1, F-4, F-13)", () => {
+	it("models <provider> names the failed extension instead of only saying the provider is missing", async () => {
+		const { sdk } = fakeSdk({
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: {
+							registeredProviders: [],
+							models: [],
+							extensionFailures: [
+								{
+									extension: CLAUDE_CODE_ENTRY,
+									message: "cannot find module x",
+								},
+							],
+						},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["models", "claude-code"])).toBe(EXIT_FAILED);
+		expect(h.err()).toContain(
+			`Extension ${CLAUDE_CODE_ENTRY} failed to load: cannot find module x`,
+		);
+	});
+
+	it("models <provider> names an extension that did not finish loading", async () => {
+		const { sdk } = fakeSdk({
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: new Promise<ModelGroup>(() => {}),
+		});
+		const h = harness({ sdk, extensionTimeoutMs: 20 });
+		expect(await h.run(["models", "claude-code"])).toBe(EXIT_FAILED);
+		expect(h.err()).toContain("did not finish loading within 0.02 s");
+	});
+
+	it("a catalog that does not finish is named as the model catalog, never as an extension", async () => {
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [],
+			models: async () => new Promise<ModelGroup>(() => {}),
+		});
+		const h = harness({ sdk, extensionTimeoutMs: 20 });
+		expect(await h.run(["models", "--all"])).toBe(EXIT_OK);
+		expect(h.out()).toContain(
+			"The model catalog did not finish loading within 0.02 s; the built-in models are not listed",
+		);
+		expect(h.out()).not.toContain("undefined");
+	});
+});
+
+describe("an extension provider that is not logged in (F-10)", () => {
+	it("points to the extension's own login, never to auth login", async () => {
+		const { sdk } = fakeSdk({
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: {
+							...CLAUDE_CODE,
+							models: [model("claude-code", "opus", false)],
+						},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["models", "claude-code"])).toBe(EXIT_OK);
+		expect(h.out()).toContain(
+			"Not logged in to claude-code. Log in the way its extension documents.",
+		);
+		expect(h.out()).not.toContain("auth login claude-code");
+	});
+});
+
+describe("each extension entry loads on its own (R-2)", () => {
+	it("the roster row names only the entry that registered the provider", async () => {
+		const calls: (readonly string[])[] = [];
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{
+					source: "npm:two-entries",
+					installedPath: "/agent/npm/node_modules/two-entries",
+					filtered: false,
+					entries: ["/pkg/auth.ts", "/pkg/provider.ts"],
+				},
+			],
+			models: async (input) => {
+				calls.push(input.extensionPaths);
+				if (input.extensionPaths.length === 0) {
+					return BASE;
+				}
+				return input.extensionPaths[0] === "/pkg/provider.ts"
+					? CLAUDE_CODE
+					: { registeredProviders: [], extensionFailures: [], models: [] };
+			},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["models", "claude-code", "--json"])).toBe(EXIT_OK);
+		expect(calls).toEqual([[], ["/pkg/auth.ts"], ["/pkg/provider.ts"]]);
+		expect(JSON.parse(h.out()).rosterRow).toEqual({
+			id: "opus",
+			provider: "claude-code",
+			model: "opus",
+			extraExtensionPaths: ["/pkg/provider.ts"],
+		});
+	});
+});
+
+describe("local sources (R-3)", () => {
+	it("expands a leading ~ and decodes a file: URL", async () => {
+		const { sdk, installs } = fakeSdk();
+		await harness({ sdk }).run(["extension", "install", "~/my-ext"]);
+		await harness({ sdk }).run([
+			"extension",
+			"install",
+			"file:///work/my%20ext",
+		]);
+		expect(installs.map((entry) => entry.source)).toEqual([
+			"/home/user/my-ext",
+			"/work/my ext",
+		]);
+	});
+
+	it("refuses git@host:owner/repo without the git: prefix, and says how to write it", async () => {
+		const { sdk, installs } = fakeSdk();
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "install", "git@github.com:o/r"])).toBe(
+			EXIT_FAILED,
+		);
+		expect(h.err()).toContain("git:git@github.com:o/r");
+		expect(installs).toEqual([]);
+	});
+});
+
+describe("the first Ctrl-C ends a setup command (R-4)", () => {
+	it("models stops waiting on an extension that never loads", async () => {
+		const { sdk } = fakeSdk({
+			models: async () => new Promise<ModelGroup>(() => {}),
+		});
+		const h = harness({ sdk });
+		const running = h.run(["models"]);
+		setTimeout(() => h.controller.abort(new Error("interrupted")), 10);
+		expect(await running).toBe(EXIT_FAILED);
+		expect(h.err()).toContain("aborted");
+	});
+
+	it("extension install stops waiting on the package manager", async () => {
+		const { sdk } = fakeSdk({
+			installExtension: async () => new Promise<InstalledExtension>(() => {}),
+		});
+		const h = harness({ sdk });
+		const running = h.run(["extension", "install", "npm:slow"]);
+		setTimeout(() => h.controller.abort(new Error("interrupted")), 10);
+		expect(await running).toBe(EXIT_FAILED);
+		expect(h.err()).toContain("aborted");
+	});
+});
+
+describe("auth providers shows a failed check on its own row (R-5)", () => {
+	it("renders check failed for that provider only", async () => {
+		const { sdk } = fakeSdk({
+			providers: async () => [
+				{
+					id: "anthropic",
+					name: "Anthropic",
+					logins: ["account", "api-key"],
+					loggedIn: true,
+					how: "stored credential",
+				},
+				{
+					id: "broken",
+					name: "Broken",
+					logins: ["api-key"],
+					loggedIn: false,
+					checkError: "models.json command failed",
+				},
+			],
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["auth", "providers"])).toBe(EXIT_OK);
+		expect(h.out()).toMatch(
+			/^broken\s+Broken\s+API key\s+check failed \(models\.json command failed\)$/m,
+		);
+		expect(h.out()).toMatch(/^anthropic\s+.*logged in \(stored credential\)$/m);
+	});
+});
+
+describe("--extension is a path, never a list (R-7)", () => {
+	it("keeps a comma in the path", async () => {
+		const { sdk, modelCalls } = fakeSdk({ listExtensions: async () => [] });
+		const h = harness({ sdk, cwd: "/work" });
+		await h.run([
+			"models",
+			"--extension",
+			"/ext/a,b.ts",
+			"--extension",
+			"c.ts",
+		]);
+		expect(modelCalls).toEqual([[], ["/ext/a,b.ts"], ["/work/c.ts"]]);
 	});
 });

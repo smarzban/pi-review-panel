@@ -582,6 +582,7 @@ describe("setting up without Pi, from an empty home", () => {
 		);
 		const diagnose = cli(home, ["diagnose", "--repo", repo], { env });
 		expect(diagnose.code).toBe(0);
+		expect(diagnose.stdout).toContain("- Status: ready");
 		expect(diagnose.stdout).not.toContain("extension ");
 		expect(diagnose.stdout).not.toContain("model review-panel-fixture");
 		expect(diagnose.stdout).not.toContain(
@@ -595,7 +596,44 @@ describe("setting up without Pi, from an empty home", () => {
 		});
 		expect(removed.code).toBe(0);
 		expect(existsSync(clone)).toBe(false);
-	});
+		// About ten spawns of the bin, each loading the SDK, plus a git clone and an
+		// npm install: far more than one spawn's default bound (F-9).
+	}, 300_000);
+});
+
+describe("an installed extension that never finishes loading", () => {
+	function hangingSetup() {
+		const home = tempHome();
+		const source = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-hang-")),
+		);
+		writeExtensionPackage(source, { extension: "hanging-load-extension.ts" });
+		const env = { PI_CODING_AGENT_DIR: path.join(home, "agent") };
+		expect(cli(home, ["extension", "install", source], { env }).code).toBe(0);
+		return { home, env };
+	}
+
+	it("models waits out its 30 s bound, names it, and still lists the catalog (F-1)", () => {
+		const { home, env } = hangingSetup();
+		const models = cli(home, ["models", "--all", "--json"], { env });
+		expect(models.code).toBe(0);
+		const result = JSON.parse(models.stdout);
+		expect(
+			result.models.some(
+				(row: { provider: string }) => row.provider === "anthropic",
+			),
+		).toBe(true);
+		expect(result.problems).toHaveLength(1);
+		expect(result.problems[0]).toContain("did not finish loading within 30 s");
+	}, 120_000);
+
+	it("the first Ctrl-C ends models at once (R-4)", async () => {
+		const { home, env } = hangingSetup();
+		const result = await interrupted(home, ["models"], { env });
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("aborted");
+		expect(result.ms).toBeLessThan(20_000);
+	}, 120_000);
 });
 
 describe("setup commands run from a hostile working folder", () => {
