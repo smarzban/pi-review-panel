@@ -229,7 +229,8 @@ review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \
 `comment` reads the whole verify chain itself and lists every id as resolved (with the round
 that resolved it), dismissed, low/advisory, or open. Before the card, `comment` and
 `verify --close-out` run one final check of the whole change (the owner's seat, minutes like a
-verify); what it finds is open on the card, and `--close-out` posts no card then. Its reply
+verify); what it finds is open, `--close-out` posts no card then, and `comment` refuses the card
+when nothing was open before the check, saying what to run next. Its reply
 line `Latest verify:` names the final check: verify against that run id next. Pass `--verify-run-id` only to name the
 latest verify; an older one is refused. Pass `--dismissed` and `--low-advisory` only for ids
 still open (or, with no verify, never placed): comment refuses an id a round already resolved,

@@ -300,9 +300,11 @@ export function closeoutCardParts(
 	// Shown only when the card's last round is the final check.
 	const last = (input.rounds ?? []).at(-1);
 	const finalCheck =
-		last?.final === true && last.round !== undefined
-			? `**Final check:** verify ${last.round}, from the reviewed head to the final head`
-			: undefined;
+		last?.final !== true || last.round === undefined
+			? undefined
+			: (last.lost?.length ?? 0) > 0
+				? `**Final check:** verify ${last.round} lost its seat, so nothing was checked`
+				: `**Final check:** verify ${last.round}, from the reviewed head to the final head`;
 	const head = [
 		input.heading ?? "## Review panel",
 		"",

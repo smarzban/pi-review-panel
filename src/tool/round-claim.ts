@@ -488,7 +488,7 @@ export async function claimRound(
 	if (claim === undefined) {
 		return {
 			reason: claimIsStale(file, Date.now())
-				? `round-${round}.claim was left by a post of verify ${round} that stopped; delete it from the review's run record to post it`
+				? `round-${round}.claim was left by a post of verify ${round} that stopped, so verify ${round} is not on the PR; later rounds and the card still post`
 				: `another process is posting verify ${round}`,
 		};
 	}

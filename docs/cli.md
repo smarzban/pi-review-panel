@@ -257,7 +257,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   review's whole verify chain: each id resolved (with the round that resolved it), dismissed,
   low/advisory, or still open when the owner stops the rounds. When a round resolved an id, it
   first runs the final check (one seat, the owner's, minutes like a verify) and lists what it
-  finds as open; it does not block the card. `--verify-run-id`, when given,
+  finds as open; when nothing was open before it, what it finds (or a lost seat) refuses the card
+  and says what to run next. `--verify-run-id`, when given,
   must be the latest verify. It is refused
   without `--owner-approved`: pass that flag only after the owner said to post. It posts only to an
   open pull request whose head is the commit the card is about (the latest verify's, or else the review's):

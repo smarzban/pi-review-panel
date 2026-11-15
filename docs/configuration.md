@@ -520,8 +520,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     deletes its claim. If the post fails, it deletes its claim.
   - A claim already there is never taken over, renamed or removed. A live one means the round is
     being posted (`PR comment: not posted (another process is posting verify N)`); a stale one,
-    left by a post that stopped, leaves the round unposted, and the reply says to delete it to
-    post it. A claim is stale when it is older than the round deadline plus 5 s (65 s), or when
+    left by a post that stopped, leaves the round unposted, and the reply says so
+    (`… so verify N is not on the PR; later rounds and the card still post`). A claim is stale when it is older than the round deadline plus 5 s (65 s), or when
     it was made on this host and its process is gone. A claim from another host (a shared
     network folder, a container and its host) is judged by age alone. A folder synced by
     Dropbox, iCloud or Syncthing is not supported: an exclusive create does not exclude anything
@@ -555,10 +555,17 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   `review-panel comment --prior-run-id <review> --owner-approved`, once the owner says the
   rounds are done (a verify cannot be run again at the same head). When the owner
   stops the rounds with ids still open, `comment` posts the card listing them as open. `comment`
-  runs the final check too, after its own refusals and before the card, when it is due; it
-  reports and never blocks the owner's card: what it finds is listed as open, a lost seat is
-  named on `Lost:`, and the reply names it as the latest verify. A verify running from the
-  chain's latest link refuses it, naming that verify. See
+  runs the final check too, after its own refusals and before the card, when it is due, and
+  the reply names it as the latest verify. When ids were already open, it only reports: what
+  it finds is listed as open, and a lost seat is named on `Lost:` and on the
+  `**Final check:**` line (`lost its seat, so nothing was checked`). When nothing was open, the
+  owner approved a card with nothing open, so what it finds stops the card:
+  `comment refused: the final check, verify N, reported V<N>-R1; verify a fix against the latest
+  verify, "<run id>", or run comment again to post the card with it open`, or, after a lost
+  seat, `… lost its seat, so nothing was checked; run comment again to check again`. It runs
+  before `comment` looks up the PR, so a PR that cannot be posted to still costs that seat; the
+  refusal then names the final check as the latest verify. A verify running from the chain's
+  latest link refuses it, naming that verify. See
   [The close-out card](#the-close-out-card) for what it shows.
 - The close-out posts at most once per review, by these rules and with the exceptions below:
   - A signed `closeout.posted` in the review's run record means it is posted. The verify does not
@@ -681,8 +688,8 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
   the seats that voted in each verify of the chain, each once, grouped the same way; a verify
   seat that was lost is not named there.
 - `Final check:` names the final check (see [Verify rounds chain](#verify-rounds-chain)) when
-  the card's last round is one; it is not counted among the verify rounds, and the hidden
-  marker's `verify=` names it.
+  the card's last round is one, or says it lost its seat, so nothing was checked; it is not
+  counted among the verify rounds, and the hidden marker's `verify=` names it.
 - `Lost:` appears only when a seat was lost: review seats first, then verify seats of the chain,
   each marked `(verify)`. The `### Open (not resolved)` section, the `### Dismissed` section
   (each id with its title and reason) and the `### Low / advisory (not kept)` section appear

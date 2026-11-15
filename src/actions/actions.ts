@@ -1149,28 +1149,58 @@ export async function commentAction(
 		} catch (error) {
 			throw commentError(error);
 		}
+		const openBefore = state.open.length;
 		links = chainNow();
 		tip = links.at(-1);
 		latest = tip?.final === true ? tip.runId : undefined;
 		state = chainState(facts.run.findings, links);
 		rounds = chainRounds(links);
+		// When nothing was open, the owner approved a card with nothing open:
+		// what the check found stops it, with the step that goes on.
+		if (openBefore === 0 && tip?.final === true) {
+			if (tip.lost.length > 0) {
+				throw new Error(
+					`comment refused: the final check, verify ${tip.link}, lost its seat, so nothing was checked; run comment again to check again`,
+				);
+			}
+			if (state.open.length > 0) {
+				throw new Error(
+					`comment refused: the final check, verify ${tip.link}, reported ${state.open.join(", ")}; verify a fix against the latest verify, "${tip.runId}", or run comment again to post the card with ${state.open.length === 1 ? "it" : "them"} open`,
+				);
+			}
+		}
 		body = built();
 	}
-	const posted = resolved.postComment({
-		repository: repoDir,
-		headOid,
-		body,
-		render: (listing) =>
-			card(
-				roundCommentLinks(
-					listing.comments,
-					listing,
-					facts.run.runId,
-					rounds.map((row) => row.runId),
+	const post = () =>
+		resolved.postComment({
+			repository: repoDir,
+			headOid,
+			body,
+			render: (listing) =>
+				card(
+					roundCommentLinks(
+						listing.comments,
+						listing,
+						facts.run.runId,
+						rounds.map((row) => row.runId),
+					),
 				),
-			),
-		...(valid.pr === undefined ? {} : { pr: valid.pr }),
-	});
+			...(valid.pr === undefined ? {} : { pr: valid.pr }),
+		});
+	let posted: ReturnType<typeof post>;
+	try {
+		posted = post();
+	} catch (error) {
+		if (latest === undefined) {
+			throw error;
+		}
+		// The final check ran and is a signed link: say so, so the next
+		// verify chains from it.
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`${message}; the final check is recorded: the latest verify is now "${latest}"`,
+		);
+	}
 	const shown = posted.body ?? body;
 	return textResult(
 		[

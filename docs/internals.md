@@ -189,9 +189,14 @@ every refusal that costs no seat; a regression or a lost seat posts the final ro
 the card, a clean one posts no round and the card is built and claimed after it (its marker names
 the final check; the card's links still use the round's own comment URL). `commentAction`
 builds the card once first (its refusals), then runs it when `finalCheckDue` (something resolved,
-and the tip is not a final check that lost no seat), reloads the chain, and rebuilds the card;
-nothing it finds blocks the card. The card shows `**Final check:** verify N` when its last round
-is final, and leaves that round out of the round count.
+and the tip is not a final check that lost no seat), reloads the chain, and rebuilds the card.
+With ids open before the check it only reports; with none open, a lost seat or anything open
+after it refuses the card (the owner approved a card with nothing open), naming the step that
+goes on: run `comment` again (it checks again after a lost seat, and posts the card with the ids
+open after a finding) or verify a fix from the final link. The check runs before `postComment`
+looks up the PR (one synchronous call), so a failed post after it names the final check as the
+latest verify. The card shows `**Final check:** verify N` when its last round is final (or that
+it lost its seat), and leaves that round out of the round count.
 
 ## Posted text
 
@@ -239,7 +244,8 @@ run record, and nothing else: no claim is ever taken over, renamed or put back. 
 `round-<N>.posted` (`wx`) and then deletes its claim. N is the verify's chain link, never chosen
 by the claim: the claim and the marker only stop a second post of that round. A stale claim
 (older than the round deadline plus 5 s, or made on this host by a process that is gone) stays
-where it is and leaves that round unposted; the reply says to delete it (a POST `gh` reports as
+where it is and leaves that round unposted, and the reply says so; nothing re-posts a finished
+verify's round (a POST `gh` reports as
 failed after GitHub accepted it gives its claim back; that repeat is set aside). The
 close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
 to the PR's comments, then to the next generation; only a generation's creator posts, and a
