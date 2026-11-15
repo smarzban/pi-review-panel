@@ -32,7 +32,7 @@ function refuseStream(): never {
  * while `resolve` still returns a request credential, exactly the shape where
  * `getAuth` alone would wrongly report the provider authenticated.
  */
-function fixtureProvider(id: string, configured: boolean) {
+function fixtureProvider(id: string, configured: boolean | "throws") {
 	return createProvider({
 		id,
 		name: `Review panel fixture ${id}`,
@@ -41,6 +41,10 @@ function fixtureProvider(id: string, configured: boolean) {
 			apiKey: {
 				name: "Fixture login",
 				async check() {
+					// Mirrors a provider whose login CLI is not installed.
+					if (configured === "throws") {
+						throw new Error("fixture login CLI is missing");
+					}
 					return configured
 						? { type: "api_key", source: "review-panel fixture" }
 						: undefined;
@@ -64,4 +68,7 @@ export default function reviewPanelFixtureExtension(pi: FixtureApi): void {
 		(counter.__reviewPanelFixtureLoads ?? 0) + 1;
 	pi.registerProvider(fixtureProvider("review-panel-fixture", true));
 	pi.registerProvider(fixtureProvider("review-panel-fixture-unauthed", false));
+	pi.registerProvider(
+		fixtureProvider("review-panel-fixture-brokencheck", "throws"),
+	);
 }

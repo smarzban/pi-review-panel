@@ -295,13 +295,14 @@ describe("postCloseoutComment reads every page of comments", () => {
 	});
 
 	it.each([
+		["nothing", [], "no open PR has this head; pass --pr to name one"],
 		[
-			"no open pull request",
-			[],
+			"an open pull request at another head, and none at this one,",
+			[{ number: 5, state: "open", head: { sha: "f".repeat(40) } }],
 			"no open PR has this head; pass --pr to name one",
 		],
 		[
-			"two open pull requests",
+			"two open pull requests at this head",
 			[
 				{ number: 3, state: "open", head: { sha: HEAD } },
 				{ number: 9, state: "open", head: { sha: HEAD } },
@@ -310,7 +311,7 @@ describe("postCloseoutComment reads every page of comments", () => {
 			"2 open PRs have this head: #3, #9; pass --pr to choose one",
 		],
 	] as const)(
-		"without pr, refuses when %s has the head",
+		"without pr, refuses when %s is what GitHub lists",
 		(_name, rows, message) => {
 			const { calls, run } = posterWith((call) => {
 				const fixed = base(call);

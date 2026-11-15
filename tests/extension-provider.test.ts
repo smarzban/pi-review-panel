@@ -152,6 +152,23 @@ describe("readiness for a provider registered by a seat extension", () => {
 		});
 	});
 
+	it("keeps the reason when the provider's own check throws", async () => {
+		const provider = "review-panel-fixture-brokencheck";
+		const report = await readiness([
+			{
+				id: "broken-check",
+				provider,
+				extraExtensionPaths: [PROVIDER_EXTENSION],
+			},
+		]);
+
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.prerequisite).toBe(`authentication ${provider}`);
+		expect(report.rows[0]?.remediation).toMatch(
+			/ The check failed: .*fixture login CLI is missing$/,
+		);
+	});
+
 	it("names an extension that fails to load", async () => {
 		const report = await readiness([
 			{
