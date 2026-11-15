@@ -247,8 +247,12 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
   appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   any value in a `call` object, such as `repository` or `priorRunId`, and the source of
-  `extension install` or `remove`, which is also printed in progress and result lines (so a
-  Git URL with a token in it is printed too; use a credential helper instead).
+  `extension install` or `remove`. A source is always printed redacted: the user info of a URL
+  (`https://user:token@host/...`) and the value of a query parameter named like a secret
+  (`?private_token=...`) show as `***`, in progress, result, list, `models` and error lines and
+  in `--json`. `git` itself strips credentials from the URLs it prints; a credential helper is
+  still the safer place for a token, because the source as given is stored in the agent
+  folder's `settings.json`.
 
 | Exit code | Meaning |
 |---|---|

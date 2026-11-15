@@ -45,6 +45,7 @@ import {
 	listExtensions,
 	listModels,
 	listProviders,
+	redactSecrets,
 	removeExtension,
 	renderExtensions,
 	renderModels,
@@ -483,7 +484,7 @@ export async function run(
 			return EXIT_USAGE;
 		}
 		if (io.signal.aborted) {
-			io.stderr(`review-panel: aborted (${message(error)})\n`);
+			io.stderr(`review-panel: aborted (${redactSecrets(message(error))})\n`);
 			return EXIT_FAILED;
 		}
 		const prefix =
@@ -492,7 +493,8 @@ export async function run(
 			error instanceof SetupError
 				? ""
 				: "failed: ";
-		io.stderr(`review-panel: ${prefix}${message(error)}\n`);
+		// A credential in an extension source never reaches the terminal.
+		io.stderr(`review-panel: ${prefix}${redactSecrets(message(error))}\n`);
 		return EXIT_FAILED;
 	}
 }

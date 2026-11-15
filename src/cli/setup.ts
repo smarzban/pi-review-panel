@@ -80,6 +80,32 @@ export type SetupSdk = {
 /** A refusal the runner reports with exit code 1. */
 export class SetupError extends Error {}
 
+/**
+ * Text with any credential an extension source may carry hidden: the user
+ * info of every `scheme://user:token@host` URL, and the value of every query
+ * parameter whose name looks like a secret (`token`, `key`, `secret`,
+ * `password`, `auth`, `sig`, `credential`). Sources reach the package manager
+ * as given; only what is printed is redacted.
+ */
+export function redactSecrets(text: string): string {
+	return text
+		.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@?#]+@/gi, "$1***@")
+		.replace(
+			/([?&][^=&#\s]*(?:token|key|secret|passw|pwd|auth|sig|credential)[^=&#\s]*=)[^&#\s]*/gi,
+			"$1***",
+		);
+}
+
+function redactedExtension(entry: InstalledExtension): InstalledExtension {
+	return {
+		...entry,
+		source: redactSecrets(entry.source),
+		...(entry.installedPath === undefined
+			? {}
+			: { installedPath: redactSecrets(entry.installedPath) }),
+	};
+}
+
 function folderLine(agentDir: AgentDirChoice): string {
 	return `Agent folder: ${describeAgentDir(agentDir)}`;
 }
@@ -249,7 +275,7 @@ export async function listModels(input: {
 	for (const installed of await input.sdk.listExtensions({ agentDir })) {
 		if (installed.entries.length > 0) {
 			groups.push({
-				label: installed.source,
+				label: redactSecrets(installed.source),
 				extensionPaths: installed.entries,
 			});
 		}
@@ -277,7 +303,7 @@ export async function listModels(input: {
 			);
 		} catch (error) {
 			problems.push(
-				`${group.label === undefined ? "The model catalog" : `Extension ${group.label}`} failed to load: ${error instanceof Error ? error.message : String(error)}`,
+				`${group.label === undefined ? "The model catalog" : `Extension ${group.label}`} failed to load: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
 			);
 			continue;
 		}
@@ -293,7 +319,7 @@ export async function listModels(input: {
 		}
 		for (const failure of loaded.extensionFailures) {
 			problems.push(
-				`Extension ${failure.extension} failed to load: ${failure.message}`,
+				`Extension ${redactSecrets(failure.extension)} failed to load: ${redactSecrets(failure.message)}`,
 			);
 		}
 		const own = new Set(loaded.registeredProviders);
@@ -490,23 +516,26 @@ export async function installExtension(input: {
 	progress(line: string): void;
 }): Promise<string> {
 	const source = absoluteSource(input.source, input.cwd);
-	const installed = await input.sdk.installExtension({
-		agentDir: input.agentDir.dir,
-		source,
-		progress: input.progress,
-	});
+	const installed = redactedExtension(
+		await input.sdk.installExtension({
+			agentDir: input.agentDir.dir,
+			source,
+			progress: (line) => input.progress(redactSecrets(line)),
+		}),
+	);
+	const shownSource = redactSecrets(source);
 	if (installed.entries.length === 0) {
 		throw new SetupError(
-			`Installed ${source}, but the package declares no extension, so no seat can load it. Remove it with: review-panel extension remove ${installed.source}`,
+			`Installed ${shownSource}, but the package declares no extension, so no seat can load it. Remove it with: review-panel extension remove ${installed.source}`,
 		);
 	}
 	return [
-		`Installed ${source} at ${installed.installedPath ?? "(unknown)"} (agent folder ${input.agentDir.dir}).`,
+		`Installed ${shownSource} at ${installed.installedPath ?? "(unknown)"} (agent folder ${input.agentDir.dir}).`,
 		...piFolderNote(
 			input.agentDir,
 			input.home,
-			`is Pi's own agent folder: Pi now loads ${source} in every Pi session too, as after pi install. review-panel extension remove ${installed.source} (or pi remove) undoes that.`,
-			`A Pi started with the same PI_CODING_AGENT_DIR loads ${source} too.`,
+			`is Pi's own agent folder: Pi now loads ${shownSource} in every Pi session too, as after pi install. review-panel extension remove ${installed.source} (or pi remove) undoes that.`,
+			`A Pi started with the same PI_CODING_AGENT_DIR loads ${shownSource} too.`,
 		),
 		"A seat loads it only once its path is in that seat's roster row, as extraExtensionPaths. review-panel models lists the models it adds.",
 		"Extension entry paths (put the one that registers your provider in extraExtensionPaths):",
@@ -525,9 +554,9 @@ export async function listExtensions(input: {
 }): Promise<ExtensionsResult> {
 	return {
 		agentDir: input.agentDir.dir,
-		extensions: await input.sdk.listExtensions({
-			agentDir: input.agentDir.dir,
-		}),
+		extensions: (
+			await input.sdk.listExtensions({ agentDir: input.agentDir.dir })
+		).map(redactedExtension),
 	};
 }
 
@@ -581,15 +610,16 @@ export async function removeExtension(input: {
 	const removed = await input.sdk.removeExtension({
 		agentDir: input.agentDir.dir,
 		source,
-		progress: input.progress,
+		progress: (line) => input.progress(redactSecrets(line)),
 	});
+	const shownSource = redactSecrets(source);
 	if (!removed) {
 		throw new SetupError(
-			`No installed extension matches ${source} in ${input.agentDir.dir}. review-panel extension list prints the installed sources.`,
+			`No installed extension matches ${shownSource} in ${input.agentDir.dir}. review-panel extension list prints the installed sources.`,
 		);
 	}
 	return [
-		`Removed ${source} from ${input.agentDir.dir}.`,
+		`Removed ${shownSource} from ${input.agentDir.dir}.`,
 		...piFolderNote(
 			input.agentDir,
 			input.home,
