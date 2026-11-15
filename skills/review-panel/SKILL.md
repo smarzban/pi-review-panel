@@ -38,9 +38,7 @@ review-panel diagnose
 
 Review already checks setup and refuses when it is broken, so run diagnose only when you do not
 know whether the box is ready. If it does not say `ready`, stop and show the owner its
-remediation rows. Do not work around them. Diagnose also checks the owner's record key (beside
-the owner config) without creating it; review refuses to start when that key is
-unusable, and the refusal names the key path and the fix.
+remediation rows. Do not work around them.
 
 ## 3. Pick the range
 
@@ -126,13 +124,10 @@ reachable side path, and low for the rest. That severity is an opinion:
   one line.
 - You may drop a high you checked and believe is wrong. Say why. Do not fix it.
 
-Findings may arrive grouped. When the owner names a grouping seat, findings that describe the
-same defect share a group (`G-1`, `G-2`, …): a header with the highest severity a seat stated,
-then each member with its own F-id, title, seat, severity and evidence. Judge each group once, as one
-defect, but read its members: they may differ on place or severity. Group size is not agreement
-and not a reason to keep. `--kept-finding-ids`, `--dismissed` and `--low-advisory` take G-ids or
-F-ids; a G-id stands for all its members, and verify and the comments report F-ids. A
-`Lost: grouping` line means the list is not grouped; judge it as usual.
+Findings may arrive grouped (`G-1`, `G-2`, …) when several describe the same defect. Judge each
+group once, as one defect, but read its members: they may differ on place or severity. Group
+size is not agreement and not a reason to keep. Every id flag takes G-ids or F-ids; a G-id
+stands for all its members.
 
 Give the owner each finding with keep or skip and the reason, plus coverage and lost seats.
 
@@ -153,22 +148,17 @@ review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
-carry your reasons. An unknown id refuses the verify before any seat runs. Verify then runs
-the owner's `defaults.verifySeats`, or the first `defaults.seats` row when that is unset. Verify
-and `comment` take only a record signed with the owner's record key; a record written before
-records were signed, or one planted in the repository, is refused: run a new review.
+carry your reasons. Verify runs the owner's `defaults.verifySeats`. Verify and `comment` take
+only a record signed with the owner's record key; when one is refused, run a new review.
 
 Do not start a new full discovery review on the same change.
 
 ### Posting to the PR
 
 Posting is on by default. When the run's head is the head of exactly one open PR, `review`
-posts its round there as a new comment, and each `verify` posts what was fixed, what was not
-and why, and what is new. A verify where every seat voted and marked every kept id resolved,
-with no regressions, also posts the close-out card on its own, once per review; a kept low counts
-as resolved and need not be listed in `--low-advisory`. The report ends with a `PR comment:` line
-(and a `PR close-out:` line) saying where it posted or why it did not; a failed post never
-changes the exit code.
+and each `verify` post their round there as a new comment, and a clean verify also posts the
+close-out card. The report's `PR comment:` and `PR close-out:` lines say where it posted or why
+it did not.
 
 - Add `--no-pr-comment` to keep a run off the PR, and `--pr <n>` to name the PR.
 - If the report says `the owner config asks for approval first`, ask the owner, and after a
@@ -186,11 +176,9 @@ of starting over:
 review-panel resume --prior-run-id <run>
 ```
 
-Resume takes no other argument: seats, lenses and commits come from the record, and each seat
-is rebuilt from the owner config's roster row of that name. It pins the same head commit, runs
-only the seats that had not settled, and names them in the report. A seat whose row is gone or
-now names another model is lost coverage. Resume refuses a complete record, a run still in
-progress, an unsigned plan, and verify runs (start a new verify instead).
+Resume takes no other argument: seats, lenses and commits come from the record. It runs only
+the seats that had not settled and names them in the report. A refusal says why; for a verify,
+start a new verify instead.
 
 ## 8. Stop and comment
 
