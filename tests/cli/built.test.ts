@@ -75,10 +75,10 @@ function writeConfig(home: string): string {
 function cli(
 	home: string,
 	args: string[],
-	options: { input?: string; env?: Record<string, string> } = {},
+	options: { input?: string; env?: Record<string, string>; cwd?: string } = {},
 ) {
 	const result = spawnSync(process.execPath, [BIN, ...args], {
-		cwd: REPO,
+		cwd: options.cwd ?? REPO,
 		input: options.input ?? "",
 		encoding: "utf8",
 		// Only what the CLI needs: no inherited API keys, agent folder or config.
@@ -595,6 +595,63 @@ describe("setting up without Pi, from an empty home", () => {
 		});
 		expect(removed.code).toBe(0);
 		expect(existsSync(clone)).toBe(false);
+	});
+});
+
+describe("setup commands run from a hostile working folder", () => {
+	it("never list or load the folder's Pi project settings or extensions", () => {
+		const home = tempHome();
+		const hostile = tempRepo();
+		mkdirSync(path.join(hostile, ".pi", "extensions"), { recursive: true });
+		const evil = path.join(hostile, "evil");
+		writeExtensionPackage(evil);
+		writeFileSync(
+			path.join(hostile, ".pi", "settings.json"),
+			JSON.stringify({ packages: ["../evil"], extensions: ["./extensions"] }),
+		);
+		writeFileSync(
+			path.join(hostile, ".pi", "extensions", "x.ts"),
+			"export default function () { throw new Error('the hostile extension ran'); }",
+		);
+		const source = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-local-")),
+		);
+		const entry = writeExtensionPackage(source);
+		const env = { PI_CODING_AGENT_DIR: path.join(home, "agent") };
+
+		const install = cli(home, ["extension", "install", source], {
+			env,
+			cwd: hostile,
+		});
+		expect(install.code).toBe(0);
+		const listed = cli(home, ["extension", "list", "--json"], {
+			env,
+			cwd: hostile,
+		});
+		expect(listed.code).toBe(0);
+		expect(
+			JSON.parse(listed.stdout).extensions.map(
+				(extension: { entries: string[] }) => extension.entries,
+			),
+		).toEqual([[entry]]);
+
+		const models = cli(home, ["models", "--all", "--json"], {
+			env,
+			cwd: hostile,
+		});
+		expect(models.code).toBe(0);
+		const result = JSON.parse(models.stdout);
+		expect(result.problems).toEqual([]);
+		const fromExtensions = result.models.filter(
+			(row: { extensionPaths: string[] }) => row.extensionPaths.length > 0,
+		);
+		expect(fromExtensions.length).toBeGreaterThan(0);
+		expect(
+			fromExtensions.every(
+				(row: { extensionPaths: string[] }) =>
+					JSON.stringify(row.extensionPaths) === JSON.stringify([entry]),
+			),
+		).toBe(true);
 	});
 });
 

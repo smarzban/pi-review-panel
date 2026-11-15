@@ -131,6 +131,7 @@ describe("providers", () => {
 
 describe("models", () => {
 	it("lists the catalog offline, with availability from the logins", async () => {
+		mkdirSync(agentDir, { recursive: true });
 		writeFileSync(
 			path.join(agentDir, "auth.json"),
 			JSON.stringify({ anthropic: { type: "api_key", key: "not-a-key" } }),

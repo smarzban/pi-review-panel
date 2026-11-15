@@ -246,6 +246,9 @@ describe("auth providers", () => {
 	it("refuses arguments it does not take", async () => {
 		const h = harness();
 		expect(await h.run(["auth", "providers", "anthropic"])).toBe(EXIT_USAGE);
+		expect(h.err()).toContain(
+			'auth providers: unexpected argument "anthropic"',
+		);
 	});
 });
 
@@ -436,6 +439,9 @@ describe("models", () => {
 	it("refuses a second positional", async () => {
 		const h = harness();
 		expect(await h.run(["models", "anthropic", "openai"])).toBe(EXIT_USAGE);
+		expect(h.err()).toContain(
+			'models takes at most one provider id; unexpected argument "openai"',
+		);
 	});
 });
 
@@ -486,6 +492,15 @@ describe("extension install, list and remove", () => {
 		});
 		await h.run(["extension", "install", "npm:some-ext"]);
 		expect(h.out()).toContain("is Pi's own agent folder");
+	});
+
+	it("any other folder named by PI_CODING_AGENT_DIR is shared with a Pi started with that variable", async () => {
+		const h = harness({ agentDir: { dir: "/custom", source: "environment" } });
+		await h.run(["extension", "install", "npm:some-ext"]);
+		expect(h.out()).not.toContain("is Pi's own agent folder");
+		expect(h.out()).toContain(
+			"A Pi started with the same PI_CODING_AGENT_DIR loads npm:some-ext too.",
+		);
 	});
 
 	it("a local source is resolved from the working folder", async () => {
@@ -585,10 +600,20 @@ describe("extension install, list and remove", () => {
 	});
 
 	it("usage errors: no subcommand source, an unknown subcommand", async () => {
-		expect(await harness().run(["extension", "install"])).toBe(EXIT_USAGE);
-		expect(await harness().run(["extension", "remove"])).toBe(EXIT_USAGE);
-		expect(await harness().run(["extension", "update"])).toBe(EXIT_USAGE);
-		expect(await harness().run(["extension", "list", "x"])).toBe(EXIT_USAGE);
+		const cases: [string[], string][] = [
+			[["extension", "install"], "extension install takes one source"],
+			[["extension", "remove"], "extension remove takes one source"],
+			[
+				["extension", "update"],
+				'extension: unknown command "update"; use install, list or remove',
+			],
+			[["extension", "list", "x"], 'extension list: unexpected argument "x"'],
+		];
+		for (const [argv, text] of cases) {
+			const h = harness();
+			expect(await h.run(argv)).toBe(EXIT_USAGE);
+			expect(h.err()).toContain(text);
+		}
 	});
 });
 
