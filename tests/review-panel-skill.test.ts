@@ -226,6 +226,14 @@ describe("review-panel skill", () => {
 		expect(raw).not.toContain("—");
 	});
 
+	it("keeps the stop rule, promotion and the committed-snapshot rule", () => {
+		const body = flat(splitFrontmatter(readSkill()).body);
+		expect(body).toContain("At most three model passes, then ask the owner");
+		expect(body).toContain("Never review-fix-review-fix");
+		expect(body).toContain("You may promote a low to a kept blocker");
+		expect(body).toContain("Uncommitted work is invisible to the panel");
+	});
+
 	it("keeps lost coverage, edit authority and the landing condition", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
 		expect(body).toContain("A dead seat is lost coverage");

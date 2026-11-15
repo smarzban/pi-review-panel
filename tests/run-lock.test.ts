@@ -211,7 +211,7 @@ describe("stale run-lock takeover", () => {
 			writeFileSync(takeoverPath, `${JSON.stringify({ pid: process.pid })}\n`);
 
 			expect(() => acquireRunLock(record)).toThrow(
-				/lock is being taken over by another process; if no review_panel run is active, delete .*run\.lock\.takeover and try again/,
+				/lock is being taken over by another process; if no review-panel run is active, delete .*run\.lock\.takeover and try again/,
 			);
 			expect(readFileSync(lockPath, "utf8")).toBe(staleLock);
 			expect(existsSync(takeoverPath)).toBe(true);
@@ -270,7 +270,7 @@ describe("stale run-lock takeover", () => {
 				writeFileSync(lockPath, body);
 
 				expect(() => acquireRunLock(record)).toThrow(
-					/lock .*run\.lock is being written by another process, or was left unfinished by one that crashed; if no review_panel run is active, delete it and try again/,
+					/lock .*run\.lock is being written by another process, or was left unfinished by one that crashed; if no review-panel run is active, delete it and try again/,
 				);
 				expect(readFileSync(lockPath, "utf8")).toBe(body);
 				expect(existsSync(path.join(record, RUN_LOCK_TAKEOVER_FILE))).toBe(

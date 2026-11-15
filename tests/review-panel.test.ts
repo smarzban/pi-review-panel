@@ -1020,7 +1020,7 @@ function writeVerifyRecord(
 	signVerifyRecord(recordPath);
 }
 
-describe("review_panel comment", () => {
+describe("the comment action", () => {
 	it("refuses comment until the owner approved posting", async () => {
 		await withRepository(async (repository) => {
 			writeReviewRecord(repository, "review-1", { findings: [] });
@@ -1228,7 +1228,7 @@ describe("review_panel comment", () => {
 	});
 });
 
-describe("review_panel resume action", () => {
+describe("the resume action", () => {
 	function threeSeats(): PlannedSeat[] {
 		return ["correctness", "security", "tests"].map((lens, index) => ({
 			rosterId: `seat-${index}`,
@@ -1535,7 +1535,7 @@ describe("review_panel resume action", () => {
 	});
 });
 
-describe("review_panel record key", () => {
+describe("the record key", () => {
 	const seats: PlannedSeat[] = ["correctness", "security"].map(
 		(lens, index) => ({
 			rosterId: `seat-${index}`,

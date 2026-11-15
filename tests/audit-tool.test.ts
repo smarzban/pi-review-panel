@@ -41,7 +41,7 @@ const config: Config = {
 	defaults: { seats: ["terra", "claude", "glm"] },
 };
 
-describe("review_panel audit", () => {
+describe("the audit action", () => {
 	it("pins HEAD and presents submitted findings as an advisory backlog", async () => {
 		const repo = repository();
 		let seen: RunAuditInput | undefined;
