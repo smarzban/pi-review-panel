@@ -173,13 +173,18 @@ type TargetState =
 	| { kind: "other" };
 
 /**
- * A link into `.../pi-review-panel/skills/review-panel`: an install of this
- * package under another prefix or Node version (nvm, a new npm prefix, the
- * npx cache), so it is replaced and removed like our own link.
+ * A link into an npm install of this package's skill,
+ * `.../node_modules/pi-review-panel/skills/review-panel`: a global install
+ * under another prefix or Node version (nvm, a new npm prefix) or the npx
+ * cache. It is replaced and removed like our own link. A link into a plain
+ * checkout or fork (no `node_modules` above it) is the user's, so foreign.
  */
 function isEarlierInstall(to: string): boolean {
 	const parts = path.resolve(to).split(path.sep).filter(Boolean);
-	return parts.slice(-3).join("/") === `${PACKAGE_NAME}/skills/${SKILL_NAME}`;
+	return (
+		parts.slice(-4).join("/") ===
+		`node_modules/${PACKAGE_NAME}/skills/${SKILL_NAME}`
+	);
 }
 
 /**

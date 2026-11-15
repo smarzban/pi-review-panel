@@ -417,6 +417,35 @@ describe("upgrades from earlier installs (R-2)", () => {
 		});
 	}
 
+	for (const present of [true, false]) {
+		it(`keeps a ${present ? "" : "broken "}link into a plain pi-review-panel checkout: it is not an install`, () => {
+			const home = tempDir("rp-home-");
+			const skills = path.join(home, ".codex", "skills");
+			mkdirSync(skills, { recursive: true });
+			const checkout = path.join(
+				tempDir("rp-src-"),
+				"pi-review-panel",
+				"skills",
+				"review-panel",
+			);
+			if (present) {
+				mkdirSync(checkout, { recursive: true });
+				writeFileSync(path.join(checkout, "SKILL.md"), "fork");
+			}
+			symlinkSync(checkout, target(skills));
+			const result = installSkill(options(home, fakePackage()));
+			expect(result.ok).toBe(false);
+			expect(result.lines.join("\n")).toContain(
+				`Codex: skipped: ${target(skills)} ${present ? "links to" : "is a broken link to"} ${checkout}`,
+			);
+			expect(readlinkSync(target(skills))).toBe(checkout);
+			expect(
+				uninstallSkill(options(home, fakePackage())).lines.join("\n"),
+			).toContain("Codex: left alone:");
+			expect(readlinkSync(target(skills))).toBe(checkout);
+		});
+	}
+
 	it("uninstall removes a link into an earlier pi-review-panel install", () => {
 		const home = tempDir("rp-home-");
 		const skills = path.join(home, ".grok", "skills");
