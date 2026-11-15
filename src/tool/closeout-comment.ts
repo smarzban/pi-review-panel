@@ -10,6 +10,8 @@ import { orderFindings } from "./review-presentation.js";
 
 const OID_DISPLAY_LENGTH = 7;
 const SEVERITIES = ["high", "medium", "low"] as const;
+/** The range line links at most this many verify comments, the latest. */
+const MAX_VERIFY_LINKS = 10;
 
 export type CloseoutDismissed = {
 	id: string;
@@ -186,20 +188,25 @@ function rangeLine(input: CloseoutCommentInput): string {
 	const base = isCommitIdOf(input.baseRef, input.baseOid)
 		? postedCode(shortOid(input.baseOid))
 		: `${postedCode(input.baseRef)} (${postedCode(shortOid(input.baseOid))})`;
-	const parts = [`${base} → ${postedCode(shortOid(input.headOid))}`];
-	const add = (label: string, url: string | undefined) => {
-		const link = url === undefined ? undefined : postedLink(label, url);
-		if (link !== undefined) {
-			parts.push(link);
-		}
-	};
-	add("review", input.links?.review);
-	for (const round of inOrder(input.rounds ?? [])) {
-		if (round.round !== undefined) {
-			add(`verify ${round.round}`, input.links?.verify?.get(round.runId));
-		}
-	}
-	return parts.join(" · ");
+	const link = (label: string, url: string | undefined) =>
+		url === undefined ? undefined : postedLink(label, url);
+	const review = link("review", input.links?.review);
+	const verify = inOrder(input.rounds ?? []).flatMap((round) => {
+		const found =
+			round.round === undefined
+				? undefined
+				: link(`verify ${round.round}`, input.links?.verify?.get(round.runId));
+		return found === undefined ? [] : [found];
+	});
+	// The range line is part of the head, which is never cut: only the last
+	// rounds are linked, so it stays short whatever the number of rounds.
+	const shown = verify.slice(-MAX_VERIFY_LINKS);
+	return [
+		`${base} → ${postedCode(shortOid(input.headOid))}`,
+		...(review === undefined ? [] : [review]),
+		...(shown.length < verify.length ? ["…"] : []),
+		...shown,
+	].join(" · ");
 }
 
 /** Rounds in order: by number, a round with no number (never posted) last. */

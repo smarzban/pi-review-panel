@@ -409,6 +409,45 @@ describe("renderCloseoutComment", () => {
 		expect(text).not.toContain("evil");
 	});
 
+	it("rule 5: links the review and the last 10 verify rounds, so the range line stays short and the marker last (R-4)", () => {
+		const many = Array.from({ length: 1_000 }, (_, index) =>
+			round(`v-${index + 1}`, index + 1, []),
+		);
+		const text = renderCloseoutComment({
+			findings: [],
+			resolved: [],
+			dismissed: [],
+			lowAdvisory: [],
+			seats: seatsOf(["holistic", ["terra"]]),
+			lost: [],
+			rounds: many,
+			baseRef: "main",
+			baseOid,
+			headOid,
+			heading: "## Review panel · close-out",
+			runIds: { review: "r-1", verify: "v-1000" },
+			links: {
+				review: `${PR_URL}#issuecomment-1`,
+				verify: new Map(
+					many.map((row, index) => [
+						row.runId,
+						`${PR_URL}#issuecomment-${index + 2}`,
+					]),
+				),
+			},
+		});
+		const lines = text.split("\n");
+		expect(lines.at(-1)).toBe("<!-- review-panel review=r-1 verify=v-1000 -->");
+		const range = lines.find((line) => line.includes(" → ")) ?? "";
+		expect(range).toContain(
+			`[review](${PR_URL}#issuecomment-1) · … · [verify 991](`,
+		);
+		expect(range.match(/\[verify \d+\]/g)).toEqual(
+			Array.from({ length: 10 }, (_, index) => `[verify ${991 + index}]`),
+		);
+		expect(range.length).toBeLessThan(2_000);
+	});
+
 	it("rule 6: counts by severity, high first, zeros left out", () => {
 		const rows = [
 			finding("F-1", "low", "a"),
