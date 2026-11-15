@@ -295,11 +295,15 @@ describe("postCloseoutComment reads every page of comments", () => {
 	});
 
 	it.each([
-		["nothing", [], "no open PR has this head; pass --pr to name one"],
+		[
+			"nothing",
+			[],
+			"no open PR has this head; pass --pr to name one, or if the PR has moved on, run verify at its head first",
+		],
 		[
 			"an open pull request at another head, and none at this one,",
 			[{ number: 5, state: "open", head: { sha: "f".repeat(40) } }],
-			"no open PR has this head; pass --pr to name one",
+			"no open PR has this head; pass --pr to name one, or if the PR has moved on, run verify at its head first",
 		],
 		[
 			"two open pull requests at this head",
