@@ -225,9 +225,11 @@ function withinBound<T>(
 	ms: number,
 ): Promise<T | typeof TIMED_OUT> {
 	let timer: NodeJS.Timeout | undefined;
+	// The timer stays referenced: an extension that awaits a promise that never
+	// settles holds no handle, and an unreferenced timer would let Node end the
+	// process with the top-level await unsettled instead of reporting it.
 	const bound = new Promise<typeof TIMED_OUT>((resolve) => {
 		timer = setTimeout(() => resolve(TIMED_OUT), ms);
-		timer.unref();
 	});
 	return Promise.race([work, bound]).finally(() => clearTimeout(timer));
 }
