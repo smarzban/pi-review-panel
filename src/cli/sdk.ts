@@ -215,73 +215,110 @@ export type ProviderRuntime = Pick<
 	| "checkAuth"
 >;
 
+type Bounded<T> =
+	| { kind: "done"; value: T }
+	| { kind: "failed"; error: unknown }
+	| { kind: "timed-out" };
+
+/**
+ * `work` settled within `ms`, or not. The timer stays referenced while it
+ * waits, so a check that awaits a promise that never settles still ends.
+ */
+function bounded<T>(work: Promise<T>, ms: number): Promise<Bounded<T>> {
+	let timer: NodeJS.Timeout | undefined;
+	const late = new Promise<Bounded<T>>((resolve) => {
+		timer = setTimeout(() => resolve({ kind: "timed-out" }), ms);
+	});
+	return Promise.race([
+		work.then(
+			(value): Bounded<T> => ({ kind: "done", value }),
+			(error: unknown): Bounded<T> => ({ kind: "failed", error }),
+		),
+		late,
+	]).finally(() => clearTimeout(timer));
+}
+
 /**
  * One row per provider. The runtime's availability pass fills its auth
  * snapshot, but one check that throws fails the whole pass, so a provider the
- * snapshot does not show as configured is checked again on its own: a failing
- * check marks only its own row.
+ * snapshot does not show as configured is checked again on its own. Those
+ * checks run concurrently, each within `checkTimeoutMs`: a check that fails
+ * or never finishes marks only its own row, and the command has an overall
+ * bound of about three times that.
  */
 export async function providerRows(
 	runtime: ProviderRuntime,
+	options: { checkTimeoutMs?: number } = {},
 ): Promise<ProviderRow[]> {
-	const signal = () => AbortSignal.timeout(15_000);
-	let stored = new Set<string>();
-	try {
-		stored = new Set(
-			(await runtime.listCredentials({ signal: signal() })).map(
-				(entry) => entry.providerId,
-			),
-		);
-	} catch {
-		// An unreadable auth.json leaves stored logins to the checks below.
-	}
-	try {
-		await runtime.getAvailable(undefined, { signal: signal() });
-	} catch {
-		// One failing check fails the pass; each provider is checked below.
-	}
-	const rows: ProviderRow[] = [];
-	for (const provider of runtime.getProviders()) {
-		const logins: ProviderLogin[] = [];
-		if (provider.auth.oauth !== undefined) {
-			logins.push("account");
-		}
-		if (provider.auth.apiKey?.login !== undefined) {
-			logins.push("api-key");
-		}
-		const row: ProviderRow = {
-			id: provider.id,
-			name: provider.name,
-			logins,
-			loggedIn: false,
-		};
-		const status = runtime.getProviderAuthStatus(provider.id);
-		if (stored.has(provider.id)) {
-			row.loggedIn = true;
-			row.how = "stored credential";
-		} else if (status.configured) {
-			row.loggedIn = true;
-			const how = configuredHow(status);
-			if (how !== undefined) {
-				row.how = how;
+	const ms = options.checkTimeoutMs ?? 15_000;
+	const signal = () => AbortSignal.timeout(ms);
+	const credentials = await bounded(
+		Promise.resolve().then(() => runtime.listCredentials({ signal: signal() })),
+		ms,
+	);
+	// An unreadable auth.json leaves stored logins to the checks below.
+	const stored = new Set(
+		credentials.kind === "done"
+			? credentials.value.map((entry) => entry.providerId)
+			: [],
+	);
+	// One failing check fails the pass; each provider is checked below.
+	await bounded(
+		Promise.resolve().then(() =>
+			runtime.getAvailable(undefined, { signal: signal() }),
+		),
+		ms,
+	);
+	const rows = await Promise.all(
+		runtime.getProviders().map(async (provider): Promise<ProviderRow> => {
+			const logins: ProviderLogin[] = [];
+			if (provider.auth.oauth !== undefined) {
+				logins.push("account");
 			}
-		} else {
-			try {
-				const check = await runtime.checkAuth(provider.id, {
-					signal: signal(),
-				});
-				if (check !== undefined) {
-					row.loggedIn = true;
-					row.how = check.source ?? check.type;
+			if (provider.auth.apiKey?.login !== undefined) {
+				logins.push("api-key");
+			}
+			const row: ProviderRow = {
+				id: provider.id,
+				name: provider.name,
+				logins,
+				loggedIn: false,
+			};
+			const status = runtime.getProviderAuthStatus(provider.id);
+			if (stored.has(provider.id)) {
+				row.loggedIn = true;
+				row.how = "stored credential";
+				return row;
+			}
+			if (status.configured) {
+				row.loggedIn = true;
+				const how = configuredHow(status);
+				if (how !== undefined) {
+					row.how = how;
 				}
-			} catch (error) {
-				row.checkError = redactSecrets(
-					error instanceof Error ? error.message : String(error),
-				);
+				return row;
 			}
-		}
-		rows.push(row);
-	}
+			const check = await bounded(
+				Promise.resolve().then(() =>
+					runtime.checkAuth(provider.id, { signal: signal() }),
+				),
+				ms,
+			);
+			if (check.kind === "done" && check.value !== undefined) {
+				row.loggedIn = true;
+				row.how = check.value.source ?? check.value.type;
+			} else if (check.kind === "failed") {
+				row.checkError = redactSecrets(
+					check.error instanceof Error
+						? check.error.message
+						: String(check.error),
+				);
+			} else if (check.kind === "timed-out") {
+				row.checkError = `the login check did not finish within ${ms / 1000} s`;
+			}
+			return row;
+		}),
+	);
 	return rows.sort((a, b) => a.id.localeCompare(b.id));
 }
 
