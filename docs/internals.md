@@ -91,8 +91,9 @@ Setup needs no Pi install. `auth providers` lists every provider of the bundled 
 runtime (built-ins and `models.json`) with its login kinds and `getProviderAuthStatus`, after one
 availability pass. `models` loads one isolated runtime per group, through the seat's own
 `createIsolatedServices` (no ambient resources, only the group's extension paths): the base
-group with no extension, then each package installed in the agent folder, then each
-`--extension` file. An extension group lists only the providers it registered itself, each row
+group with no extension, then each extension entry of each package installed in the agent
+folder (one group per entry, so a roster row names only the entry that registered its
+provider), then each `--extension` file. An extension group lists only the providers it registered itself, each row
 carrying that group's paths as `extraExtensionPaths`; each group load is bounded at 30 s
 (`READINESS_ROW_TIMEOUT_MS`), and a failed or hung group is a `Problems:` line, never a failed
 command. Availability is `getAvailable(provider)` per provider: the SDK's static catalogs and the

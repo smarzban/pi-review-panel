@@ -169,9 +169,11 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   no provider for its model list. Whether a provider is logged in comes from its stored
   credential or environment variable; a provider that defines its own check (such as
   `claude-code`, which asks the Claude Code CLI) runs that check, as `diagnose` does.
-- `models` loads each installed extension package on its own, and each `--extension` file
-  (resolved from the working folder) on its own, exactly as a seat loads only its own row's
-  extensions, and lists from that package only the providers it registered. Each load is
+- `models` loads every installed package, because only loading it shows which providers it
+  registers (any id, a built-in's included), as Pi does on every start. Each extension entry,
+  and each `--extension` file (resolved from the working folder), loads on its own, exactly as
+  a seat loads only its own row's paths, and lists only the providers that entry registered,
+  so the roster row names just that entry. Each load is
   bounded at 30 seconds; a package that fails or does not finish is named under `Problems:`
   and the rest is still listed. It runs that code, as `diagnose` does.
 - `extension install <source>` installs a Pi package with the bundled SDK's own package

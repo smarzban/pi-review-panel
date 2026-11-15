@@ -313,10 +313,21 @@ export async function listModels(input: {
 		input.sdk.listExtensions({ agentDir }),
 		input.signal,
 	)) {
-		if (installed.entries.length > 0) {
+		// Every installed package loads, because only loading it tells which
+		// providers it registers (any id, a built-in's included); Pi loads them all
+		// on every start too. Each entry loads on its own, as one roster row's
+		// path would, so a model's roster row names only the entry that
+		// registered its provider.
+		const source = redactSecrets(installed.source);
+		for (const entry of installed.entries) {
+			const within =
+				installed.installedPath === undefined
+					? path.basename(entry)
+					: path.relative(installed.installedPath, entry);
 			groups.push({
-				label: redactSecrets(installed.source),
-				extensionPaths: installed.entries,
+				label:
+					installed.entries.length === 1 ? source : `${source} (${within})`,
+				extensionPaths: [entry],
 			});
 		}
 	}
