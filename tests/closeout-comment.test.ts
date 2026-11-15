@@ -671,7 +671,23 @@ describe("assembleCloseoutComment", () => {
 		expect(text).not.toMatch(/fixed/i);
 	});
 
-	it("requires leftover lows to be listed and keeps high/medium out of that list", () => {
+	it("with no verify, leaves an unlisted low as low/advisory, refuses an undismissed high/medium, and keeps high/medium out of low/advisory", () => {
+		const text = assembleCloseoutComment({
+			findings,
+			state: chainState(findings, []),
+			panel,
+			lost: [],
+			meta: { baseRef: "origin/main", baseOid, headOid },
+			dismissed: [
+				{ id: "F-1", reason: "checked" },
+				{ id: "F-2", reason: "checked" },
+				{ id: "F-4", reason: "checked" },
+			],
+			lowAdvisory: [],
+		});
+		expect(text).toContain(
+			"### Low / advisory (not kept)\n- **F-3** rename helper",
+		);
 		expect(() =>
 			assembleCloseoutComment({
 				findings,
@@ -679,14 +695,12 @@ describe("assembleCloseoutComment", () => {
 				panel,
 				lost: [],
 				meta: { baseRef: "origin/main", baseOid, headOid },
-				dismissed: [
-					{ id: "F-1", reason: "checked" },
-					{ id: "F-2", reason: "checked" },
-					{ id: "F-4", reason: "checked" },
-				],
+				dismissed: [{ id: "F-1", reason: "checked" }],
 				lowAdvisory: [],
 			}),
-		).toThrow(/F-3/);
+		).toThrow(
+			"F-2, F-4 were never verified: verify them, or dismiss each with a reason",
+		);
 		expect(() =>
 			assembleCloseoutComment({
 				findings,

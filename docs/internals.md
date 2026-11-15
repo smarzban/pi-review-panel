@@ -75,8 +75,9 @@ that head. Both cards are built from the review and its whole verify chain (`com
 itself; a `verifyRunId` it is given must be the latest link) and list each id as “resolved in
 verify N” (N the posted round of the link that resolved it, round numbers only from the review
 record's signed `round-<N>.posted` file names; plain “resolved” for a link that never posted),
-dismissed, low/advisory, or under `### Open (not resolved)` (still open in the chain, or a review
-finding no round kept, `not verified`): presentation only, never the word “fixed”, no “ready to
+dismissed, low/advisory, or under `### Open (not resolved)` (still open in the chain; the first
+verify places every finding, and `comment` with no verify refuses a high or medium it is not told
+to dismiss): presentation only, never the word “fixed”, no “ready to
 merge.” They show counts by severity and hide zero counts, `Review seats:` and `Verified by:` (the
 seats that voted in each link, from signed verify records; a lost seat is not named there),
 `Lost:` only when a seat was lost (verify seats marked `(verify)`), the base ref only when it is

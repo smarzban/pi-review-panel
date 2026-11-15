@@ -503,31 +503,6 @@ describe("--close-out", () => {
 		);
 	});
 
-	it("without it, says nothing is open only when the card could post: a medium no round kept is open", async () => {
-		// Verify 1 keeps everything but F-5, a medium, and resolves it all.
-		const v1 = await verify(
-			{
-				priorRunId: REVIEW,
-				head: commits[2],
-				keptFindingIds: ["F-1", "F-2", "F-3"],
-				lowAdvisory: ["F-4"],
-			},
-			{
-				items: [
-					{ id: "F-1", disposition: "resolved" },
-					{ id: "F-2", disposition: "resolved" },
-					{ id: "F-3", disposition: "resolved" },
-				],
-			},
-		);
-		expect(v1.reply).not.toContain("PR close-out");
-		const v2 = await verify(
-			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
-			{ items: [] },
-		);
-		expect(v2.reply).toContain("PR close-out: not posted (still open: F-5)");
-	});
-
 	it("is taken by the parser and by a call object", () => {
 		expect(
 			parseVerifyArguments(

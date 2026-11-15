@@ -236,7 +236,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
 - `verify` chains. The first verify of a review takes the review's run id as
-  `--prior-run-id` and needs `--kept-finding-ids`. Every later verify takes the latest
+  `--prior-run-id` and needs `--kept-finding-ids`; it must place every finding (a high or
+  medium it neither keeps nor dismisses is refused; a low it leaves out is low/advisory). Every later verify takes the latest
   verify's run id, checks only what is still open after it (its still-present ids and its
   regressions, which get ids such as `V1-R1`) from that verify's head, and with no
   `--kept-finding-ids` checks every open id. An id an earlier round resolved, dismissed or left

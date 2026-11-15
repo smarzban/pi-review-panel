@@ -35,7 +35,6 @@ import type { RunVerifyResult } from "../run/run-verify.js";
 import type { Suggestion, SuggestionsUnavailable } from "../run/suggest.js";
 import type { PlannedSeat, StampedFinding } from "../run/types.js";
 import {
-	assertChainJudgment,
 	type ChainLink,
 	type ChainState,
 	chainState,
@@ -758,26 +757,6 @@ function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
 	];
 }
 
-/**
- * True when the card would list nothing as open after this verify, by the
- * card's own accounting: a high or medium no round kept is open, and a low
- * no round listed cannot be accounted for.
- */
-function nothingOpen(facts: VerifyRoundFacts): boolean {
-	try {
-		return (
-			accountCloseoutFindings({
-				findings: facts.review.findings,
-				state: stateAfter(facts),
-				dismissed: [],
-				lowAdvisory: [],
-			}).open.length === 0
-		);
-	} catch {
-		return false;
-	}
-}
-
 /** Where every id stands after this verify, from the review and the chain. */
 function stateAfter(facts: VerifyRoundFacts): ChainState {
 	return chainState(facts.review.findings, chainWithOwn(facts));
@@ -1253,7 +1232,7 @@ export async function postVerifyRound(
 	const blocker = closeoutBlocker(result);
 	if (facts.closeOut !== true) {
 		// Never automatic: say so only when it could have been asked for.
-		if (blocker === undefined && nothingOpen(facts)) {
+		if (blocker === undefined && stateAfter(facts).open.length === 0) {
 			lines.push(
 				notPosted(
 					"PR close-out",
@@ -1314,24 +1293,4 @@ export async function postVerifyRound(
 		lines.push(notPosted("PR close-out", ghReason(error)));
 	}
 	return lines;
-}
-
-/**
- * Refuses `dismissed` and `lowAdvisory` rows that do not fit the review
- * record, before any verify seat runs (see `assertChainJudgment`, which a
- * chained verify uses with the chain's state).
- */
-export function assertVerifyJudgment(
-	findings: readonly StampedFinding[],
-	keptFindingIds: readonly string[],
-	dismissed: readonly CloseoutJudgmentRow[],
-	lowAdvisory: readonly string[],
-): void {
-	assertChainJudgment(
-		chainState(findings, []),
-		[],
-		keptFindingIds,
-		dismissed,
-		lowAdvisory,
-	);
 }

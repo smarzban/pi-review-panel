@@ -27,11 +27,11 @@ import { DEFAULT_SEAT_BUDGET_MS, HEARTBEAT_INTERVAL_MS } from "./scheduler.js";
 import { pinSnapshot } from "./snapshot.js";
 import type { PlannedSeat } from "./types.js";
 import {
-	assertChainJudgment,
 	type ChainItem,
 	type ChainLink,
 	chainState,
 	type JudgmentRow,
+	judgeRound,
 	loadChainPrior,
 	regressionId,
 } from "./verify-chain.js";
@@ -341,14 +341,14 @@ export async function runVerify(
 		);
 	}
 	const dismissed = input.dismissed ?? [];
-	const lowAdvisory = input.lowAdvisory ?? [];
 	const state = chainState(prior.findings, chain.links);
-	assertChainJudgment(
+	// The first verify's lows that it leaves out are recorded as advisory.
+	const lowAdvisory = judgeRound(
 		state,
 		chain.links,
 		input.keptFindingIds,
 		dismissed,
-		lowAdvisory,
+		input.lowAdvisory ?? [],
 	);
 	const kept = input.keptFindingIds.map((id) =>
 		verifyItemOf(state.items.get(id) as ChainItem),

@@ -28,14 +28,17 @@ import { validateConfig } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
-import { chainState, loadVerifyChain } from "../src/run/verify-chain.js";
+import {
+	chainState,
+	judgeRound,
+	loadVerifyChain,
+} from "../src/run/verify-chain.js";
 import {
 	parseJsonPages,
 	postCloseoutComment,
 } from "../src/tool/closeout-post.js";
 import { postedCode, postedText } from "../src/tool/posted-text.js";
 import {
-	assertVerifyJudgment,
 	CLOSEOUT_POSTED_MARKER,
 	defaultRunGh,
 	type RoundGhRunner as GhRunner,
@@ -1186,38 +1189,6 @@ describe("a clean verify with --close-out also posts the close-out card, once pe
 		});
 	});
 
-	it("says why when the card cannot be built, and still posts the verify comment", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			const result = await verifyAction(
-				{
-					closeOut: true,
-					repoDir: repo,
-					priorRunId: latest(repo, REVIEW_ID),
-					head: "HEAD",
-					keptFindingIds: ["F-1"],
-					lowAdvisory: ["F-3"],
-				},
-				{
-					deps: deps(gh.runGh, {
-						runVerify: verifyRun(
-							repo,
-							"v-1",
-							REVIEW_ID,
-							[ROWS[0] as Row],
-							[resolvedF1],
-						),
-					}),
-				},
-			);
-			expect(posts(gh.calls)).toHaveLength(1);
-			const last = textOf(result).split("\n").at(-1) ?? "";
-			expect(last.startsWith("PR close-out: not posted (")).toBe(true);
-			expect(last).toContain("F-2");
-		});
-	});
-
 	it("a regression means no close-out", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
@@ -1799,6 +1770,7 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-2", reason: "not in this test" }],
 				},
 				{
 					deps: deps(gh.runGh, {
@@ -1848,7 +1820,10 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 				baseOid: "a".repeat(40),
 				headOid: "b".repeat(40),
 			},
-			dismissed: [{ id: "F-2", reason: `r ${HOSTILE}` }],
+			dismissed: [
+				{ id: "F-1", reason: "checked" },
+				{ id: "F-2", reason: `r ${HOSTILE}` },
+			],
 			lowAdvisory: ["F-3"],
 		});
 		expectInert(card);
@@ -2063,7 +2038,11 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 				baseOid: "a".repeat(40),
 				headOid: "b".repeat(40),
 			},
-			dismissed: [],
+			// No verify: every high and medium is dismissed.
+			dismissed: ROWS.filter((row) => row.severity !== "low").map((row) => ({
+				id: row.id,
+				reason: "checked",
+			})),
 			lowAdvisory: [],
 		});
 		expect(card.split("\n")).toContain(
@@ -3436,12 +3415,10 @@ describe("fix round 2: nits", () => {
 			stamped({ id: "F-1", severity: "high" }),
 			stamped({ id: "F-2", severity: "low" }),
 		];
-		expect(() => assertVerifyJudgment(findings, ["F-1"], [], ["F-1"])).toThrow(
-			/F-1 is high/,
-		);
-		expect(() =>
-			assertVerifyJudgment(findings, ["F-2"], [], ["F-2"]),
-		).not.toThrow();
+		const judge = (kept: string[], low: string[]) =>
+			judgeRound(chainState(findings, []), [], kept, [], low);
+		expect(() => judge(["F-1"], ["F-1"])).toThrow(/F-1 is high/);
+		expect(judge(["F-1", "F-2"], ["F-2"])).toEqual(["F-2"]);
 	});
 });
 
@@ -4041,7 +4018,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		const kept = ROWS.filter((row) => {
 			const status = state.items.get(row.id)?.state.status;
 			return (
-				status === "open" || (status === "untracked" && row.severity !== "low")
+				status === "open" || (status === "unplaced" && row.severity !== "low")
 			);
 		});
 		return verifyAction(

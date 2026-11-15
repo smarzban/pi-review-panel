@@ -412,13 +412,16 @@ Verify rounds form a chain. Each verify checks only what is still open after the
 it, against the diff from that verify's head:
 
 1. The first verify takes the review's run id as `priorRunId` and needs `keptFindingIds`
-   (`""` for none). It checks those ids against `<review head>...<head>`.
+   (`""` for none). It places every review finding: kept, dismissed with a reason, or left as
+   low/advisory. A high or medium it leaves out is refused before any seat runs, naming the
+   ids; a low it leaves out is left as low/advisory and recorded so. It checks the kept ids
+   against `<review head>...<head>`.
 2. Every later verify takes the latest verify's run id as `priorRunId`. Its diff base is that
    verify's head. It checks the open set: every id the latest verify, or an earlier one, left
    still present or inconclusive (or that no voting seat answered), and every regression a
    round reported, less what the caller dismisses or leaves as low/advisory now. Leave out
-   `keptFindingIds` to check all of it, or pass part of it. A review finding no round kept may
-   also be named.
+   `keptFindingIds` to check all of it, or pass part of it. The verify comment's
+   `Open after this round:` line and the card's open list name the same ids.
 3. An id is resolved by the round in which every voting seat that answered for it said
    resolved. It is not checked again: naming it in `keptFindingIds`, `dismissed` or
    `lowAdvisory` is refused, and so is an id an earlier round dismissed or left as low/advisory.
@@ -666,9 +669,10 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
   its own signed verify record. A verify that never posted (for example, run with
   `--no-pr-comment`) still counts as a round, with no number, and its ids read plain `resolved`.
 - Open ids are listed under `### Open (not resolved)`: what the chain left still present,
-  inconclusive or unanswered, open regressions, and review findings no round kept, marked
-  `not verified`. A low no round kept must be listed in `lowAdvisory` or dismissed. `comment`
-  may dismiss or leave as low/advisory an id that is open or that no round kept, or give a new
+  inconclusive or unanswered, and open regressions. With no verify at all, `comment` refuses a
+  high or medium it is not told to dismiss (never verified), and lists a low it is not told
+  about as low/advisory. `comment`
+  may dismiss or leave as low/advisory an id that is open, or give a new
   reason for an id the chain dismissed, never an id a round resolved. The card never says
   “fixed”.
 - The range line links to the review comment and to each counted verify's comment on the same

@@ -81,9 +81,9 @@ import {
 } from "../run/run-verify.js";
 import type { PlannedSeat, RunConfig } from "../run/types.js";
 import {
-	assertChainJudgment,
 	chainState,
 	defaultKeptIds,
+	judgeRound,
 	loadChainPrior,
 	loadVerifyChain,
 } from "../run/verify-chain.js";
@@ -903,20 +903,21 @@ export async function verifyAction(
 		},
 		"Verify refused",
 	);
-	const { dismissed, lowAdvisory } = judged;
+	const { dismissed } = judged;
 	const state = chainState(prior.findings, chain.links);
 	// Omitted on a chained verify: every id still open.
 	const keptFindingIds =
 		valid.keptFindingIds === undefined
-			? defaultKeptIds(chain, state, dismissed, lowAdvisory)
+			? defaultKeptIds(chain, state, dismissed, judged.lowAdvisory)
 			: judged.kept;
-	// Checked against the review and the chain before any seat runs.
-	assertChainJudgment(
+	// Checked against the review and the chain before any seat runs; the
+	// first verify's lows it leaves out become low/advisory.
+	const lowAdvisory = judgeRound(
 		state,
 		chain.links,
 		keptFindingIds,
 		dismissed,
-		lowAdvisory,
+		judged.lowAdvisory,
 	);
 	const headRevision = resolved.oidOf(repoDir, head);
 	const panel = planVerifySeats(config, seats);

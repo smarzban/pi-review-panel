@@ -386,10 +386,10 @@ function itemOf(item: ChainItem, label?: string): CloseoutItem {
  * verify chain left it, plus judgment given with the card: resolved (with
  * the posted round of the link that resolved it, or plain `resolved` when
  * that link never posted), open, dismissed with the reason, or left as
- * low/advisory. A finding no round kept is open (`not verified`), except a
- * low, which must be listed as low/advisory or dismissed. Judgment given
- * with the card may name an open or never-kept id, or replace a chain
- * dismissal's reason; never an id a round resolved.
+ * low/advisory. With no verify, every finding is unplaced: a low is left as
+ * low/advisory, and a high or medium not dismissed is refused as never
+ * verified. Judgment given with the card may name an open or unplaced id,
+ * or replace a chain dismissal's reason; never an id a round resolved.
  */
 export function accountCloseoutFindings(
 	input: AccountCloseoutInput,
@@ -436,6 +436,7 @@ export function accountCloseoutFindings(
 		claimed.set(id, "low");
 	}
 
+	const unverified: string[] = [];
 	const accounted: AccountedCloseout = {
 		submitted: input.findings.length,
 		resolved: [],
@@ -477,12 +478,20 @@ export function accountCloseoutFindings(
 			accounted.open.push(itemOf(item));
 			continue;
 		}
+		// Unplaced: no verify ran. A low left out is advisory; a high or
+		// medium must be verified or dismissed.
 		if (item.severity === "low") {
-			throw new Error(
-				`${item.id} is low/advisory and was not listed; pass it in lowAdvisory or dismiss it with a reason`,
-			);
+			accounted.lowAdvisory.push({ id: item.id, title: item.title });
+			continue;
 		}
-		accounted.open.push(itemOf(item, "not verified"));
+		unverified.push(item.id);
+	}
+	if (unverified.length > 0) {
+		throw new Error(
+			unverified.length === 1
+				? `${unverified[0]} was never verified: verify it, or dismiss it with a reason`
+				: `${unverified.join(", ")} were never verified: verify them, or dismiss each with a reason`,
+		);
 	}
 	return accounted;
 }

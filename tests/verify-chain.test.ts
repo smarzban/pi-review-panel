@@ -153,6 +153,16 @@ async function verify(
 	} = {},
 ) {
 	let call = 0;
+	// The first verify places every finding: unless the test says, the
+	// highs and mediums it does not keep are dismissed.
+	const placed =
+		prior === REVIEW && extra.dismissed === undefined
+			? {
+					dismissed: FINDINGS.filter(
+						(row) => row.finding.severity !== "low" && !kept.includes(row.id),
+					).map((row) => ({ id: row.id, reason: "not in this test" })),
+				}
+			: {};
 	return await runVerify(
 		{
 			repoDir: repo,
@@ -160,6 +170,7 @@ async function verify(
 			priorRunId: prior,
 			headRevision: head,
 			keptFindingIds: kept,
+			...placed,
 			...extra,
 		},
 		{

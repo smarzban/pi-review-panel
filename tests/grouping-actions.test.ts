@@ -331,6 +331,11 @@ describe("verify takes G-ids as well as F-ids", () => {
 					priorRunId: "review-1",
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
+					// The first verify places every finding.
+					dismissed: [
+						{ id: "F-3", reason: "not in this test" },
+						{ id: "F-4", reason: "not in this test" },
+					],
 				},
 				{ deps: deps({ runVerify: capture.runVerify }) },
 			);

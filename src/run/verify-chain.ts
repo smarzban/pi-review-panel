@@ -72,7 +72,8 @@ export type ChainLink = {
 
 /** Where an id stands after the chain's last link. */
 export type ChainItemState =
-	| { status: "untracked" }
+	/** A review finding before the first verify placed it. */
+	| { status: "unplaced" }
 	| { status: "open"; link: number }
 	| { status: "resolved"; link: number; runId: string }
 	| { status: "dismissed"; link: number; reason: string }
@@ -566,7 +567,7 @@ function reviewItem(row: StampedFinding): ChainItem {
 		line: row.finding.line,
 		evidence: row.finding.evidence,
 		severity: row.finding.severity,
-		state: { status: "untracked" },
+		state: { status: "unplaced" },
 	};
 }
 
@@ -660,23 +661,26 @@ function stateWords(
 }
 
 /**
- * Refuses a verify's ids that do not fit the chain, before any seat runs:
- * an id the review and the chain do not hold, one listed twice, a kept id
- * also dismissed, an empty reason, a high/medium finding or a regression
- * listed as low/advisory (a regression has no severity: dismiss it with a
- * reason), and any id an earlier round resolved, dismissed or left as
- * low/advisory, which is not judged again. A kept low may also be listed as
- * low/advisory; it counts as kept.
+ * Checks a verify's ids against the chain, before any seat runs, and
+ * returns its full low/advisory list. Refused: an id the review and the
+ * chain do not hold, one listed twice, a kept id also dismissed, an empty
+ * reason, a high/medium finding or a regression listed as low/advisory (a
+ * regression has no severity: dismiss it with a reason), and any id an
+ * earlier round resolved, dismissed or left as low/advisory, which is not
+ * judged again. A kept low may also be listed as low/advisory; it counts as
+ * kept. The first verify places every review finding: a high or medium it
+ * neither keeps, dismisses nor lists is refused, and a low it leaves out is
+ * left as low/advisory (added to the list returned, so it is recorded).
  */
-export function assertChainJudgment(
+export function judgeRound(
 	state: ChainState,
 	links: readonly ChainLink[],
 	keptFindingIds: readonly string[],
 	dismissed: readonly JudgmentRow[],
 	lowAdvisory: readonly string[],
-): void {
+): string[] {
 	const settled = (id: string, item: ChainItem) => {
-		if (item.state.status !== "open" && item.state.status !== "untracked") {
+		if (item.state.status !== "open" && item.state.status !== "unplaced") {
 			throw new Error(
 				`${REFUSED}: ${id} ${stateWords(item.state, links)}; it is not judged again`,
 			);
@@ -745,6 +749,18 @@ export function assertChainJudgment(
 		settled(id, item);
 		claimed.add(id);
 	}
+	const unplaced = [...state.items.values()].filter(
+		(item) => item.state.status === "unplaced" && !claimed.has(item.id),
+	);
+	const missing = unplaced
+		.filter((item) => item.severity !== "low")
+		.map((item) => item.id);
+	if (missing.length > 0) {
+		throw new Error(
+			`${REFUSED}: the first verify places every finding: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not kept, dismissed or left as low/advisory`,
+		);
+	}
+	return [...lowAdvisory, ...unplaced.map((item) => item.id)];
 }
 
 /**

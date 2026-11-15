@@ -137,9 +137,11 @@ Give the owner each finding with keep or skip and the reason, plus coverage and 
 
 1. The builder fixes the kept findings and commits, so `head` is a new commit. Verify pins a
    committed snapshot and refuses when head matches the prior run.
-2. The first verify checks the kept ids, including any promoted low, against the review.
-   `<run>` is the review's run id: the last folder of the report's `Record:` line. The full
-   record path on that line also works; a relative path does not.
+2. The first verify checks the kept ids, including any promoted low, against the review, and
+   places every other finding: dismiss each high or medium you skip with a reason (it is
+   refused otherwise); a low you leave out is recorded as low/advisory. `<run>` is the review's
+   run id: the last folder of the report's `Record:` line. The full record path on that line
+   also works; a relative path does not.
 
 ```bash
 review-panel verify --prior-run-id <review run> --head <new head> --kept-finding-ids F-1,F-2 \

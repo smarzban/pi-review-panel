@@ -397,6 +397,8 @@ describe("G-ids expand only from the grouping in the signed execution.json (T501
 					priorRunId: runId,
 					head: "HEAD",
 					keptFindingIds: ["G-1"],
+					// The first verify places every finding.
+					dismissed: [{ id: "G-2", reason: "not in this test" }],
 				},
 				{ deps: verifyDeps(seen) },
 			),
