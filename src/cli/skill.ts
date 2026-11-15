@@ -236,6 +236,16 @@ function readStamp(dir: string): string | undefined {
 	}
 }
 
+/** True when every entry in the copy is the stamp or a name the package ships. */
+function holdsOnlyOurFiles(target: string, source: string): boolean {
+	try {
+		const shipped = new Set([SKILL_STAMP_FILE, ...readdirSync(source)]);
+		return readdirSync(target).every((name) => shipped.has(name));
+	} catch {
+		return false;
+	}
+}
+
 function inspect(target: string, source: string): TargetState {
 	let stats: ReturnType<typeof lstatSync>;
 	try {
@@ -256,7 +266,9 @@ function inspect(target: string, source: string): TargetState {
 	}
 	if (stats.isDirectory()) {
 		const version = readStamp(target);
-		if (version !== undefined) {
+		// Ours only while it holds nothing of the user's: a copy with a file
+		// this package does not ship is replaced only with --force.
+		if (version !== undefined && holdsOnlyOurFiles(target, source)) {
 			return { kind: "ours-copy", version };
 		}
 		if (isOldHostCopy(target)) {
