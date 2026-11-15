@@ -473,8 +473,8 @@ any seat runs:
   ran, so this run is not signed; verify against "<run>"`. That run is lost, not the chain;
 - against an unsigned verify record: run a new review;
 - when the chain is not one line of signed links: two verifies chained from one record (a
-  fork: possible only when two verifies, each with a claim the other saw as stale, both pass
-  that last check at the same moment), a link whose previous record is not a complete signed
+  fork: possible only when a verify whose claim went stale passes that last check before the
+  verify that overtook it signs), a link whose previous record is not a complete signed
   verify of the same review (a gap, or a link of another review's chain), or a link out of
   place. The message says to run a new review.
 
@@ -569,7 +569,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   seat, `… lost its seat, so nothing was checked; run comment again to check again`. Before it
   runs, `comment` makes every refusal that costs no seat, finding the PR it would post to (the
   one `--pr` names, or the one open PR at the card's head) among them: with no PR to post to,
-  it refuses with no seat spent and no link written. A verify running from the chain's
+  it refuses with no seat spent and no link written. If the post still fails after the check
+  (the PR closed or moved in between), the refusal names the final check as the latest verify. A verify running from the chain's
   latest link refuses it, naming that verify. See
   [The close-out card](#the-close-out-card) for what it shows.
 - The close-out posts at most once per review, by these rules and with the exceptions below:

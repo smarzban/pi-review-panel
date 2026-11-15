@@ -1201,7 +1201,20 @@ export async function commentAction(
 				),
 			...(pr === undefined ? {} : { pr }),
 		});
-	const posted = post();
+	let posted: ReturnType<typeof post>;
+	try {
+		posted = post();
+	} catch (error) {
+		if (latest === undefined) {
+			throw error;
+		}
+		// The PR can still close or move between the lookup and the post: the
+		// final check is a signed link by then, so say so.
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`${message}; the final check is recorded: the latest verify is now "${latest}"`,
+		);
+	}
 	const shown = posted.body ?? body;
 	return textResult(
 		[
