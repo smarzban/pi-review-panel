@@ -665,6 +665,7 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
 **4 findings** (4 medium) · **4 resolved** in 1 verify round
 **Review seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus), correctness (sol, opus)
 **Verified by:** fix-verification (sol)
+**Final check:** verify 2, from the reviewed head to the final head
 `origin/main` (`5852b7e`) → `baf4d30` · [review](…) · [verify 1](…)
 
 - **F-1 [medium]** <title> · resolved in verify 1
@@ -679,6 +680,9 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
 - `Review seats:` is the review's seats grouped by lens, in the reply's format. `Verified by:` is
   the seats that voted in each verify of the chain, each once, grouped the same way; a verify
   seat that was lost is not named there.
+- `Final check:` names the final check (see [Verify rounds chain](#verify-rounds-chain)) when
+  the card's last round is one; it is not counted among the verify rounds, and the hidden
+  marker's `verify=` names it.
 - `Lost:` appears only when a seat was lost: review seats first, then verify seats of the chain,
   each marked `(verify)`. The `### Open (not resolved)` section, the `### Dismissed` section
   (each id with its title and reason) and the `### Low / advisory (not kept)` section appear
