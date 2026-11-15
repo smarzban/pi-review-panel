@@ -941,6 +941,36 @@ describe("the final check before the card (S-6)", () => {
 		).toEqual([v1.runId]);
 	});
 
+	it("comment names the final check as the latest verify when the post fails after the check", async () => {
+		await round1();
+		answers.push({ items: [] });
+		let refusal = "";
+		await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId: REVIEW,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{
+				deps: {
+					...deps(),
+					postComment: () => {
+						throw new Error("comment refused: PR #7 is closed");
+					},
+				},
+			},
+		).catch((error: unknown) => {
+			refusal = String(error);
+		});
+		const final = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY).at(-1);
+		expect(final?.final).toBe(true);
+		expect(refusal).toContain(
+			`comment refused: PR #7 is closed; the final check is recorded: the latest verify is now "${final?.runId}"`,
+		);
+	});
+
 	it("comment refuses before any seat runs what it would refuse anyway, and says why while a verify runs from the tip", async () => {
 		const v1 = await round1();
 		await expect(
