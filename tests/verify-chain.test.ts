@@ -740,6 +740,51 @@ describe("no forks: a verify claims the link it chains from (S-2)", () => {
 		]);
 	});
 
+	it("a stalled verify overtaken by a second refuses to sign: the run is lost, not the chain (L-3)", async () => {
+		let overtaker = "";
+		let refusal: unknown;
+		await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			STILL,
+			{},
+			{
+				onSeat: async () => {
+					if (specs.length > 1) {
+						return;
+					}
+					// Its event loop stalled past 65 s: its claim was not refreshed.
+					const claim = JSON.parse(
+						readFileSync(claimFile(REVIEW, 1), "utf8"),
+					) as Record<string, unknown>;
+					writeFileSync(
+						claimFile(REVIEW, 1),
+						JSON.stringify({
+							...claim,
+							host: "elsewhere",
+							claimedAt: Date.now() - 66_000,
+						}),
+					);
+					overtaker = runIdOf(
+						await verify(REVIEW, commits[3] as string, ["F-1"], STILL),
+					);
+				},
+			},
+		).catch((error: unknown) => {
+			refusal = error;
+		});
+		expect(overtaker).not.toBe("");
+		expect(String(refusal)).toContain(
+			`Verify refused: verify "${overtaker}" chained from "${REVIEW}" while this verify ran, so this run is not signed; verify against "${overtaker}"`,
+		);
+		// The chain is the overtaker alone, and goes on from it.
+		const chain = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY);
+		expect(chain.map((row) => row.runId)).toEqual([overtaker]);
+		await verify(overtaker, commits[4] as string, ["F-1"], STILL);
+		expect(loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)).toHaveLength(2);
+	});
+
 	it("the claim stays fresh while the verify runs, however long its seats take", async () => {
 		vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
 		try {
