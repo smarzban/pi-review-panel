@@ -226,7 +226,7 @@ function namedPr(
 	}
 	if (row.head?.sha !== headOid) {
 		throw new Error(
-			`comment refused: PR #${pr}'s head is not the head this card is about`,
+			`comment refused: PR #${pr}'s head is not the head this card is about; run verify at the PR's head, then comment with that verify`,
 		);
 	}
 	return pr;

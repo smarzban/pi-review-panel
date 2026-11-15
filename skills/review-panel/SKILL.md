@@ -148,8 +148,9 @@ review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
-carry your reasons. Verify runs the owner's `defaults.verifySeats`. Verify and `comment` take
-only a record signed with the owner's record key; when one is refused, run a new review.
+carry your reasons. Verify runs the owner's `defaults.verifySeats`, or the first
+`defaults.seats` row when that is unset. Verify and `comment` take only a record signed with
+the owner's record key; when one is refused, run a new review.
 
 Do not start a new full discovery review on the same change.
 
@@ -157,7 +158,8 @@ Do not start a new full discovery review on the same change.
 
 Posting is on by default. When the run's head is the head of exactly one open PR, `review`
 and each `verify` post their round there as a new comment, and a clean verify also posts the
-close-out card. The report's `PR comment:` and `PR close-out:` lines say where it posted or why
+close-out card; a kept low counts as resolved and need not be listed in `--low-advisory`. The
+report's `PR comment:` and `PR close-out:` lines say where it posted or why
 it did not.
 
 - Add `--no-pr-comment` to keep a run off the PR, and `--pr <n>` to name the PR.

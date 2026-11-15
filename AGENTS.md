@@ -36,6 +36,13 @@ Read before changing behaviour:
   reference. They ship in the package.
 - `constitution.md`: the rules a change may not break.
 
+Before touching these, read the matching section of `docs/internals.md`:
+
+- `src/tool/posted-text.ts` or any text posted to a PR → "Posted text" (the escaping rules).
+- `src/tool/round-claim.ts`, `round-post.ts` or a `.claim` / `.posted` file → "Posting claims and markers".
+- `src/seat/`, or anything that calls the Pi SDK → "Pi behaviours this repo depends on".
+- `src/run/grouping.ts` or G-ids → "Grouping".
+
 ### Review invariants
 
 - **The tool never judges.** No verdict, no agreement arithmetic, no review-derived stop signal:
