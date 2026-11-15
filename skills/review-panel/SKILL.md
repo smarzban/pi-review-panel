@@ -10,8 +10,8 @@ tool writes a report. It never judges, repairs, commits or decides a merge. You 
 skip. The builder (you if you wrote the change, otherwise the agent that did) implements.
 The owner merges.
 
-The command runs every reviewer model itself. Run it directly: do not start Pi or any other agent
-to run the review for you, and do not open another pane or terminal for it. Never name or override seats: they come only from the owner
+Run the command yourself, whether or not you wrote the change. It runs every reviewer model
+itself, so no other agent, session, pane or terminal is needed. Never name or override seats: they come only from the owner
 config. Never run `review-panel auth login` or `auth logout` unless the owner asks; a missing
 login is the owner's to fix.
 

@@ -162,7 +162,7 @@ describe("review-panel skill", () => {
 		expect(raw).not.toContain("review_panel");
 		expect(raw).not.toContain('"action":');
 		expect(flat(raw)).toContain(
-			"do not start Pi or any other agent to run the review for you",
+			"It runs every reviewer model itself, so no other agent, session, pane or terminal is needed.",
 		);
 	});
 
