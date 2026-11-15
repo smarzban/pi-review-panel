@@ -20,6 +20,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import {
+	FIXTURE_GIT_SOURCE,
+	gitSourceEnv,
+	writeExtensionPackage,
+} from "../fixtures/extension-package.js";
+
 const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
 const BIN = path.join(REPO, "dist", "src", "cli", "main.js");
 const SIGINT_READY = path.join(
@@ -479,6 +485,116 @@ describe("a provider registered by an extension", () => {
 		expect(diagnose.stdout).not.toContain(
 			"authentication review-panel-fixture:",
 		);
+	});
+});
+
+describe("setting up without Pi, from an empty home", () => {
+	it("auth providers, auth login, models, extension install from a git source, then diagnose with the installed path", () => {
+		const home = tempHome();
+		const repo = tempRepo();
+		const source = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-src-")),
+		);
+		writeExtensionPackage(source, { git: true });
+		// The git: source clones from the local repository, and npm stays offline.
+		const env = gitSourceEnv(source);
+		const agent = path.join(home, ".pi-review-panel", "agent");
+
+		const providers = cli(home, ["auth", "providers"], { env });
+		expect(providers.code).toBe(0);
+		expect(providers.stdout).toContain(
+			`Agent folder: ${agent} (review-panel's own folder`,
+		);
+		expect(providers.stdout).toMatch(
+			/^anthropic\s+Anthropic\s+account or API key\s+not logged in$/m,
+		);
+
+		expect(
+			cli(home, ["auth", "login", "anthropic", "--api-key"], {
+				env,
+				input: "sk-ant-fake\n",
+			}).code,
+		).toBe(0);
+		const anthropic = cli(home, ["models", "anthropic"], { env });
+		expect(anthropic.code).toBe(0);
+		expect(anthropic.stdout).toMatch(/^anthropic\s+claude-\S+\s+\d/m);
+		expect(anthropic.stdout).toMatch(
+			/^ {2}\{"id":"[^"]+","provider":"anthropic","model":"[^"]+"\}$/m,
+		);
+
+		const install = cli(home, ["extension", "install", FIXTURE_GIT_SOURCE], {
+			env,
+		});
+		expect(install.code).toBe(0);
+		const clone = path.join(
+			agent,
+			"git",
+			"example.invalid",
+			"fixture",
+			"pi-ext",
+		);
+		const entry = path.join(clone, "extensions", "index.ts");
+		expect(install.stdout.trimEnd().split("\n").at(-1)).toBe(`  ${entry}`);
+		expect(install.stdout).not.toContain("Pi now loads");
+
+		const listed = cli(home, ["extension", "list", "--json"], { env });
+		expect(listed.code).toBe(0);
+		expect(JSON.parse(listed.stdout).extensions).toEqual([
+			{
+				source: FIXTURE_GIT_SOURCE,
+				installedPath: clone,
+				filtered: false,
+				entries: [entry],
+			},
+		]);
+
+		const models = cli(home, ["models", "review-panel-fixture"], { env });
+		expect(models.code).toBe(0);
+		expect(models.stdout).toMatch(
+			new RegExp(
+				`^review-panel-fixture\\s+fixture-model\\s+8K\\s+1K\\s+no\\s+no\\s+${FIXTURE_GIT_SOURCE}$`,
+				"m",
+			),
+		);
+		const row = JSON.parse(
+			models.stdout
+				.split("\n")
+				.find((line) => line.startsWith('  {"id"'))
+				?.trim() ?? "",
+		);
+		expect(row).toEqual({
+			id: "fixture-model",
+			provider: "review-panel-fixture",
+			model: "fixture-model",
+			extraExtensionPaths: [entry],
+		});
+
+		const config = path.join(home, ".pi-review-panel", "config.json");
+		writeFileSync(
+			config,
+			JSON.stringify({
+				roster: [
+					{ ...row, id: "fixture" },
+					{ id: "opus", provider: "anthropic", model: "claude-opus-4-5" },
+				],
+				defaults: { seats: ["fixture", "opus"] },
+			}),
+		);
+		const diagnose = cli(home, ["diagnose", "--repo", repo], { env });
+		expect(diagnose.code).toBe(0);
+		expect(diagnose.stdout).not.toContain("extension ");
+		expect(diagnose.stdout).not.toContain("model review-panel-fixture");
+		expect(diagnose.stdout).not.toContain(
+			"authentication review-panel-fixture",
+		);
+		expect(diagnose.stdout).not.toContain("authentication anthropic");
+		expect(existsSync(path.join(home, ".pi"))).toBe(false);
+
+		const removed = cli(home, ["extension", "remove", FIXTURE_GIT_SOURCE], {
+			env,
+		});
+		expect(removed.code).toBe(0);
+		expect(existsSync(clone)).toBe(false);
 	});
 });
 
