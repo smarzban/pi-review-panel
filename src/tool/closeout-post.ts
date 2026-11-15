@@ -263,7 +263,7 @@ function openPrAtHead(
 		.map((row) => row.number as number);
 	if (open.length === 0) {
 		throw new Error(
-			"comment refused: no open PR has this head; pass --pr to name one",
+			"comment refused: no open PR has this head; pass --pr to name one, or if the PR has moved on, run verify at its head first",
 		);
 	}
 	if (open.length > 1) {
