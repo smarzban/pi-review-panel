@@ -15,6 +15,7 @@ import {
 } from "../seat/run-seat.js";
 import type { SeatSpec } from "../seat/sdk-session.js";
 import type { VerificationResult } from "../seat/verification-schema.js";
+import { claimChain } from "../tool/round-claim.js";
 import { inertLine } from "./inert-text.js";
 import {
 	complete,
@@ -38,6 +39,8 @@ import {
 
 const VERIFY_LENS = "fix-verification";
 export const DEFAULT_VERIFY_SEATS = 1;
+/** A held chain claim is rewritten this often, well inside the 65 s staleness rule. */
+const CHAIN_CLAIM_REFRESH_MS = 15_000;
 
 export type VerifySeatOutcome = {
 	seat: PlannedSeat;
@@ -369,193 +372,212 @@ export async function runVerify(
 	const budgetMs = input.seatBudgetMs ?? DEFAULT_SEAT_BUDGET_MS;
 
 	const record = reserve(input.repoDir, baseOid, { role: "verify" });
-	writePanel(record, {
-		runId: record.runId,
-		baseRef: baseOid,
-		scopingNote: scope,
-		seats: panel,
-	});
-
-	const pin = options.pinSnapshot ?? pinSnapshot;
-	const snapshot = pin(input.repoDir, input.headRevision);
-	let cleanupError: string | undefined;
-	const outcomes: VerifySeatOutcome[] = [];
+	// No forks: before any seat runs, this verify claims the record it
+	// chains from, and the chain is read again once the claim is held.
+	const previousRunId = previous?.runId ?? prior.runId;
+	const claim = claimChain(
+		prior.recordPath,
+		previousRunId,
+		record.runId,
+		() => void loadChainPrior(input.repoDir, previousRunId, options.recordKey),
+	);
+	const refresh = setInterval(() => claim.refresh(), CHAIN_CLAIM_REFRESH_MS);
+	refresh.unref();
 	try {
-		const runSeat = options.runAdvisorySeat ?? runAdvisorySeat;
-		const expectedIds = kept.map((row) => row.id);
-		for (const [index, seat] of panel.entries()) {
-			if (options.abortSignal?.aborted) {
-				throw new VerifyCancelledError();
-			}
-			options.onProgress?.({
-				kind: "seat-started",
-				seat,
-				completedSeats: index,
-				totalSeats: panel.length,
-			});
-			const live: LiveSeatProbe = {};
-			const heartbeat = setInterval(() => {
-				const snap = live.current?.();
+		return await runClaimed();
+	} finally {
+		clearInterval(refresh);
+		claim.release();
+	}
+
+	async function runClaimed(): Promise<RunVerifyResult> {
+		writePanel(record, {
+			runId: record.runId,
+			baseRef: baseOid,
+			scopingNote: scope,
+			seats: panel,
+		});
+
+		const pin = options.pinSnapshot ?? pinSnapshot;
+		const snapshot = pin(input.repoDir, input.headRevision);
+		let cleanupError: string | undefined;
+		const outcomes: VerifySeatOutcome[] = [];
+		try {
+			const runSeat = options.runAdvisorySeat ?? runAdvisorySeat;
+			const expectedIds = kept.map((row) => row.id);
+			for (const [index, seat] of panel.entries()) {
+				if (options.abortSignal?.aborted) {
+					throw new VerifyCancelledError();
+				}
 				options.onProgress?.({
-					kind: "seat-heartbeat",
+					kind: "seat-started",
 					seat,
 					completedSeats: index,
 					totalSeats: panel.length,
-					...(snap === undefined
+				});
+				const live: LiveSeatProbe = {};
+				const heartbeat = setInterval(() => {
+					const snap = live.current?.();
+					options.onProgress?.({
+						kind: "seat-heartbeat",
+						seat,
+						completedSeats: index,
+						totalSeats: panel.length,
+						...(snap === undefined
+							? {}
+							: {
+									attempts: snap.attempts,
+									...(snap.tokens === undefined ? {} : { tokens: snap.tokens }),
+									...(snap.cost === undefined ? {} : { cost: snap.cost }),
+									...(snap.lastTool === undefined
+										? {}
+										: { lastTool: snap.lastTool }),
+								}),
+					});
+				}, HEARTBEAT_INTERVAL_MS);
+				const spec: SeatSpec<(typeof SEAT_PROFILES)["verification"]> = {
+					provider: seat.provider,
+					model: seat.model,
+					lens: seat.lens,
+					lensPrompt: seat.lensPrompt,
+					baseRef: baseOid,
+					worktree: snapshot.worktreePath,
+					profile: SEAT_PROFILES.verification,
+					expectedIds,
+					cycle: link,
+					...(undoable.length === 0
 						? {}
-						: {
-								attempts: snap.attempts,
-								...(snap.tokens === undefined ? {} : { tokens: snap.tokens }),
-								...(snap.cost === undefined ? {} : { cost: snap.cost }),
-								...(snap.lastTool === undefined
-									? {}
-									: { lastTool: snap.lastTool }),
-							}),
+						: { undoableIds: undoable.map((row) => row.id) }),
+					scopingNote: scope,
+					...(findingData === undefined ? {} : { dataAppendix: findingData }),
+					...(seat.extraExtensionPaths === undefined
+						? {}
+						: { extraExtensionPaths: [...seat.extraExtensionPaths] }),
+				};
+				const controller = new AbortController();
+				const onHostAbort = (): void => controller.abort();
+				options.abortSignal?.addEventListener("abort", onHostAbort, {
+					once: true,
 				});
-			}, HEARTBEAT_INTERVAL_MS);
-			const spec: SeatSpec<(typeof SEAT_PROFILES)["verification"]> = {
-				provider: seat.provider,
-				model: seat.model,
-				lens: seat.lens,
-				lensPrompt: seat.lensPrompt,
-				baseRef: baseOid,
-				worktree: snapshot.worktreePath,
-				profile: SEAT_PROFILES.verification,
-				expectedIds,
-				cycle: link,
-				...(undoable.length === 0
-					? {}
-					: { undoableIds: undoable.map((row) => row.id) }),
-				scopingNote: scope,
-				...(findingData === undefined ? {} : { dataAppendix: findingData }),
-				...(seat.extraExtensionPaths === undefined
-					? {}
-					: { extraExtensionPaths: [...seat.extraExtensionPaths] }),
-			};
-			const controller = new AbortController();
-			const onHostAbort = (): void => controller.abort();
-			options.abortSignal?.addEventListener("abort", onHostAbort, {
-				once: true,
-			});
-			if (options.abortSignal?.aborted) {
-				controller.abort();
-			}
-			const budget = setTimeout(() => controller.abort(), budgetMs);
-			const seatOptions: RunSeatOptions = {
-				live,
-				abortSignal: controller.signal,
-				deadlineMs: performance.now() + budgetMs,
-				...(options.sessionFactory === undefined
-					? {}
-					: { sessionFactory: options.sessionFactory }),
-			};
-			try {
-				const result = await runSeat(spec, seatOptions);
-				if (result.outcome.kind === "verification") {
-					outcomes.push({
-						seat,
-						outcome: { kind: "voted", result: result.outcome.result },
-					});
-				} else if (result.outcome.kind === "failure") {
-					outcomes.push({
-						seat,
-						outcome: {
-							kind: "failed",
-							class: result.outcome.class,
-							reason: result.outcome.reason,
-						},
-					});
-				} else {
-					outcomes.push({
-						seat,
-						outcome: {
-							kind: "failed",
-							class: "channel-error",
-							reason: "the seat produced an unusable verification result",
-						},
-					});
+				if (options.abortSignal?.aborted) {
+					controller.abort();
 				}
-			} catch (error) {
-				outcomes.push({
+				const budget = setTimeout(() => controller.abort(), budgetMs);
+				const seatOptions: RunSeatOptions = {
+					live,
+					abortSignal: controller.signal,
+					deadlineMs: performance.now() + budgetMs,
+					...(options.sessionFactory === undefined
+						? {}
+						: { sessionFactory: options.sessionFactory }),
+				};
+				try {
+					const result = await runSeat(spec, seatOptions);
+					if (result.outcome.kind === "verification") {
+						outcomes.push({
+							seat,
+							outcome: { kind: "voted", result: result.outcome.result },
+						});
+					} else if (result.outcome.kind === "failure") {
+						outcomes.push({
+							seat,
+							outcome: {
+								kind: "failed",
+								class: result.outcome.class,
+								reason: result.outcome.reason,
+							},
+						});
+					} else {
+						outcomes.push({
+							seat,
+							outcome: {
+								kind: "failed",
+								class: "channel-error",
+								reason: "the seat produced an unusable verification result",
+							},
+						});
+					}
+				} catch (error) {
+					outcomes.push({
+						seat,
+						outcome: {
+							kind: "failed",
+							class: "spawn-failure",
+							reason: error instanceof Error ? error.message : String(error),
+						},
+					});
+				} finally {
+					clearTimeout(budget);
+					options.abortSignal?.removeEventListener("abort", onHostAbort);
+				}
+				clearInterval(heartbeat);
+				if (options.abortSignal?.aborted) {
+					throw new VerifyCancelledError();
+				}
+				options.onProgress?.({
+					kind: "seat-finished",
 					seat,
-					outcome: {
-						kind: "failed",
-						class: "spawn-failure",
-						reason: error instanceof Error ? error.message : String(error),
-					},
+					completedSeats: index + 1,
+					totalSeats: panel.length,
 				});
-			} finally {
-				clearTimeout(budget);
-				options.abortSignal?.removeEventListener("abort", onHostAbort);
 			}
-			clearInterval(heartbeat);
-			if (options.abortSignal?.aborted) {
-				throw new VerifyCancelledError();
+		} finally {
+			const release = snapshot.release();
+			if (!release.ok) {
+				cleanupError = release.error ?? "snapshot release failed";
 			}
-			options.onProgress?.({
-				kind: "seat-finished",
-				seat,
-				completedSeats: index + 1,
-				totalSeats: panel.length,
-			});
 		}
-	} finally {
-		const release = snapshot.release();
-		if (!release.ok) {
-			cleanupError = release.error ?? "snapshot release failed";
-		}
+
+		stampRegressions(outcomes, link);
+		writeOwnRecordFile(
+			record,
+			"verification.json",
+			`${JSON.stringify(
+				{
+					priorRunId: prior.runId,
+					keptFindingIds: input.keptFindingIds,
+					dismissed,
+					lowAdvisory,
+					outcomes,
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		// `priorRunId` names the review, as it always has; `previousRunId` and
+		// `link` place this verify in the review's chain.
+		writeOwnRecordFile(
+			record,
+			"meta.json",
+			`${JSON.stringify(
+				{
+					runId: record.runId,
+					baseRef: baseOid,
+					baseOid,
+					headOid: input.headRevision,
+					kind: "verify",
+					priorRunId: prior.runId,
+					previousRunId,
+					link,
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		// Signed last, so comment can tell this record from a planted one.
+		sealRecord(record, "verify", options.recordKey, "");
+		complete(record);
+
+		return {
+			recordPath: record.recordPath,
+			priorRunId: prior.runId,
+			priorHeadOid: baseOid,
+			previousRunId,
+			link,
+			headOid: input.headRevision,
+			kept,
+			outcomes,
+			...(cleanupError === undefined ? {} : { cleanupError }),
+		};
 	}
-
-	stampRegressions(outcomes, link);
-	const previousRunId = previous?.runId ?? prior.runId;
-	writeOwnRecordFile(
-		record,
-		"verification.json",
-		`${JSON.stringify(
-			{
-				priorRunId: prior.runId,
-				keptFindingIds: input.keptFindingIds,
-				dismissed,
-				lowAdvisory,
-				outcomes,
-			},
-			null,
-			2,
-		)}\n`,
-	);
-	// `priorRunId` names the review, as it always has; `previousRunId` and
-	// `link` place this verify in the review's chain.
-	writeOwnRecordFile(
-		record,
-		"meta.json",
-		`${JSON.stringify(
-			{
-				runId: record.runId,
-				baseRef: baseOid,
-				baseOid,
-				headOid: input.headRevision,
-				kind: "verify",
-				priorRunId: prior.runId,
-				previousRunId,
-				link,
-			},
-			null,
-			2,
-		)}\n`,
-	);
-	// Signed last, so comment can tell this record from a planted one.
-	sealRecord(record, "verify", options.recordKey, "");
-	complete(record);
-
-	return {
-		recordPath: record.recordPath,
-		priorRunId: prior.runId,
-		priorHeadOid: baseOid,
-		previousRunId,
-		link,
-		headOid: input.headRevision,
-		kept,
-		outcomes,
-		...(cleanupError === undefined ? {} : { cleanupError }),
-	};
 }

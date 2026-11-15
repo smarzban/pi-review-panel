@@ -445,9 +445,21 @@ any seat runs:
 
 - against the review once it has a verify, or against a verify that is not the latest: the
   message names the latest verify to use;
+- while another verify is running from the same record: before any seat runs, a verify
+  claims the record it chains from, with an exclusive create of `chain-<prior run id>.claim-1`
+  in the review's run record, and reads the chain again once it holds the claim. A second
+  verify from the same record is refused, naming the running one (or the finished one, as the
+  latest verify to use). The claim holds the verify run id, its process id, the host and when;
+  the running verify rewrites its time every 15 s and deletes the claim when it ends, signed or
+  not. A claim follows the posting-claim staleness rule: one older than 65 s, or made on this
+  host by a process that is gone, was left by a verify that stopped. It is never taken over: it
+  stays where it is and the next one, `-2`, `-3`, …, is tried, so a crash never ends the chain.
+  A live-looking claim that no verify holds (another host's, or planted) is named in the
+  refusal, with the file to delete;
 - against an unsigned verify record: run a new review;
 - when the chain is not one line of signed links: two verifies chained from one record (a
-  fork, from two verifies run at once), a link whose previous record is not a complete signed
+  fork: possible only when a verify paused for over 65 s, so that its claim looked stale and a
+  second verify claimed the next one), a link whose previous record is not a complete signed
   verify of the same review (a gap, or a link of another review's chain), or a link out of
   place. The message says to run a new review.
 

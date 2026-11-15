@@ -3553,22 +3553,6 @@ describe("T498: readable PR comments", () => {
 describe("T502: the round number and the close-out read only signed records and markers", () => {
 	const clean: SeatVote[] = [{ rosterId: "terra", items: [resolved("F-1")] }];
 
-	async function headingAfter(
-		plant: (repo: string) => void,
-	): Promise<string[]> {
-		let headings: string[] = [];
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			plant(repo);
-			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			await verifyOnce(repo, gh, "v-9");
-			headings = posts(gh.calls).map(
-				(call) => bodyOf(call).split("\n")[0] ?? "",
-			);
-		});
-		return headings;
-	}
-
 	it("a planted round-1.posted in the review record neither skips verify 1 nor stays, and the next verify is verify 2", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);

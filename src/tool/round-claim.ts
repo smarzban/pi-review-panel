@@ -32,6 +32,7 @@ import {
 	openSync,
 	readFileSync,
 	rmSync,
+	writeFileSync,
 	writeSync,
 } from "node:fs";
 import { hostname } from "node:os";
@@ -336,6 +337,107 @@ export function closeoutClaimFile(
 
 export function closeoutPostedFile(recordDir: string): string {
 	return path.join(recordDir, CLOSEOUT_POSTED_FILE);
+}
+
+/** Chain claims tried before a verify gives up: `chain-<prior>.claim-1` … `-100`. */
+const CHAIN_GENERATIONS = 100;
+
+export function chainClaimFile(
+	recordDir: string,
+	priorRunId: string,
+	generation: number,
+): string {
+	return path.join(recordDir, `chain-${priorRunId}.claim-${generation}`);
+}
+
+/** A chain claim this verify holds: kept fresh while it runs, given back after. */
+export type ChainClaim = {
+	file: string;
+	/** Writes a new `claimedAt` into the claim, while it is still this verify's. */
+	refresh(): void;
+	release(): void;
+};
+
+/**
+ * Claims the link a verify chains from, before any seat runs, so two
+ * verifies never chain from one record: `chain-<priorRunId>.claim-<g>` in
+ * the review's run record, created exclusively (`wx`).
+ *
+ * - After the create, `recheck` reads the chain again (it throws when a
+ *   verify finished from this prior in the meantime); a throw gives the
+ *   claim back.
+ * - A live claim already there refuses, naming the verify that holds it,
+ *   after `recheck` has had the chance to name it as finished instead.
+ * - A stale claim (the round-claim rule: older than 65 s, or made on this
+ *   host by a process that is gone) is never taken over: it stays where it
+ *   is and the next generation is tried, so a crash never ends the chain.
+ *   The holder keeps its claim fresh with `refresh` while it runs.
+ */
+export function claimChain(
+	recordDir: string,
+	priorRunId: string,
+	verifyRunId: string,
+	recheck: () => void,
+): ChainClaim {
+	for (let generation = 1; generation <= CHAIN_GENERATIONS; generation += 1) {
+		const file = chainClaimFile(recordDir, priorRunId, generation);
+		const info: ClaimInfo = {
+			verifyRunId,
+			pid: process.pid,
+			host: hostname(),
+			claimedAt: Date.now(),
+		};
+		if (createExclusive(file, `${JSON.stringify(info)}\n`)) {
+			const held: HeldClaim = { file, info, key: Buffer.alloc(0) };
+			const claim: ChainClaim = {
+				file,
+				refresh: () => refreshClaim(held),
+				release: () => releaseClaim(held),
+			};
+			try {
+				recheck();
+			} catch (error) {
+				claim.release();
+				throw error;
+			}
+			return claim;
+		}
+		if (claimIsStale(file, Date.now()) !== false) {
+			continue;
+		}
+		recheck();
+		let holder: string | undefined;
+		try {
+			holder = parseInfo(readFileSync(file, "utf8"))?.verifyRunId;
+		} catch {
+			holder = undefined;
+		}
+		throw new Error(
+			`Verify refused: ${holder === undefined ? "another verify" : `verify "${holder}"`} is already running from "${priorRunId}"; verify against it once it finishes (if no verify is running, delete ${path.basename(file)} from the review's run record)`,
+		);
+	}
+	throw new Error(
+		`Verify refused: ${CHAIN_GENERATIONS} stale chain-${priorRunId}.claim files are in the review's run record; delete them to verify from "${priorRunId}"`,
+	);
+}
+
+/** Rewrites a claim's time, only while what is at its path is still this verify's. */
+function refreshClaim(claim: HeldClaim): void {
+	try {
+		const info = parseInfo(readFileSync(claim.file, "utf8"));
+		if (
+			info?.verifyRunId !== claim.info.verifyRunId ||
+			info.claimedAt !== claim.info.claimedAt ||
+			info.pid !== claim.info.pid
+		) {
+			return;
+		}
+		const next = { ...claim.info, claimedAt: Date.now() };
+		writeFileSync(claim.file, `${JSON.stringify(next)}\n`);
+		claim.info = next;
+	} catch {
+		// Gone, or unreadable: nothing of ours to refresh.
+	}
 }
 
 export type RoundClaim = HeldClaim & { round: number };

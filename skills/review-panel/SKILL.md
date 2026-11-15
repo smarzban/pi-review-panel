@@ -168,7 +168,9 @@ carry your reasons; each round records them, so name each id once. A regression 
 severity: dismiss it with a reason instead of listing it as low/advisory. Verify runs the
 owner's `defaults.verifySeats`, or the first `defaults.seats` row when that is unset. Verify and
 `comment` take only records signed with the owner's record key; when one is refused, or the
-chain is refused as forked or broken, run a new review.
+chain is refused as forked or broken, run a new review. Run one verify at a time: a second
+verify from the same record is refused while the first runs, naming it; verify against it once
+it finishes.
 
 Do not start a new full discovery review on the same change.
 

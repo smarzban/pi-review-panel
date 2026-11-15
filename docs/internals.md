@@ -155,7 +155,7 @@ latest verify of it. Each verify record's signed `meta.json` keeps `priorRunId` 
 `previousRunId` (the record it chained from; the review for link 1) and `link` (1-based); its
 signed `verification.json` adds `dismissed` (with reasons) and `lowAdvisory`. `loadVerifyChain`
 reads every complete verify record of the review signed with the owner's key and links them from
-the review: one child per record, places 1, 2, …; a fork, a gap (a link whose parent is not a
+the review: one child per record, places 1, 2, …; a fork (see the claim below), a gap (a link whose parent is not a
 signed verify of this review) or a link out of place refuses the chain with "run a new review".
 A verify record with neither field was written before chaining: its review is refused, by verify
 and comment, with "run a new review". `loadChainPrior` refuses a prior that is the review once a
@@ -167,9 +167,17 @@ same ids into the record). A resolved, dismissed or low/advisory id is not judge
 base is the prior link's head, checked to be a commit here. The undo guard passes every resolved
 id to the seat (`undoableIds`, by closure like `expectedIds`, and in the replay spec); its title,
 file and the verifier's note go only in the data appendix through `inertLine` with caps, and a
-regression's `undoes` must be one of those ids. Two verifies started from the same tip both
-complete and fork the chain: nothing prevents it, and the next verify is refused (a documented
-limit; run a new review).
+regression's `undoes` must be one of those ids. No forks: after `reserve` and before any seat,
+`runVerify` takes `claimChain` (`src/tool/round-claim.ts`) on `chain-<previousRunId>.claim-<g>`
+in the review's record (`wx`), then runs `loadChainPrior` again so a verify that finished in
+between is named as the latest; a live claim refuses naming its holder after the same re-read.
+The holder rewrites its `claimedAt` every 15 s (`refresh`, only while the file is still its own)
+and releases the claim in a `finally`, signed or not. Staleness is the posting-claim rule (65 s,
+or this host's pid gone); a stale generation stays and the next is tried (at most 100), so a
+crash never ends the chain. The fork refusal in `loadVerifyChain` stays as a backstop: a verify
+paused for over 65 s (a sleeping laptop, a stopped process) has a claim that looks stale, so a
+second verify can claim the next generation and both can sign. `comment` reads no claim, only
+signed records.
 
 ## Posted text
 
