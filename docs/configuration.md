@@ -457,14 +457,16 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     its machine's clock runs over 65 s behind the other's, or when it runs in a container that
     shares the host's hostname in its own process namespace.
 - What someone who can write files into the checkout can still do, and what they cannot:
-  - They cannot make a verify skip or repeat a number, or skip the close-out, by planting a record
-    or a marker: only signed ones count.
-  - Claims are not signed. A planted `round-<N>.claim` or `closeout.claim-<g>` that looks live (a
-    `claimedAt` in the future, or another host's process) holds that round or the close-out:
-    the verify waits and then posts no comment for that round, or says another verify is posting
-    the close-out. Five planted close-out claims judged stale end as "all left by verifies that
-    stopped". A planted claim can stop an automatic post, never forge one or post a second card;
-    the reply says why, and `comment` still posts the card on the owner's yes.
+  - Planting a record or a marker changes nothing: only signed ones count toward `verify N`, skip
+    a round or stop the close-out.
+  - Claims are not signed, so planted claims still act as claims. A planted `round-<N>.claim` that
+    looks stale is skipped, so planting `round-1.claim` to `round-K.claim` makes the next verify
+    post `verify K+1`. One that looks live (a `claimedAt` in the future, or another host's
+    process) holds that round: the verify waits and then posts no comment for it. A planted
+    `closeout.claim-<g>` that looks live makes the verify say another verify is posting the
+    close-out; five that look stale end as "all left by verifies that stopped". A planted claim
+    can bump the number or stop an automatic post, never forge a post or post a second card; the
+    reply says why, and `comment` still posts the card on the owner's yes.
   - Deleting a genuine marker undoes it: a deleted `closeout.posted` is caught by the PR-comment
     check, so no second card posts, but with both a review's `round-<N>.posted` and the verify's
     `round.posted` deleted, the next verify can post `verify N` again.
