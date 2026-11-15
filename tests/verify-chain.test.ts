@@ -838,6 +838,126 @@ describe("no forks: a verify claims the link it chains from (S-2)", () => {
 });
 
 describe("the chain refuses what is not one line of signed links", () => {
+	it("refuses a link out of place: the first verify of a review is link 1 (F-5)", async () => {
+		const out = writeLink("2026-11-15T11-00-00-000Z-out", REVIEW, {
+			previousRunId: REVIEW,
+			link: 2,
+		});
+		expect(() => loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)).toThrow(
+			`has verify "${out}" out of place (link 2, expected 1)`,
+		);
+		await expect(
+			verify(out, commits[3] as string, ["F-1"], []),
+		).rejects.toThrow("run a new review");
+	});
+
+	it("refuses a signed verify that names no review (F-5)", async () => {
+		const orphan = writeLink("2026-11-15T11-00-00-000Z-orphan", "", {
+			previousRunId: REVIEW,
+			link: 1,
+		});
+		await expect(
+			verify(orphan, commits[3] as string, ["F-1"], []),
+		).rejects.toThrow(
+			`Verify refused: verify run "${orphan}" names no review; run a new review`,
+		);
+	});
+
+	it("refuses a signed verify that is no link of the review it names (F-5)", async () => {
+		const stray = writeLink("2026-11-15T11-00-00-000Z-stray", REVIEW, {
+			previousRunId: REVIEW,
+			link: 1,
+		});
+		// Its signed verification names another review, so it is no link.
+		const recordPath = path.join(repo, ".review-panel", "runs", stray);
+		writeFileSync(
+			path.join(recordPath, "verification.json"),
+			JSON.stringify({ priorRunId: "other", keptFindingIds: [], outcomes: [] }),
+		);
+		signVerifyRecord(recordPath);
+		await expect(
+			verify(stray, commits[3] as string, ["F-1"], []),
+		).rejects.toThrow(
+			`Verify refused: verify run "${stray}" is not a link of review "${REVIEW}"'s verify chain`,
+		);
+	});
+
+	it("refuses an incomplete verify as the prior (F-5)", async () => {
+		const half = writeLink("2026-11-15T11-00-00-000Z-half", REVIEW, {
+			previousRunId: REVIEW,
+			link: 1,
+		});
+		rmSync(path.join(repo, ".review-panel", "runs", half, COMPLETE_MARKER));
+		await expect(
+			verify(half, commits[3] as string, ["F-1"], []),
+		).rejects.toThrow(`Verify refused: verify run "${half}" is not complete`);
+	});
+
+	it("refuses a prior whose head is not a commit here, or not a commit id (F-5)", async () => {
+		const gone = writeLink("2026-11-15T11-00-00-000Z-gone", REVIEW, {
+			previousRunId: REVIEW,
+			link: 1,
+			headOid: "f".repeat(40),
+		});
+		await expect(
+			verify(gone, commits[3] as string, ["F-1"], []),
+		).rejects.toThrow(
+			`Verify refused: verify run "${gone}" names head ${"f".repeat(40)}, which is not a commit in this repository; run a new review here`,
+		);
+		rmSync(path.join(repo, ".review-panel", "runs", gone), {
+			recursive: true,
+		});
+		const junk = writeLink("2026-11-15T11-00-00-000Z-junk", REVIEW, {
+			previousRunId: REVIEW,
+			link: 1,
+			headOid: "HEAD",
+		});
+		await expect(
+			verify(junk, commits[3] as string, ["F-1"], []),
+		).rejects.toThrow(
+			`Verify refused: verify run "${junk}" names head (not a commit id), which is not a commit in this repository`,
+		);
+	});
+
+	it("refuses a final check that is not one: from the review, off the latest head, with kept ids, or with nothing resolved (F-5, S-6)", async () => {
+		const final = (prior: string, head: string, kept: string[] = []) =>
+			runVerify(
+				{
+					repoDir: repo,
+					config,
+					priorRunId: prior,
+					headRevision: head,
+					keptFindingIds: kept,
+					final: true,
+				},
+				{
+					recordKey: TEST_RECORD_KEY,
+					runAdvisorySeat: async () => {
+						throw new Error("no seat runs for a refused final check");
+					},
+				},
+			);
+		await expect(final(REVIEW, commits[1] as string)).rejects.toThrow(
+			"Verify refused: the final check runs from a verify; this review has none",
+		);
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			[{ items: [{ id: "F-1", disposition: "still present" }] }],
+		);
+		await expect(final(runIdOf(v1), commits[3] as string)).rejects.toThrow(
+			`Verify refused: the final check runs at the latest verify's head, ${commits[2]}`,
+		);
+		await expect(
+			final(runIdOf(v1), commits[2] as string, ["F-1"]),
+		).rejects.toThrow("Verify refused: the final check takes no kept ids");
+		await expect(final(runIdOf(v1), commits[2] as string)).rejects.toThrow(
+			"Verify refused: no round resolved anything, so the final check has nothing to check",
+		);
+		expect(specs).toHaveLength(1);
+	});
+
 	it("refuses verifying the review again once it has a verify, naming the latest", async () => {
 		const v1 = await verify(
 			REVIEW,

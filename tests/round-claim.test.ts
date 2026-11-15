@@ -577,6 +577,24 @@ describe("claimChain (S-2)", () => {
 		expect(readdirSync(dir)).toEqual([]);
 	});
 
+	it("past 100 stale claims it refuses, saying to delete them (F-5)", () => {
+		const dir = record();
+		for (let generation = 1; generation <= 100; generation += 1) {
+			writeFileSync(
+				chainClaimFile(dir, "prior", generation),
+				JSON.stringify({
+					verifyRunId: `v-${generation}`,
+					pid: 1,
+					host: "elsewhere",
+					claimedAt: 1,
+				}),
+			);
+		}
+		expect(() => claimChain(dir, "prior", "verify-b", () => undefined)).toThrow(
+			'Verify refused: 100 stale chain-prior.claim files are in the review\'s run record; delete them to verify from "prior"',
+		);
+	});
+
 	it("refreshes only its own claim, and releases only its own", () => {
 		const dir = record();
 		const held = claimChain(dir, "prior", "verify-a", () => undefined);
