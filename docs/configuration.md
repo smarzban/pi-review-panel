@@ -76,10 +76,13 @@ Save these exact bytes as your config file (the entry below names the file locat
 
 ## Pi identity and authentication
 
-A seat runs as a Pi SDK session inside the Pi process that called `review_panel`, not as a separate
-`pi` process. `provider` and `model` are resolved by exact id through Pi's model runtime, after the
-row's own extensions load. They must be Pi identifiers you have already configured and authenticated
-in Pi itself; the roster does not create or configure providers. pi-review-panel stores **no**
+A seat runs as a Pi SDK session inside the `review-panel` process (the CLI bundles the Pi SDK), not
+as a separate `pi` process. `provider` and `model` are resolved by exact id through Pi's model
+runtime, after the row's own extensions load. They must be Pi identifiers that are configured and
+logged in to in the agent folder the CLI uses: your Pi folder `~/.pi/agent` when it holds a login,
+otherwise `~/.pi-review-panel/agent`, where `review-panel auth login <provider>` signs in (see
+[the CLI guide](cli.md#logins-and-the-agent-folder)). The roster does not create or configure
+providers. pi-review-panel stores **no**
 credentials, endpoints, or provider definitions anywhere: the config file, the run record, and the
 audit `panel.json` carry none of that. A seat suppresses Pi's ambient extensions, skills, prompt
 templates, and themes, and loads no context files, so the only extension files it loads are the
@@ -118,7 +121,7 @@ roster aliases and shipped extra names.
 
 ## Selection and expansion
 
-The public tool is `review_panel`. A `review` call always plans holistic × `defaults.seats` (or
+The public command is `review-panel`. A `review` always plans holistic × `defaults.seats` (or
 the caller `seats` override). Optional `defaults.lenses` and caller `lenses` are specialist extras
 and each extra runs on at most the first two selected seats. Duplicate effective
 provider/model/lens identities and an empty or oversized panel refuse before reviewer work starts.
@@ -253,12 +256,12 @@ new runs.
 
 ### Resuming
 
-`{"action":"resume","priorRunId":"<run-id>"}` finishes an interrupted record in place. It runs the
+`review-panel resume --prior-run-id <run-id>` finishes an interrupted record in place. It runs the
 same readiness check as review and audit first. It takes no seats, lenses, or commits: those come
 from `plan.json`. What resume trusts, and what it rebuilds:
 
 - **The plan must carry a valid signature.** A `plan.json` whose `plan.mac` does not match the
-  owner's key is refused before it is read: this owner's review_panel did not write it. A
+  owner's key is refused before it is read: this owner's review-panel did not write it. A
   `plan.json` with no `plan.mac` at all is refused as a run interrupted before its plan was signed
   (`plan.json` is written first); no seat had run, so start a new run. A
   signed plan must also have the expected shape. Its `baseRef` and seat names must hold no control
@@ -306,13 +309,13 @@ A `run.lock` left by a process that has exited is replaced. The replacement happ
 holding `run.lock.takeover`, created exclusively, so two resumes can never both take over the same
 lock. If a process dies in that instant, the next resume refuses and names the file to delete. A
 `run.lock` whose pid now belongs to an unrelated live process also refuses; delete `run.lock` when
-no review_panel run is active. A run publishes `run.lock` whole (written to a temp file, then
+no review-panel run is active. A run publishes `run.lock` whole (written to a temp file, then
 hard-linked into place), so it never exists empty. On a filesystem without hard links (FAT, exFAT,
 some network mounts) it is written in place instead: it can be empty or half-written for a
 moment, and stays that way if the process is killed in that moment (a failed write or close
 removes it). A `run.lock` that names no pid is therefore one another process is still writing, or
 one a crashed process left unfinished: it is refused, never taken over, and the message says to
-delete it when no review_panel run is active.
+delete it when no review-panel run is active.
 
 ### Verify and comment take only signed records
 

@@ -39,57 +39,51 @@ What you get instead:
   verify post a new comment there, and a verify where every seat voted and
   resolved every kept id, with no regressions, also posts the close-out card: counts, dismissals with
   reasons, leftover lows. No Fixed list. No “ready to merge.” Turn it off per run
-  with `prComment: false`, or set `defaults.prComment: "ownerApproved"` so every
+  with `--no-pr-comment`, or set `defaults.prComment: "ownerApproved"` so every
   post needs the owner's yes.
 
 ## Install
 
-You need Pi. Install from npm and restart Pi:
+You need Node 26 or newer, `git`, and `gh` (for posting rounds to a pull request).
 
 ```bash
-pi install npm:pi-review-panel
+npm install -g pi-review-panel     # puts the `review-panel` command on PATH
+review-panel skill install         # links the one skill into each coding agent
 ```
 
-That adds `npm:pi-review-panel` to Pi’s `packages` list. You can also put the
-source there yourself:
+`skill install` links the `review-panel` skill into every coding agent it finds:
+Claude Code (`~/.claude/skills`), Codex (`~/.codex/skills`), Grok (`~/.grok/skills`)
+and Pi (`~/.pi/agent/skills`), each honouring the agent's own folder variable. It never
+creates a folder for an agent you do not have, and never replaces a `review-panel` folder
+that is not its own link without `--force`. Details and options are in the
+[CLI guide](docs/cli.md#install).
 
-```json
-{
-  "packages": ["npm:pi-review-panel"]
-}
+Create `~/.pi-review-panel/config.json` with the seats you want. Shape and location
+rules are in the [owner configuration guide](docs/configuration.md). The command runs
+the seats itself with the bundled Pi SDK, reusing your Pi logins in `~/.pi/agent` when
+you have them; otherwise sign in with `review-panel auth login <provider>`. Then:
+
+```bash
+review-panel diagnose
 ```
 
-From git instead: `pi install git:github.com/smarzban/pi-review-panel`. A local
-clone path works too.
-
-Create `~/.pi-review-panel/config.json` with the seats you already have
-authenticated in Pi. Shape and location rules are in the
-[owner configuration guide](docs/configuration.md).
-
-Then, in Pi:
+In any of those agents, ask:
 
 ```
-Use the review-panel-pi skill. Review this change.
+/review-panel Review this change.
 ```
 
-For a periodic repository sweep instead:
+or, for a periodic repository sweep, `/review-panel Audit this repository.` The agent
+runs the command, reads the report, and judges each finding.
 
-```
-Use the review-panel-pi skill. Audit this repository.
-```
-
-From Grok, Codex, or Claude Code, install the [`review-panel` CLI](cli/README.md)
-and the `host-skills/review-panel` skill, then run `/review-panel`. The host agent runs
-the CLI itself, reads the report, and judges each finding. It does not start Pi.
+**Upgrading from 0.3.0 (Pi tool):** the `review_panel` Pi tool is gone. Run
+`pi remove npm:pi-review-panel`, then the two commands above.
 
 ## How a run goes
 
-```json
-{"action":"diagnose","repository":"/Users/you/the-repo"}
-```
-
-```json
-{"action":"suggest","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD"}
+```bash
+review-panel diagnose
+review-panel suggest --base origin/main --head HEAD
 ```
 
 `suggest` runs no seat, but it reads the owner config for `defaults.lenses`. It
@@ -100,8 +94,8 @@ never adds a lens by itself. When the diff cannot be read, it says
 "Suggestions unavailable" with the cause; no rule ran, so choose from the
 skill's trigger table.
 
-```json
-{"action":"review","repository":"/Users/you/the-repo","base":"origin/main","head":"HEAD","lenses":["security"]}
+```bash
+review-panel review --base origin/main --head HEAD --lenses security
 ```
 
 A review reply starts like this:
@@ -131,50 +125,53 @@ re-rates a finding, and group size is never shown as agreement. Verify and
 comment take G-ids as well as F-ids (see
 [Grouped findings](docs/configuration.md#grouped-findings)).
 
-```json
-{"action":"audit","repository":"/Users/you/the-repo"}
+```bash
+review-panel audit
 ```
 
 An audit pins the whole `HEAD` tree. Its baseline passes are code health,
 over-engineering, tests, and security across two owner-default seats. Pass
-`passes` for a situational sweep such as docs, observability, or operability. It reports an advisory
+`--passes` for a situational sweep such as docs, observability, or operability. It reports an advisory
 backlog only: counts, file areas, lost seats, and a record path. The tool does
 not write `AUDIT.md` or post an audit comment.
 
-```json
-{"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"]}
+```bash
+review-panel verify --prior-run-id <run-id> --head HEAD --kept-finding-ids F-1
 ```
 
 Pass the reasons for findings you chose not to fix, so the verify comment and the
 close-out carry them:
 
-```json
-{"action":"verify","repository":"/Users/you/the-repo","priorRunId":"<run-id>","head":"HEAD","keptFindingIds":["F-1"],"dismissed":[{"id":"F-2","reason":"by design"}],"lowAdvisory":["F-3"]}
+```bash
+review-panel verify --prior-run-id <run-id> --head HEAD --kept-finding-ids F-1 \
+  --dismissed '[{"id":"F-2","reason":"by design"}]' --low-advisory F-3
 ```
 
 Review and verify post their round to the open PR whose head is the run's head
 (see [Posting rounds](docs/configuration.md#posting-rounds-to-the-pull-request)).
 `comment` is the manual close-out card, posted or updated only after the owner says yes:
 
-```json
-{"action":"comment","repository":"/Users/you/the-repo","priorRunId":"<run-id>","ownerApproved":true,"pr":29}
+```bash
+review-panel comment --prior-run-id <run-id> --owner-approved --pr 29
 ```
 
-```json
-{"action":"resume","repository":"/Users/you/the-repo","priorRunId":"<run-id>"}
+```bash
+review-panel resume --prior-run-id <run-id>
 ```
 
 A review or audit that was killed keeps every seat that had finished. `resume`
 runs only the missing seats against the same head commit and writes the report.
 
-Holistic seats always run. Optional `lenses` add extras. Optional `scopingNote`
-focuses a large diff.
+Holistic seats always run. Optional `--lenses` add extras. Optional `--scoping-note`
+focuses a large diff. Every command and flag is in the [CLI guide](docs/cli.md).
 
 Records land under `.review-panel/runs/`. The reply is coverage, findings
 or dispositions, and lost seats. The tool computes no merge decision.
 
 ## Status
 
-0.3.0. Install as `npm:pi-review-panel`. Diagnose, suggest, review, audit, verify,
-resume, and comment are the public path. Pi loads the TypeScript directly, no `dist/`, no
-runtime dependencies beyond Pi.
+Unreleased: one `review-panel` command and one skill, published from the
+`pi-review-panel` npm package (0.3.0 on npm is still the Pi tool). Diagnose,
+suggest, review, audit, verify, resume, and comment are the public path. The
+package ships a built `dist/` (built at pack time, never committed) and depends
+on the Pi SDK it runs seats with.
