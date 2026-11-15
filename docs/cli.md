@@ -268,13 +268,15 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   `extension install` or `remove`. `extension install` decides on what Pi's own package
   manager parses from the source (the same parse `pi install` runs) and refuses, before
   anything is cloned or recorded:
-  - a git source with user info that can hold a secret: a password, any user name on an
-    `http(s)://` URL (a token often sits there alone, as in `https://<token>@host/...`), or a
-    scheme-less `git:user:token@host/...` / `git:token@host/...` however it is spaced, cased or
-    ported. An SSH user name (`git:git@host:owner/repo`, `ssh://deploy@host/...`) is an
-    account, not a secret, and installs;
-  - a git source with any query string (`?...`); pin a ref with `@<ref>` or `#<ref>` instead
-    (`git:host/owner/repo@release/1.0` installs);
+  - a git source with any user info other than the SSH user `git`: a password, any user name
+    on an `http(s)://` URL (a token often sits there alone, as in `https://<token>@host/...`),
+    any other SSH user (`ssh://deploy@host/...` is refused; `git:git@host:owner/repo`,
+    `ssh://git@host/owner/repo` and `git:ssh://git@host/...` install), or a scheme-less
+    `git:user:token@host/...` / `git:token@host/...` however it is spaced, cased or ported;
+  - a git source with a percent sign in its host;
+  - a git source with any query string (`?...`), its ref included, or a pinned ref that is not
+    a plain branch, tag or commit name (letters, digits, `.`, `_`, `/`, `+`, `-`); pin a ref
+    with `@<ref>` or `#<ref>` (`git:host/owner/repo@release/1.0` installs);
   - an `npm:` source that is not a registry package. Only `npm:<name>` and
     `npm:<name>@<version, range or tag>` install (`npm:pi-foo`, `npm:@scope/pkg@^1.2.0`,
     `npm:pkg@latest`); a URL, `git+…`, `git:`, `github:`, `file:`, alias or path spec is refused,

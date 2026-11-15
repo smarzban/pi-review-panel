@@ -116,9 +116,9 @@ install` refuses a source on what Pi's own package manager parses from it (`sour
 `DefaultPackageManager.parseSource`, the parse `pi install` runs), before the package manager
 runs, because Pi's generic Git parser keeps a scheme-less source's user info in the clone
 folder's host segment and a query in its path, stores the source in `settings.json`, and git
-prints the folder. Refused: a git source with user info that can hold a secret (a password, any
-user name on `http(s)://`, an `@` in the parsed host; an SSH user is allowed), any query on a
-git source, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
+prints the folder. Refused: a git source with user info other than the SSH user `git` (a password,
+any user name on `http(s)://`, any other SSH user, an `@` in the parsed host), a `%` in the
+host, any query on a git source (its ref included) or a ref that is not a plain name, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
 tag>]` only; Pi splits `npm:https://tok@host/x.tgz` into the name `https://tok` and a version,
 so the name is checked too), and a source with a scheme that Pi parses as a local path. Printed text goes through `redactSecrets` (source strings only) and,
 for a recorded source, `hideParts` with the credential parts of its parse; the package manager

@@ -124,6 +124,8 @@ export type ParsedSource =
 	| { type: "local"; path: string };
 
 const SSH_SCHEMES = new Set(["ssh", "git+ssh", "ssh+git"]);
+/** A branch, tag or commit name as a pinned ref: no `?`, `@`, `:` or space. */
+const GIT_REF = /^[A-Za-z0-9._/+-]+$/;
 
 /** The scheme, user info and query of a `scheme://` URL, when it is one. */
 function urlParts(
@@ -151,13 +153,15 @@ function urlParts(
  * folder's name and a query in its path, records the source in settings.json,
  * and git prints the folder, so a source is refused when:
  *
- * - a git source has user info that can hold a secret: a password, any user
- *   name on an `http(s)://` URL (a token often sits there alone), or an `@`
- *   anywhere else in its host. An SSH user name (`git@host:owner/repo`,
- *   `ssh://deploy@host/...`) is an account, not a secret, and is allowed;
- * - a git source has a query string (it can carry a token, and Pi keeps it in
- *   the folder name). A `#ref` or `@ref` pins a ref and is allowed;
- * - an `npm:` source's version is a URL with user info or a query;
+ * - a git source has user info other than the SSH user `git`
+ *   (`git@host:owner/repo`, `ssh://git@host/...`): a password, any user name on
+ *   an `http(s)://` URL (a token often sits there alone), any other SSH user,
+ *   or an `@` anywhere else in its host; or a percent sign in its host;
+ * - a git source has a query string anywhere, its ref included (it can carry
+ *   a token, and Pi keeps it in the folder name), or a ref that is not a plain
+ *   branch, tag or commit name. A `#ref` or `@ref` such as `@release/1.0` is
+ *   allowed;
+ * - an `npm:` source that is not a registry package (`isRegistryPackage`);
  * - Pi reads it as a local path although it starts with a scheme (`HTTPS://`,
  *   `git+https://`, `github:`, a `git:` form its parser rejects): Pi would
  *   look for a folder of that name and print it in its error.
@@ -199,8 +203,11 @@ export function credentialParts(parsed: ParsedSource): string[] {
 		const found = urlParts(url);
 		if (
 			found?.userinfo !== undefined &&
-			(/[:@]/.test(found.userinfo) ||
-				!(allowSshUser && SSH_SCHEMES.has(found.scheme)))
+			!(
+				allowSshUser &&
+				SSH_SCHEMES.has(found.scheme) &&
+				found.userinfo === "git"
+			)
 		) {
 			parts.push(`${found.userinfo}@`);
 		}
@@ -253,25 +260,37 @@ export function sourceProblem(
 				? undefined
 				: `${shown} is not a registry package. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).`;
 		case "git": {
-			if (parsed.repo.includes("?") || parsed.path.includes("?")) {
+			const ref = parsed.ref ?? "";
+			if (
+				parsed.repo.includes("?") ||
+				parsed.path.includes("?") ||
+				ref.includes("?")
+			) {
 				return query;
 			}
 			if (parsed.host.includes("@")) {
 				return credential;
+			}
+			if (parsed.host.includes("%")) {
+				return `${shown} has a percent-encoded host, which can hide user info; review-panel does not install it. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.`;
+			}
+			if (ref !== "" && !GIT_REF.test(ref)) {
+				return `${shown} pins the ref "${redactSecrets(ref)}", which is not a plain branch, tag or commit name (letters, digits, . _ / + -); review-panel does not install it.`;
 			}
 			const url = urlParts(parsed.repo);
 			if (url !== undefined) {
 				if (url.userinfo === undefined) {
 					return undefined;
 				}
-				return /[:@]/.test(url.userinfo) || !SSH_SCHEMES.has(url.scheme)
-					? credential
-					: undefined;
+				// The only SSH user allowed is git; any other may be a token.
+				return SSH_SCHEMES.has(url.scheme) && url.userinfo === "git"
+					? undefined
+					: credential;
 			}
-			// scp-style SSH (user@host:path): the user is an account.
+			// scp-style SSH (user@host:path): only the user git.
 			const scp = /^([^@\s/:]+)@[^@\s/:]+:/.exec(parsed.repo);
 			if (scp !== null) {
-				return undefined;
+				return scp[1] === "git" ? undefined : credential;
 			}
 			return parsed.repo.includes("@") ? credential : undefined;
 		}
