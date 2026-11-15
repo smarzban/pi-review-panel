@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The publish workflow installs the packed tarball and runs it (`npm run smoke:installed`) before it publishes, and refuses a tag whose commit is not on `main`. CI and publish use the same action versions.
 - Every review lens ends with one shared closing rule, pinned by a test so the copies cannot drift. It now asks for issues the change introduces, including in code it does not touch (it said "in the changed code"), and says what high, medium and low mean: high for lost or corrupted data, a security hole or a broken main path; medium for a wrong result or a failure on a reachable side path; low for the rest. A lens that sets its own severity, as `tests` does, keeps it. The skill states the same scale.
 - The `tests` lens prompt is split into paragraphs; its rules are unchanged.
 - The skill takes the merge base with the default branch, not with `main`.
