@@ -400,6 +400,14 @@ export function renderReviewResult(input: {
 	const lines = reviewHeadLines("# Review panel", input);
 	if (failed.length > 0) {
 		lines.push(reviewLostLine(input.result));
+		// Why, in the reply only: the PR comment keeps the names alone.
+		for (const facts of failed) {
+			if (facts.outcome.kind === "failed") {
+				lines.push(
+					`- ${facts.seat.rosterId}/${facts.seat.lens}: ${truncateCodePoints(inertLine(facts.outcome.reason), 200)}`,
+				);
+			}
+		}
 	}
 	const groupingLost = groupingLostLine(input.result.grouping);
 	if (groupingLost !== undefined) {

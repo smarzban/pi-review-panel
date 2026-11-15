@@ -436,6 +436,7 @@ describe("the actions without Pi", () => {
 					"3/4 voted · 0 findings",
 					"Seats: holistic (terra, claude), tests (terra, claude)",
 					"Lost: claude/holistic (provider-error)",
+					"- claude/holistic: quota",
 					`Record: \`${path.join(repo, ".review-panel", "runs", "r-2")}\``,
 					"",
 					"None submitted.",
