@@ -179,7 +179,9 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
 - `extension install <source>` installs a Pi package with the bundled SDK's own package
   manager, the code behind `pi install`: `git:host/owner/repo` (cloned into
   `<agent folder>/git/<host>/<owner>/<repo>`, then `npm install` there), `npm:name` (into
-  `<agent folder>/npm`), or a local folder (recorded, not copied). It records the source in the
+  `<agent folder>/npm`), or a local folder (recorded, not copied; a leading `~` and a `file:`
+  URL work, and a relative path is taken from the working folder). An SSH source needs the
+  prefix: `git:git@github.com:owner/repo`; without it the command refuses and says so. It records the source in the
   agent folder's `settings.json` `packages`, keeping every other setting. It needs `git` (and
   `npm` for a package with dependencies) on PATH, and the network for a remote source. Their
   output passes through to the terminal; the command's last lines are the package's

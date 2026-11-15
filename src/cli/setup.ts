@@ -5,6 +5,7 @@
  * decides what to load, filters, and words the output.
  */
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { READINESS_ROW_TIMEOUT_MS } from "../config/readiness.js";
 import {
@@ -269,16 +270,41 @@ function withinBound<T>(
 }
 
 /**
- * A local source (anything that is not `npm:`, `git:` or a URL) resolved from
- * `cwd`, as Pi resolves one from the folder it runs in. Others pass through.
+ * A local source (anything that is not `npm:`, `git:` or a URL) as an
+ * absolute path: a leading `~` is the home folder, a `file:` URL is decoded,
+ * and anything else is resolved from `cwd`, as Pi resolves one from the folder
+ * it runs in. Other sources pass through. An SSH source written the scp way
+ * (`git@host:owner/repo`) is refused: Pi would take it for a local path, and
+ * only `git:git@host:owner/repo` reaches git.
  */
-export function absoluteSource(source: string, cwd: string): string {
+export function absoluteSource(
+	source: string,
+	cwd: string,
+	home: string,
+): string {
 	const trimmed = source.trim();
-	if (
-		/^(npm|git|github|http|https|ssh|builtin):/.test(trimmed) ||
-		/^git@/.test(trimmed)
-	) {
+	if (/^(npm|git|github|http|https|ssh|builtin):/.test(trimmed)) {
 		return trimmed;
+	}
+	if (/^[^\s/:@]+@[^\s/:]+:/.test(trimmed)) {
+		throw new SetupError(
+			`${redactSecrets(trimmed)} looks like an SSH Git source; write it with the git: prefix: git:${redactSecrets(trimmed)}`,
+		);
+	}
+	if (trimmed.startsWith("file:")) {
+		try {
+			return fileURLToPath(trimmed);
+		} catch (error) {
+			throw new SetupError(
+				`${redactSecrets(trimmed)} is not a usable file: URL (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
+	}
+	if (trimmed === "~") {
+		return home;
+	}
+	if (trimmed.startsWith("~/")) {
+		return path.join(home, trimmed.slice(2));
 	}
 	return path.resolve(cwd, trimmed);
 }
@@ -588,7 +614,7 @@ export async function installExtension(input: {
 	progress(line: string): void;
 	signal?: AbortSignal;
 }): Promise<string> {
-	const source = absoluteSource(input.source, input.cwd);
+	const source = absoluteSource(input.source, input.cwd, input.home);
 	const installed = redactedExtension(
 		await untilAborted(
 			input.sdk.installExtension({
@@ -688,7 +714,7 @@ export async function removeExtension(input: {
 	// source there is relative to the agent folder, not to the working folder.
 	const source = configured.some((entry) => entry.source === input.source)
 		? input.source
-		: absoluteSource(input.source, input.cwd);
+		: absoluteSource(input.source, input.cwd, input.home);
 	const removed = await untilAborted(
 		input.sdk.removeExtension({
 			agentDir: input.agentDir.dir,
