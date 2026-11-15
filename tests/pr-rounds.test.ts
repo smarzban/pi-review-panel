@@ -4077,6 +4077,42 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		});
 	}
 
+	it("a round's number is its signed file name's N, never the marker's unsigned round field (P-2)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			const reviewDir = reviewRecordDir(repo);
+			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+				items: [resolved("F-2"), { id: "F-1", disposition: "still present" }],
+			});
+			// Signed, but the JSON round disagrees with the file name.
+			writeSignedMarker(reviewDir, "round-2.posted", "v-0", {
+				pr: 12,
+				round: 7,
+			});
+			writeVerifyRecord(repo, "v-a", REVIEW_ID, { items: [] });
+			// Signed, with no round field at all.
+			writeSignedMarker(reviewDir, "round-3.posted", "v-a", { pr: 12 });
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					comment(
+						6,
+						"saeed",
+						`## Review panel · verify 7\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+					),
+				],
+			});
+			await cleanVerify(repo, gh);
+			const card = bodyOf(closeoutPosts(gh.calls)[0]);
+			expect(card).toContain("**2 resolved** in 3 verify rounds");
+			expect(card).toContain(
+				"- **F-2 [medium]** missing timeout · resolved in verify 2",
+			);
+			expect(card).toContain(`[verify 2](${PR}#issuecomment-6)`);
+			expect(card).not.toContain("verify 7");
+		});
+	});
+
 	it("a signed round marker naming another review's verify is not a round of this one", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
