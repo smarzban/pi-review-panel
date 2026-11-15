@@ -6,6 +6,7 @@ import {
 	type CloseoutVerifyRound,
 	renderCloseoutComment,
 } from "../src/tool/closeout-comment.js";
+import { cardRounds } from "../src/tool/closeout-rounds.js";
 
 function seatsOf(
 	...groups: Array<[lens: string, ids: string[]]>
@@ -593,5 +594,38 @@ describe("assembleCloseoutComment", () => {
 				lowAdvisory: ["F-3"],
 			}),
 		).toThrow(/F-3/);
+	});
+});
+
+describe("cardRounds (T505)", () => {
+	const r = (runId: string, n?: number) => round(runId, n, []);
+
+	it("counts the card's own verify last, and only the posted rounds before it", () => {
+		const posted = [r("v-1", 1), r("v-2", 2), r("v-3", 3)];
+		expect(
+			cardRounds(posted, r("v-2")).map((row) => [row.runId, row.round]),
+		).toEqual([
+			["v-1", 1],
+			// The card's own verify keeps the number it posted as.
+			["v-2", 2],
+		]);
+		expect(
+			cardRounds(posted, r("v-4", 4)).map((row) => [row.runId, row.round]),
+		).toEqual([
+			["v-1", 1],
+			["v-2", 2],
+			["v-3", 3],
+			["v-4", 4],
+		]);
+	});
+
+	it("a verify that never posted comes after every posted round, with no number", () => {
+		expect(
+			cardRounds([r("v-1", 1)], r("v-9")).map((row) => [row.runId, row.round]),
+		).toEqual([
+			["v-1", 1],
+			["v-9", undefined],
+		]);
+		expect(cardRounds([r("v-1", 1)], undefined)).toHaveLength(1);
 	});
 });

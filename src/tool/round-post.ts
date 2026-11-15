@@ -704,8 +704,10 @@ export type VerifyRoundFacts = {
 	reviewFindings?: readonly StampedFinding[];
 	/**
 	 * The review record as verify loaded and authenticated it before any seat
-	 * ran. The close-out card is built from these signed bytes, never from the
-	 * record folder again, which may have changed while the seats ran.
+	 * ran. The close-out card's findings, seats and range are built from these
+	 * signed bytes, never from the record folder again, which may have changed
+	 * while the seats ran; its earlier rounds come only from signed
+	 * `round-<N>.posted` markers and signed verify records.
 	 */
 	review: PriorRun;
 	/**

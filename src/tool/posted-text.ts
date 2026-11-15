@@ -25,6 +25,10 @@
  *   would hide in a copied path. A value with nothing visible renders as
  *   `(empty)`.
  *
+ * {@link postedLink} is the only link the tool writes: the close-out card's
+ *   links to this PR's own comments, at a URL of exactly the shape
+ *   {@link prCommentUrl} takes, with the label as posted text.
+ *
  * {@link fitCommentBody} cuts a body by whole rows (a group in part) to stay
  * under GitHub's comment limit; every posted body goes through it. With each
  * text field capped after escaping, no one finding can take most of the budget.
