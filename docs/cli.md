@@ -179,7 +179,8 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   and the rest is still listed. It runs that code, as `diagnose` does.
 - `extension install <source>` installs a Pi package with the bundled SDK's own package
   manager, the code behind `pi install`: `git:host/owner/repo` (cloned into
-  `<agent folder>/git/<host>/<owner>/<repo>`, then `npm install` there), `npm:name` (into
+  `<agent folder>/git/<host>/<owner>/<repo>`, then `npm install` there), `npm:name` (a registry
+  package only, into
   `<agent folder>/npm`), or a local folder (recorded, not copied; a leading `~` and a `file:`
   URL work, and a relative path is taken from the working folder). An SSH source needs the
   prefix: `git:git@github.com:owner/repo`; without it the command refuses and says so. It records the source in the
@@ -274,7 +275,11 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
     account, not a secret, and installs;
   - a git source with any query string (`?...`); pin a ref with `@<ref>` or `#<ref>` instead
     (`git:host/owner/repo@release/1.0` installs);
-  - an `npm:` source whose version is a URL with user info or a query;
+  - an `npm:` source that is not a registry package. Only `npm:<name>` and
+    `npm:<name>@<version, range or tag>` install (`npm:pi-foo`, `npm:@scope/pkg@^1.2.0`,
+    `npm:pkg@latest`); a URL, `git+…`, `git:`, `github:`, `file:`, alias or path spec is refused,
+    with or without a credential. Install a private package from your registry with a token
+    in `.npmrc`, or use a git source (`git:git@host:owner/repo`) instead;
   - a source with a scheme that Pi cannot read as git or npm (`HTTPS://...`, `git+https://...`,
     `github:...`): Pi would look for a local folder of that name and print it.
 

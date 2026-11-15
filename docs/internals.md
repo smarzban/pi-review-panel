@@ -118,8 +118,9 @@ runs, because Pi's generic Git parser keeps a scheme-less source's user info in 
 folder's host segment and a query in its path, stores the source in `settings.json`, and git
 prints the folder. Refused: a git source with user info that can hold a secret (a password, any
 user name on `http(s)://`, an `@` in the parsed host; an SSH user is allowed), any query on a
-git source, an `npm:` URL version with user info or a query, and a source with a scheme that Pi
-parses as a local path. Printed text goes through `redactSecrets` (source strings only) and,
+git source, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
+tag>]` only; Pi splits `npm:https://tok@host/x.tgz` into the name `https://tok` and a version,
+so the name is checked too), and a source with a scheme that Pi parses as a local path. Printed text goes through `redactSecrets` (source strings only) and,
 for a recorded source, `hideParts` with the credential parts of its parse; the package manager
 gets the source as given.
 

@@ -162,6 +162,32 @@ function urlParts(
  *   `git+https://`, `github:`, a `git:` form its parser rejects): Pi would
  *   look for a folder of that name and print it in its error.
  */
+/** An npm package name: lowercase, optionally `@scope/`, no path or URL. */
+const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+/** A version, range or dist-tag: no `:`, `/`, `@`, `?` or `#`. */
+const NPM_VERSION = /^[A-Za-z0-9._+^~<>=|* -]+$/;
+
+/**
+ * True for `npm:<name>` and `npm:<name>@<version, range or tag>` only, as Pi
+ * parses them. Any URL, `git+`, `git:`, `github:`, `file:`, alias (`npm:`) or
+ * path spec is not a registry package, whether or not it holds a credential.
+ */
+function isRegistryPackage(
+	parsed: Extract<ParsedSource, { type: "npm" }>,
+): boolean {
+	if (!NPM_NAME.test(parsed.name)) {
+		return false;
+	}
+	if (parsed.version === undefined) {
+		return parsed.spec === parsed.name;
+	}
+	return (
+		NPM_VERSION.test(parsed.version) &&
+		parsed.version.trim() !== "" &&
+		parsed.spec === `${parsed.name}@${parsed.version}`
+	);
+}
+
 /**
  * The exact credential text in a parsed source: user info that can hold a
  * secret (with its `@`) and query strings (with their `?`). Printing a source,
@@ -222,13 +248,10 @@ export function sourceProblem(
 			return /^\s*[a-z][a-z0-9+.-]+:/i.test(raw)
 				? `${shown} is not a source Pi can read: it would look for a local folder of that name. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.`
 				: undefined;
-		case "npm": {
-			const url = urlParts(parsed.version ?? "");
-			if (url?.userinfo !== undefined) {
-				return credential;
-			}
-			return url?.query ? query : undefined;
-		}
+		case "npm":
+			return isRegistryPackage(parsed)
+				? undefined
+				: `${shown} is not a registry package. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).`;
 		case "git": {
 			if (parsed.repo.includes("?") || parsed.path.includes("?")) {
 				return query;
