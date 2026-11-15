@@ -6,9 +6,8 @@
  * (`record.mac`, kind verify) whose signed `meta.json` names the review
  * (`priorRunId`, the meaning it always had), the link it chained from
  * (`previousRunId`: the review for the first link) and its place (`link`,
- * 1-based). A verify written before chaining has neither field: it was a
- * check of the review itself, so the newest such record is the first link
- * and older ones are superseded by it (each re-checked the review's ids).
+ * 1-based). A verify written before chaining has neither field; a review
+ * with one cannot be chained, and is refused with "run a new review".
  *
  * The open set, the resolved round of every id and the dismissals are
  * computed from those signed bytes only. A fork (two links chained from one
@@ -19,7 +18,7 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 
 import { commitResolves, isOid } from "./commits.js";
-import { discoverPriorRecords, runIdRecency } from "./prior-records.js";
+import { discoverPriorRecords } from "./prior-records.js";
 import {
 	loadPriorRun,
 	NEW_REVIEW_FIX,
@@ -54,8 +53,6 @@ export type ChainLink = {
 	link: number;
 	/** The record it chained from: the review for the first link. */
 	previousRunId: string;
-	/** Written before chaining: no `link` or `previousRunId` in its meta. */
-	legacy: boolean;
 	headOid: string;
 	keptFindingIds: string[];
 	dismissed: JudgmentRow[];
@@ -308,7 +305,6 @@ export type LinkParts = {
 	runId: string;
 	link: number;
 	previousRunId: string;
-	legacy?: boolean;
 	headOid: string;
 	keptFindingIds: readonly string[];
 	dismissed?: readonly JudgmentRow[];
@@ -324,7 +320,6 @@ export function makeLink(parts: LinkParts): ChainLink {
 		runId: parts.runId,
 		link: parts.link,
 		previousRunId: parts.previousRunId,
-		legacy: parts.legacy === true,
 		headOid: parts.headOid,
 		keptFindingIds: [...parts.keptFindingIds],
 		dismissed: [...(parts.dismissed ?? [])],
@@ -360,15 +355,11 @@ export function rawLinkOf(
 	) {
 		return undefined;
 	}
-	const legacy = meta.link === undefined && meta.previousRunId === undefined;
 	return {
 		runId,
-		legacy,
-		previousRunId: legacy
-			? reviewRunId
-			: typeof meta.previousRunId === "string"
-				? meta.previousRunId
-				: "",
+		legacy: meta.link === undefined && meta.previousRunId === undefined,
+		previousRunId:
+			typeof meta.previousRunId === "string" ? meta.previousRunId : "",
 		...(typeof meta.link === "number" && Number.isSafeInteger(meta.link)
 			? { link: meta.link }
 			: {}),
@@ -438,14 +429,6 @@ function signedVerifiesOf(
 	return found;
 }
 
-function newest(rows: readonly RawLink[]): RawLink | undefined {
-	return [...rows].sort(
-		(left, right) =>
-			runIdRecency(right.runId) - runIdRecency(left.runId) ||
-			(left.runId < right.runId ? 1 : left.runId > right.runId ? -1 : 0),
-	)[0];
-}
-
 function broken(reviewRunId: string, why: string): Error {
 	return new Error(
 		`${REFUSED}: the verify chain of review "${reviewRunId}" ${why}; run a new review`,
@@ -454,7 +437,8 @@ function broken(reviewRunId: string, why: string): Error {
 
 /**
  * The review's verify chain, first link first, from the owner's signed
- * verify records only. Refuses a fork, a gap and a link out of place.
+ * verify records only. Refuses a verify written before rounds chained, a
+ * fork, a gap and a link out of place.
  */
 export function loadVerifyChain(
 	repoDir: string,
@@ -462,43 +446,45 @@ export function loadVerifyChain(
 	key: Buffer,
 ): ChainLink[] {
 	const all = signedVerifiesOf(repoDir, reviewRunId, key);
-	const legacy = all.filter((row) => row.legacy);
+	const legacy = all.find((row) => row.legacy);
+	if (legacy !== undefined) {
+		throw new Error(
+			`${REFUSED}: review "${reviewRunId}" has verify "${legacy.runId}", written before verify rounds chained; run a new review`,
+		);
+	}
 	const children = new Map<string, RawLink[]>();
-	for (const row of all.filter((entry) => !entry.legacy)) {
+	for (const row of all) {
 		const list = children.get(row.previousRunId) ?? [];
 		list.push(row);
 		children.set(row.previousRunId, list);
 	}
-	const fromReview = children.get(reviewRunId) ?? [];
-	if (fromReview.length + (legacy.length > 0 ? 1 : 0) > 1) {
-		throw broken(
-			reviewRunId,
-			`forks: ${[...fromReview.map((row) => row.runId), ...legacy.map((row) => row.runId)].join(", ")} all chain from the review`,
-		);
-	}
 	const links: ChainLink[] = [];
-	let current = fromReview[0] ?? newest(legacy);
-	while (current !== undefined) {
+	let parent = reviewRunId;
+	for (;;) {
+		const next = children.get(parent) ?? [];
+		if (next.length > 1) {
+			throw broken(
+				reviewRunId,
+				`forks at "${parent}": ${next.map((row) => row.runId).join(", ")} all chain from it`,
+			);
+		}
+		const current = next[0];
+		if (current === undefined) {
+			break;
+		}
 		const place = links.length + 1;
-		if (!current.legacy && current.link !== place) {
+		if (current.link !== place) {
 			throw broken(
 				reviewRunId,
 				`has verify "${current.runId}" out of place (link ${current.link ?? "missing"}, expected ${place})`,
 			);
 		}
 		links.push(makeLink({ ...current, link: place }));
-		const next = children.get(current.runId) ?? [];
-		if (next.length > 1) {
-			throw broken(
-				reviewRunId,
-				`forks at "${current.runId}": ${next.map((row) => row.runId).join(", ")} both chain from it`,
-			);
-		}
-		current = next[0];
+		parent = current.runId;
 	}
 	const inChain = new Set(links.map((row) => row.runId));
 	for (const row of all) {
-		if (!row.legacy && !inChain.has(row.runId)) {
+		if (!inChain.has(row.runId)) {
 			throw broken(
 				reviewRunId,
 				`has a gap: verify "${row.runId}" chains from "${row.previousRunId}", which is not a complete verify of this review signed by this owner's record key`,

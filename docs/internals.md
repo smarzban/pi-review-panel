@@ -156,8 +156,8 @@ signed `verification.json` adds `dismissed` (with reasons) and `lowAdvisory`. `l
 reads every complete verify record of the review signed with the owner's key and links them from
 the review: one child per record, places 1, 2, …; a fork, a gap (a link whose parent is not a
 signed verify of this review) or a link out of place refuses the chain with "run a new review".
-A record with neither field was written before chaining and checked the review itself: the newest
-is link 1, older ones are superseded. `loadChainPrior` refuses a prior that is the review once a
+A verify record with neither field was written before chaining: its review is refused, by verify
+and comment, with "run a new review". `loadChainPrior` refuses a prior that is the review once a
 verify exists, or a verify that is not the tip, naming the tip. `chainState` walks the links:
 dismissals and low/advisory first, then each kept id resolved (every voting seat that answered
 said resolved, `resolvedIdsOf`) or open, then the link's regressions, open, with ids

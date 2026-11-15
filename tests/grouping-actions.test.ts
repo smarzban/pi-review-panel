@@ -571,6 +571,8 @@ describe("comment takes G-ids as well as F-ids", () => {
 					runId: "v-1",
 					kind: "verify",
 					priorRunId: "review-1",
+					previousRunId: "review-1",
+					link: 1,
 				}),
 			);
 			writeFileSync(

@@ -230,11 +230,16 @@ export function signVerifyRecord(
 					readFileSync(path.join(recordPath, "verification.json"), "utf8"),
 				) as { priorRunId?: unknown })
 			: {};
+		// The first link of its review's chain, as a real first verify is.
 		return JSON.stringify({
 			runId,
 			kind: "verify",
 			...(typeof verification.priorRunId === "string"
-				? { priorRunId: verification.priorRunId }
+				? {
+						priorRunId: verification.priorRunId,
+						previousRunId: verification.priorRunId,
+						link: 1,
+					}
 				: {}),
 		});
 	});

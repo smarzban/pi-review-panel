@@ -446,9 +446,8 @@ any seat runs:
   verify of the same review (a gap, or a link of another review's chain), or a link out of
   place. The message says to run a new review.
 
-Verify records written before chaining have no `link` or `previousRunId`: each checked the
-review itself. The newest of them is the first link, and older ones are superseded by it; name
-the newest as `priorRunId`.
+Verify records written before chaining have no `link` or `previousRunId`. A review that has one
+cannot be chained: verify and comment refuse it with "run a new review".
 
 ## Posting rounds to the pull request
 

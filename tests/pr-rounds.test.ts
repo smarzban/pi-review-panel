@@ -363,7 +363,8 @@ function writeVerifyRecord(
 			runId,
 			kind: options.kind ?? "verify",
 			priorRunId,
-			...(options.chain ?? {}),
+			// The first link of the review's chain unless the test says.
+			...(options.chain ?? { previousRunId: priorRunId, link: 1 }),
 			// A real verify names the commit it checked: here the one before
 			// HEAD, so a verify at HEAD can chain from it.
 			headOid: options.headOid ?? git(repo, ["rev-parse", "HEAD~1"]),
@@ -495,13 +496,7 @@ const REVIEW_ID = "20261113-review";
  * itself before any. The tests here are about posting, not the chain.
  */
 function latest(repo: string, review: string): string {
-	try {
-		return (
-			loadVerifyChain(repo, review, TEST_RECORD_KEY).at(-1)?.runId ?? review
-		);
-	} catch {
-		return review;
-	}
+	return loadVerifyChain(repo, review, TEST_RECORD_KEY).at(-1)?.runId ?? review;
 }
 
 describe("a review round posts to the PR whose head it reviewed", () => {
@@ -2415,7 +2410,14 @@ describe("fix round 1: verify N counts only verifies that posted (L4, L7)", () =
 									ROWS,
 									still,
 								)(input);
-								writeVerifyRecord(repo, id, REVIEW_ID, { posted: false });
+								const link = Number(id.slice(2));
+								writeVerifyRecord(repo, id, REVIEW_ID, {
+									posted: false,
+									chain: {
+										previousRunId: link === 1 ? REVIEW_ID : `v-${link - 1}`,
+										link,
+									},
+								});
 								return result;
 							},
 						}),
@@ -4220,38 +4222,6 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		});
 	});
 
-	it("of verifies written before chaining, only the newest is a link: an id reads the round of the link that resolved it (R-1)", async () => {
-		await withRepository(async (repo, head) => {
-			writeReviewRecord(repo, REVIEW_ID, ROWS);
-			const reviewDir = reviewRecordDir(repo);
-			// v-0 resolved both, but v-a, newer, re-checked the review and
-			// split on F-1: v-a is the first link, v-0 is superseded.
-			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
-				votes: [{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] }],
-			});
-			writeSignedMarker(reviewDir, "round-1.posted", "v-0", { pr: 12 });
-			writeVerifyRecord(repo, "v-a", REVIEW_ID, {
-				votes: [
-					{ seat: GLM, items: [resolved("F-1")] },
-					{ seat: OPUS, items: [{ id: "F-1", disposition: "inconclusive" }] },
-				],
-			});
-			writeSignedMarker(reviewDir, "round-2.posted", "v-a", { pr: 12 });
-			const gh = fakeGh({ pulls: [openPr(12, head)] });
-			await cleanVerify(repo, gh);
-			const card = bodyOf(closeoutPosts(gh.calls)[0]);
-			expect(card).toContain("**2 resolved** in 2 verify rounds");
-			// v-a split on F-1 and never answered for F-2: verify 3 resolved both.
-			expect(card).toContain(
-				"- **F-1 [high]** auth bypass · resolved in verify 3",
-			);
-			expect(card).toContain(
-				"- **F-2 [medium]** missing timeout · resolved in verify 3",
-			);
-			expect(card).not.toContain("resolved in verify 1");
-		});
-	});
-
 	it("Verified by names only the seats that voted, never a lost one (R-2)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
@@ -4464,7 +4434,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			});
 		});
 
-		it("refuses a named verify that a newer one superseded, naming the latest (R-3)", async () => {
+		it("refuses a named verify that is not the latest, naming the latest (R-3)", async () => {
 			await withRepository(async (repo) => {
 				writeReviewRecord(repo, REVIEW_ID, ROWS);
 				const NAMED = "2026-11-14T18-00-00-000Z-main-e52d7adb77ca8882";
@@ -4475,6 +4445,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				});
 				writeVerifyRecord(repo, LATE, REVIEW_ID, {
 					votes: [{ seat: OPUS, items: [resolved("F-1")] }],
+					chain: { previousRunId: NAMED, link: 2 },
 				});
 				const gh = fakeGh({
 					comments: [],
