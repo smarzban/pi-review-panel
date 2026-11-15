@@ -779,6 +779,19 @@ describe("comment when the owner stops the rounds", () => {
 		);
 	});
 
+	it("refuses judgment on an id a round already dismissed or left as low/advisory: only open ids (R-7)", async () => {
+		const v1 = await round1();
+		await round2(v1.runId);
+		await expect(
+			stop({ dismissed: [{ id: "F-5", reason: "a new reason" }] }),
+		).rejects.toThrow(
+			"comment refused: F-5 was dismissed in verify 2; name only ids still open",
+		);
+		await expect(stop({ lowAdvisory: ["F-4"] })).rejects.toThrow(
+			"comment refused: F-4 was left as low/advisory in verify 1; name only ids still open",
+		);
+	});
+
 	it("refuses to dismiss an id a round resolved", async () => {
 		const v1 = await round1();
 		await expect(
