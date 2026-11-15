@@ -186,7 +186,8 @@ A review also writes `plan.json` before pinning: its kind, the frozen base and h
 commits, the scoping note, and the planned seat rows (`rosterId`, `lens`, `provider`, `model`, as in
 `panel.json`). It holds no prompt text and no extension paths. Each seat's outcome is written to
 `seats/<planned index>.json` the moment that seat settles, by a temp file and a rename. A seat torn
-down because the run was cancelled is not written there. While a run is going, `run.lock` names its
+down because the run was cancelled is not written there; a seat that had already submitted when
+the run was cancelled is, so `resume` does not run it again. While a run is going, `run.lock` names its
 process; the run removes it when it ends.
 
 ### The record key

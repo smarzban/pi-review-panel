@@ -259,9 +259,14 @@ export async function scheduleSeats(
 						live,
 					);
 					results[index] = result;
-					if (!cancelled && !options.runAbortSignal?.aborted) {
+					const facts = outcomeFactsFor(seat, result);
+					// An interrupted run still writes a seat that had submitted: the
+					// owner paid for it, and resume runs only seats with no file. A
+					// seat the interrupt killed has nothing to keep.
+					const interrupted = cancelled || options.runAbortSignal?.aborted;
+					if (!interrupted || facts.outcome.kind === "voted") {
 						try {
-							options.onSeatSettled?.(index, outcomeFactsFor(seat, result));
+							options.onSeatSettled?.(index, facts);
 						} catch {
 							// A failed durable write never changes seat accounting; the
 							// final execution record still carries this seat.
