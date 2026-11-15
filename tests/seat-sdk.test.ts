@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { SEAT_PROFILES } from "../src/seat/channel-profile.js";
 import { createSdkSeatSession } from "../src/seat/sdk-session.js";
 import { createConfinementGuard } from "../src/seat/seat-extension.js";
 
@@ -99,8 +100,7 @@ describe("embedded SDK seat session", () => {
 			noThemes: true,
 			noContextFiles: true,
 			additionalExtensionPaths: ["/outside/anthropic-auth.ts"],
-			systemPrompt:
-				"You are a Review panel reviewer. Use only the supplied tools and record findings only through submit_findings.",
+			systemPrompt: SEAT_PROFILES.findings.systemPrompt,
 		});
 		const sessionOptions = calls.find((call) => call.name === "session")?.value;
 		expect(sessionOptions).toMatchObject({
