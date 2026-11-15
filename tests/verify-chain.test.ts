@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { commentAction } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
 import { runVerify } from "../src/run/run-verify.js";
@@ -660,27 +661,38 @@ describe("the chain refuses what is not one line of signed links", () => {
 		).toEqual(["2026-11-15T11-00-00-000Z-of-other"]);
 	});
 
-	it("takes verifies written before chaining: the newest is the first link, older ones are superseded", async () => {
+	it("refuses a review whose verifies were written before verify rounds chained: verify and comment say to run a new review", async () => {
 		writeLink("2026-11-15T11-00-00-000Z-old-a", REVIEW, {});
-		writeLink("2026-11-15T12-00-00-000Z-old-b", REVIEW, {
-			headOid: commits[3],
-		});
-		const links = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY);
-		expect(links.map((row) => [row.runId, row.link, row.legacy])).toEqual([
-			["2026-11-15T12-00-00-000Z-old-b", 1, true],
-		]);
+		const refusal = `review "${REVIEW}" has verify "2026-11-15T11-00-00-000Z-old-a", written before verify rounds chained; run a new review`;
+		expect(() => loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)).toThrow(
+			refusal,
+		);
 		await expect(
 			verify("2026-11-15T11-00-00-000Z-old-a", commits[4] as string, [], []),
-		).rejects.toThrow(
-			'verify against the latest verify, "2026-11-15T12-00-00-000Z-old-b"',
-		);
-		const next = await verify(
-			"2026-11-15T12-00-00-000Z-old-b",
-			commits[4] as string,
-			["F-1"],
-			[{ items: [{ id: "F-1", disposition: "resolved" }] }],
-		);
-		expect(next.link).toBe(2);
-		expect(next.priorHeadOid).toBe(commits[3]);
+		).rejects.toThrow(refusal);
+		await expect(
+			verify(REVIEW, commits[4] as string, ["F-1"], []),
+		).rejects.toThrow(refusal);
+		await expect(
+			commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: REVIEW,
+					dismissed: [],
+					lowAdvisory: [],
+				},
+				{
+					deps: {
+						env: {},
+						home: "/tmp/verify-chain-home",
+						recordKey: () => TEST_RECORD_KEY,
+						postComment: () => {
+							throw new Error("must not post");
+						},
+					},
+				},
+			),
+		).rejects.toThrow(`comment refused: ${refusal}`);
 	});
 });
