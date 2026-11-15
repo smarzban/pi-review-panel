@@ -26,6 +26,8 @@ export type ProviderRow = {
 	loggedIn: boolean;
 	/** Where the configuration comes from, when it is configured. */
 	how?: string;
+	/** The provider's own login check threw; only this row says so. */
+	checkError?: string;
 };
 
 export type CatalogModel = {
@@ -154,6 +156,9 @@ function loginText(logins: readonly ProviderLogin[]): string {
 }
 
 function providerState(row: ProviderRow): string {
+	if (row.checkError !== undefined) {
+		return `check failed (${row.checkError})`;
+	}
 	if (!row.loggedIn) {
 		return row.logins.length === 0 ? "not configured" : "not logged in";
 	}

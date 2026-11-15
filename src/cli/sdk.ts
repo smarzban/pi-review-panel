@@ -15,11 +15,13 @@ import {
 } from "../seat/seat-runtime.js";
 import type { AuthSdk, LoginRuntime, ProviderAuthState } from "./auth.js";
 import type { AuthInteraction } from "./sdk-types.js";
-import type {
-	CatalogModel,
-	InstalledExtension,
-	ProviderLogin,
-	SetupSdk,
+import {
+	type CatalogModel,
+	type InstalledExtension,
+	type ProviderLogin,
+	type ProviderRow,
+	redactSecrets,
+	type SetupSdk,
 } from "./setup.js";
 
 export const PI_SDK_PACKAGE = "@earendil-works/pi-coding-agent";
@@ -203,40 +205,92 @@ async function settle(settingsManager: PiSdk.SettingsManager): Promise<void> {
 	}
 }
 
+/** The slice of `ModelRuntime` that `providerRows` reads. */
+export type ProviderRuntime = Pick<
+	PiSdk.ModelRuntime,
+	| "getProviders"
+	| "listCredentials"
+	| "getAvailable"
+	| "getProviderAuthStatus"
+	| "checkAuth"
+>;
+
+/**
+ * One row per provider. The runtime's availability pass fills its auth
+ * snapshot, but one check that throws fails the whole pass, so a provider the
+ * snapshot does not show as configured is checked again on its own: a failing
+ * check marks only its own row.
+ */
+export async function providerRows(
+	runtime: ProviderRuntime,
+): Promise<ProviderRow[]> {
+	const signal = () => AbortSignal.timeout(15_000);
+	let stored = new Set<string>();
+	try {
+		stored = new Set(
+			(await runtime.listCredentials({ signal: signal() })).map(
+				(entry) => entry.providerId,
+			),
+		);
+	} catch {
+		// An unreadable auth.json leaves stored logins to the checks below.
+	}
+	try {
+		await runtime.getAvailable(undefined, { signal: signal() });
+	} catch {
+		// One failing check fails the pass; each provider is checked below.
+	}
+	const rows: ProviderRow[] = [];
+	for (const provider of runtime.getProviders()) {
+		const logins: ProviderLogin[] = [];
+		if (provider.auth.oauth !== undefined) {
+			logins.push("account");
+		}
+		if (provider.auth.apiKey?.login !== undefined) {
+			logins.push("api-key");
+		}
+		const row: ProviderRow = {
+			id: provider.id,
+			name: provider.name,
+			logins,
+			loggedIn: false,
+		};
+		const status = runtime.getProviderAuthStatus(provider.id);
+		if (stored.has(provider.id)) {
+			row.loggedIn = true;
+			row.how = "stored credential";
+		} else if (status.configured) {
+			row.loggedIn = true;
+			const how = configuredHow(status);
+			if (how !== undefined) {
+				row.how = how;
+			}
+		} else {
+			try {
+				const check = await runtime.checkAuth(provider.id, {
+					signal: signal(),
+				});
+				if (check !== undefined) {
+					row.loggedIn = true;
+					row.how = check.source ?? check.type;
+				}
+			} catch (error) {
+				row.checkError = redactSecrets(
+					error instanceof Error ? error.message : String(error),
+				);
+			}
+		}
+		rows.push(row);
+	}
+	return rows.sort((a, b) => a.id.localeCompare(b.id));
+}
+
 export const realSetupSdk: SetupSdk = {
 	async providers(agentDir) {
 		const sdk = await loadSdk();
 		const runtime = await createModelRuntime(sdk, agentDir);
 		try {
-			try {
-				// One availability pass fills the auth snapshot the status reads.
-				await runtime.getAvailable(undefined, {
-					signal: AbortSignal.timeout(15_000),
-				});
-			} catch {
-				// A provider check that fails leaves that provider not logged in.
-			}
-			return runtime
-				.getProviders()
-				.map((provider) => {
-					const logins: ProviderLogin[] = [];
-					if (provider.auth.oauth !== undefined) {
-						logins.push("account");
-					}
-					if (provider.auth.apiKey?.login !== undefined) {
-						logins.push("api-key");
-					}
-					const status = runtime.getProviderAuthStatus(provider.id);
-					const how = status.configured ? configuredHow(status) : undefined;
-					return {
-						id: provider.id,
-						name: provider.name,
-						logins,
-						loggedIn: status.configured,
-						...(how === undefined ? {} : { how }),
-					};
-				})
-				.sort((a, b) => a.id.localeCompare(b.id));
+			return await providerRows(runtime);
 		} finally {
 			await runtime.settleCredentialWrites();
 		}

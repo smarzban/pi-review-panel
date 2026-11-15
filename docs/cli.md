@@ -141,8 +141,9 @@ review-panel auth logout anthropic                # remove the stored credential
 - `auth providers` lists every provider the bundled SDK knows, plus those in the agent
   folder's `models.json`: its login (`account`, `API key`, both, or `none` for a provider set
   up only by an environment variable or `models.json`), and whether it is logged in now and
-  how (a stored credential, an environment variable, a `models.json` key). `--json` prints
-  the objects. `auth login` loads no extension, so a provider that an extension registers
+  how (a stored credential, an environment variable, a `models.json` key). A provider whose
+  own check fails says `check failed` with the reason on its own row; the others are still
+  checked. `--json` prints the objects. `auth login` loads no extension, so a provider that an extension registers
   logs in the way that extension documents.
 
 ## Models and extensions
