@@ -350,10 +350,9 @@ export type CommentInput = {
 };
 
 /**
- * `seats`, `lenses` and `scopingNote` stay raw here: review checks them only
- * after it has resolved both commits and the panel is ready, so a call that
- * is wrong in two ways reports the same problem first as it always has.
- * `reviewAction` validates them at that point.
+ * `seats`, `lenses` and `scopingNote` stay raw here. Their shape is checked
+ * when the call is parsed; `reviewAction` reads them again, and checks what
+ * they name, once both commits are resolved and the panel is ready.
  */
 export type ReviewInput = RoundInput & {
 	base: string;
@@ -600,6 +599,11 @@ function validateReviewInput(
 ): ReviewInput {
 	const base = validateNonEmptyString(args.base, "base");
 	const head = validateNonEmptyString(args.head, "head");
+	// Shape only, so a badly shaped argument is a usage error here as in
+	// verify. What the values name (a seat, a lens) is checked in the action.
+	optionalStringArray(args.seats, "seats");
+	optionalStringArray(args.lenses, "lenses");
+	optionalNonEmptyString(args.scopingNote, "scopingNote");
 	return {
 		base,
 		head,
