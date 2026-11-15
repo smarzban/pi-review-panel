@@ -641,6 +641,31 @@ function piFolderNote(
 	return agentDir.source === "environment" ? [shared] : [];
 }
 
+/**
+ * What an install stopped by Ctrl-C left. Pi's package manager gives no handle
+ * on the git or npm it runs, so the bin exits as soon as the command returns
+ * (see main.ts) and the package manager never gets to record the source; this
+ * reads settings.json to say whether it already had.
+ */
+async function abortedInstall(
+	sdk: SetupSdk,
+	agentDir: string,
+	source: string,
+	shownSource: string,
+): Promise<string> {
+	let recorded = false;
+	try {
+		recorded = (await sdk.listExtensions({ agentDir })).some(
+			(entry) => entry.source === source || entry.installedPath === source,
+		);
+	} catch {
+		// Unreadable settings: say what the stop itself guarantees.
+	}
+	return recorded
+		? `${shownSource} was already recorded in ${path.join(agentDir, "settings.json")} when the install stopped; review-panel extension list shows it, and review-panel extension remove undoes it.`
+		: `${shownSource} was not recorded in ${path.join(agentDir, "settings.json")}: the install stopped first. A git clone or npm install it had started may be left under ${agentDir} (git/ or npm/); install the source again to finish it.`;
+}
+
 export async function installExtension(input: {
 	agentDir: AgentDirChoice;
 	home: string;
@@ -656,17 +681,34 @@ export async function installExtension(input: {
 			`${redactSecrets(source)} carries a credential (a password or token in the source). review-panel does not install it, so the credential never lands in settings.json, a folder name or the output. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.`,
 		);
 	}
-	const installed = redactedExtension(
-		await untilAborted(
-			input.sdk.installExtension({
-				agentDir: input.agentDir.dir,
-				source,
-				progress: (line) => input.progress(redactSecrets(line)),
-			}),
-			input.signal,
-		),
-	);
 	const shownSource = redactSecrets(source);
+	let installed: InstalledExtension;
+	try {
+		// Nothing starts once the run is aborted.
+		input.signal?.throwIfAborted();
+		installed = redactedExtension(
+			await untilAborted(
+				input.sdk.installExtension({
+					agentDir: input.agentDir.dir,
+					source,
+					progress: (line) => input.progress(redactSecrets(line)),
+				}),
+				input.signal,
+			),
+		);
+	} catch (error) {
+		if (input.signal?.aborted) {
+			throw new SetupError(
+				await abortedInstall(
+					input.sdk,
+					input.agentDir.dir,
+					source,
+					shownSource,
+				),
+			);
+		}
+		throw error;
+	}
 	if (installed.entries.length === 0) {
 		throw new SetupError(
 			`Installed ${shownSource}, but the package declares no extension, so no seat can load it. Remove it with: review-panel extension remove ${installed.source}`,

@@ -189,8 +189,13 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   extension entry paths, one of which goes in the roster row's `extraExtensionPaths`.
   Installing gives no seat the extension: a seat loads only the paths in its own row.
   `git` runs with `GIT_TERMINAL_PROMPT=0`, so a source that needs a user name or password fails
-  with git's message instead of waiting at a prompt. The first Ctrl-C ends any setup command
-  (`auth providers`, `models`, `extension ...`) at once, with exit code 1.
+  with git's message instead of waiting at a prompt. That does not cover SSH: an `ssh` key
+  passphrase or an unknown host key can still prompt, as `pi install` would (the command does
+  not force `BatchMode`, which would override your own SSH setup). The first Ctrl-C ends any
+  setup command (`auth providers`, `models`, `extension ...`) at once, with exit code 1, and the
+  process exits so nothing finishes in the background. An install stopped that way says
+  whether its source was recorded in `settings.json`; a clone it had started may be left under
+  the agent folder, and installing the source again finishes it.
 - When the agent folder in use is Pi's own `~/.pi/agent`, `extension install` and `remove`
   change Pi's own packages, as `pi install` and `pi remove` do: Pi then loads the package in
   every session too. The command says so, and for another folder that `PI_CODING_AGENT_DIR`

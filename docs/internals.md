@@ -107,7 +107,9 @@ The package manager runs `git` and `npm` with inherited stdio, so their output r
 `extension install` prints the entry paths last, and only `extension list` has `--json`. When
 the agent folder is `~/.pi/agent`, install and remove change Pi's own `packages`, and the
 output says so. Setup commands race the run's abort signal, so the first Ctrl-C ends them at
-once; the per-group timer stays referenced while it waits (an extension that awaits a promise
+once, and after an abort the bin exits as soon as its output is written (Pi's package manager
+gives no handle on its git or npm, so this is what stops it from recording a source after the
+stop; the install's message reads `settings.json` to say whether it already had); the per-group timer stays referenced while it waits (an extension that awaits a promise
 that never settles holds no handle, and an unreferenced timer would let Node end the process
 with the top-level await unsettled). Install and remove set `GIT_TERMINAL_PROMPT=0`. `extension
 install` refuses a non-local source that carries a credential (`carriesCredential`: anything

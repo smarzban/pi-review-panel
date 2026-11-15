@@ -114,6 +114,8 @@ function interrupted(
 	stdout: string;
 	stderr: string;
 	ms: number;
+	/** When the bin itself exited; a child holding its stdio can close later. */
+	exitMs: number;
 }> {
 	const started = Date.now();
 	const child = spawn(
@@ -143,6 +145,10 @@ function interrupted(
 		}
 	});
 	const guard = setTimeout(() => child.kill("SIGKILL"), 45_000);
+	let exitMs = Number.NaN;
+	child.on("exit", () => {
+		exitMs = Date.now() - started;
+	});
 	return new Promise((resolve) => {
 		child.on("close", (code, signal) => {
 			clearTimeout(guard);
@@ -153,6 +159,7 @@ function interrupted(
 				stdout,
 				stderr: stderr.replaceAll("<sigint-handler-ready>\n", ""),
 				ms: Date.now() - started,
+				exitMs,
 			});
 		});
 	});
@@ -772,7 +779,8 @@ describe("an install stopped by Ctrl-C (N-3)", () => {
 			},
 		);
 		expect(result.code).toBe(1);
-		expect(result.ms).toBeLessThan(3_000);
+		// The bin exits at once; the slowed git it started holds the pipes longer.
+		expect(result.exitMs).toBeLessThan(3_000);
 		expect(result.stderr).toContain(`${FIXTURE_GIT_SOURCE} was not recorded`);
 		// Long after the slowed clone would have finished.
 		await new Promise((resolve) => setTimeout(resolve, 7_000));

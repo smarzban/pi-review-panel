@@ -99,6 +99,14 @@ const code = await run(
 );
 process.off("SIGINT", onInterrupt);
 process.exitCode = code;
+if (controller.signal.aborted) {
+	// After Ctrl-C nothing may finish quietly in the background, such as a git
+	// clone Pi's package manager started, which would then record its source:
+	// exit as soon as the output is written.
+	process.stdout.write("", () => {
+		process.stderr.write("", () => process.exit(code));
+	});
+}
 // The SDK can leave idle handles (keep-alive sockets, timers) open. Every
 // credential write was settled above; give anything else ample time, then
 // exit even if something still holds the loop.
