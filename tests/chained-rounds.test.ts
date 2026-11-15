@@ -251,6 +251,36 @@ function recordOf(reply: string): string {
 	return path.basename(found?.[1] ?? "");
 }
 
+/** The manual card, as `comment` would post it. */
+async function stopWith(extra: Record<string, unknown>) {
+	const bodies: string[] = [];
+	await commentAction(
+		{
+			repoDir: repo,
+			ownerApproved: true,
+			priorRunId: REVIEW,
+			dismissed: [],
+			lowAdvisory: [],
+			...extra,
+		},
+		{
+			deps: {
+				...deps(),
+				postComment: (input: PostCloseoutInput) => {
+					bodies.push(input.body);
+					return {
+						action: "created" as const,
+						commentId: 1,
+						pr: 12,
+						url: `https://github.com/${REPO_SLUG}/pull/12#issuecomment-1`,
+					};
+				},
+			},
+		},
+	);
+	return { body: bodies[0] ?? "" };
+}
+
 function posted(): string[] {
 	return comments.map((row) => row.body);
 }
@@ -470,6 +500,42 @@ describe("three chained verify rounds on one PR", () => {
 				{ deps: deps() },
 			),
 		).rejects.toThrow(`verify against the latest verify, "${v2.runId}"`);
+	});
+});
+
+describe("one number per round (S-4)", () => {
+	it("a round that did not post keeps its number: the next heading, its V-ids and the card all use the chain link", async () => {
+		const v1 = await verify(
+			{
+				priorRunId: REVIEW,
+				head: commits[2],
+				keptFindingIds: ["F-1", "F-2", "F-3", "F-5"],
+				lowAdvisory: ["F-4"],
+				prComment: false,
+			},
+			{
+				items: [
+					{ id: "F-1", disposition: "resolved" },
+					{ id: "F-2", disposition: "still present" },
+					{ id: "F-3", disposition: "resolved" },
+					{ id: "F-5", disposition: "resolved" },
+				],
+			},
+		);
+		expect(posted()).toEqual([]);
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3] },
+			{
+				items: [{ id: "F-2", disposition: "still present" }],
+				regressions: [NULL_CHECK],
+			},
+		);
+		expect(v2.body.split("\n")[0]).toBe("## Review panel · verify 2");
+		expect(v2.body).toContain("- **V2-R1** the new key builder");
+		const { body } = await stopWith({});
+		expect(body).toContain(
+			"- **F-1 [high]** cache key misses the tenant · resolved in verify 1",
+		);
 	});
 });
 
