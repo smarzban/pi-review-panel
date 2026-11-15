@@ -55,7 +55,7 @@ review-panel skill install         # links the one skill into each coding agent
 Claude Code (`~/.claude/skills`), Codex (`~/.codex/skills`), Grok (`~/.grok/skills`)
 and Pi (`~/.pi/agent/skills`), each honouring the agent's own folder variable. It never
 creates a folder for an agent you do not have, and never replaces a `review-panel` folder
-that is not its own link without `--force`. Details and options are in the
+that is not its own link without `--force`, which only works together with `--agent`. Details and options are in the
 [CLI guide](docs/cli.md#install).
 
 Create `~/.pi-review-panel/config.json` with the seats you want. Shape and location

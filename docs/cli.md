@@ -39,7 +39,9 @@ personal skills folder of every coding agent it finds:
   gone), and the old host skill copied by hand from 0.3.0's README (a `review-panel` folder
   holding only its `SKILL.md`). `skill uninstall` removes such a link too.
 - Any other `review-panel` entry (your own folder, or a link to somewhere else) is left alone
-  and named; `--force` replaces it.
+  and named; `--force` replaces it, and only together with `--agent`: `--force` alone is a
+  usage error, so it can never delete a folder in an agent you did not name. Every hint names
+  the agent, for example `review-panel skill install --agent claude --force`.
 - On Windows the skill is copied, with a version stamp, instead of linked. Run
   `skill install` again after an upgrade to refresh the copy.
 - `review-panel skill uninstall [--agent …] [--dry-run]` removes only this package's own

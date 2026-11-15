@@ -56,7 +56,7 @@ Install with `npm install -g pi-review-panel` (puts `review-panel` on PATH), the
 skills folder (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$CODEX_HOME` or `~/.codex`, `$GROK_HOME` or
 `~/.grok`, `$PI_CODING_AGENT_DIR` or `~/.pi/agent`, each `/skills`). An agent counts only when its
 home folder exists; `--agent` names agents and creates their skills folder; a `review-panel` entry
-that is not this package's link is replaced only with `--force`; Windows gets a copy with a version
+that is not this package's link is replaced only with `--force`, which requires `--agent`; Windows gets a copy with a version
 stamp; `skill uninstall` removes only this package's link or copy; an old `pi-review` skill gets a
 hint, never a delete. Pi's folder comes from the environment as launched, because `main.ts` pins
 `PI_CODING_AGENT_DIR` for the SDK before any command runs. The `pi` manifest lists only `skills`,

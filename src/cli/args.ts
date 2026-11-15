@@ -412,6 +412,11 @@ function parseSkill(argv: readonly string[]): Command {
 			throw new UsageError(`${command}: --agent needs at least one agent`);
 		}
 	}
+	if (flags.values.get("force") === true && agents === undefined) {
+		throw new UsageError(
+			`${command}: --force needs --agent, so it replaces only the agents you name`,
+		);
+	}
 	const dryRun = flags.values.get("dry-run") === true;
 	const optional = agents === undefined ? {} : { agents };
 	return sub === "install"
@@ -485,8 +490,9 @@ The skill (links skills/review-panel into each coding agent's skills folder):
   skill install [--agent claude,codex,grok,pi] [--dry-run] [--force]
                                Link it into every agent whose home folder exists (~/.claude, ~/.codex, ~/.grok,
                                ~/.pi/agent, or CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME, PI_CODING_AGENT_DIR);
-                               --agent also creates a missing agent's skills folder; --force replaces a
-                               review-panel entry that is not this package's link. Windows gets a stamped copy.
+                               --agent also creates a missing agent's skills folder; --force (only with
+                               --agent) replaces a review-panel entry that is not this package's link in the
+                               agents named. Windows gets a stamped copy.
   skill uninstall [--agent ...] [--dry-run]
                                Remove only this package's own link or copy
 

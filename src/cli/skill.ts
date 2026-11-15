@@ -13,7 +13,7 @@
  * An agent counts as present when its home folder exists; no folder is ever
  * created for an absent agent unless it is named with `--agent`. A
  * `review-panel` entry that is not this package's link (or, on Windows, this
- * package's stamped copy) is replaced only with `--force`, and uninstall
+ * package's stamped copy) is replaced only with `--force`, which needs `--agent`, and uninstall
  * removes only this package's own link or copy. Old `pi-review` skills are
  * named, never deleted.
  */
@@ -355,6 +355,12 @@ function checkSource(options: SkillOptions): void {
 
 export function installSkill(options: SkillOptions): SkillResult {
 	checkSource(options);
+	if (options.force === true && options.agents === undefined) {
+		// --force can delete a real folder: it applies only to agents named.
+		throw new Error(
+			"--force needs --agent, so it replaces only the agents you name",
+		);
+	}
 	const planned = plan(options);
 	const explicit = options.agents !== undefined;
 	const lines: string[] = [];
@@ -397,7 +403,7 @@ export function installSkill(options: SkillOptions): SkillResult {
 		if (replacing && !replaceable && options.force !== true) {
 			ok = false;
 			lines.push(
-				`${agent.label}: skipped: ${notOurs(target, state)}. Re-run with --force to replace it.`,
+				`${agent.label}: skipped: ${notOurs(target, state)}. Re-run with --agent ${agent.id} --force to replace it.`,
 			);
 			continue;
 		}
@@ -518,17 +524,17 @@ export function skillStatus(options: SkillOptions): string[] {
 				break;
 			case "broken-link":
 				rows.push(
-					`${label} broken link to ${state.to} at ${target}; run review-panel skill install --force`,
+					`${label} broken link to ${state.to} at ${target}; run review-panel skill install --agent ${agent.id} --force`,
 				);
 				break;
 			case "other-link":
 				rows.push(
-					`${label} ${target} links to ${state.to}, not this package; run review-panel skill install --force to replace it`,
+					`${label} ${target} links to ${state.to}, not this package; run review-panel skill install --agent ${agent.id} --force to replace it`,
 				);
 				break;
 			case "other":
 				rows.push(
-					`${label} ${target} is a folder that is not this package's; run review-panel skill install --force to replace it`,
+					`${label} ${target} is a folder that is not this package's; run review-panel skill install --agent ${agent.id} --force to replace it`,
 				);
 				break;
 		}

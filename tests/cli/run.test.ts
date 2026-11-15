@@ -3,8 +3,11 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
+	readlinkSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -932,6 +935,51 @@ describe("skill install and uninstall", () => {
 		expect(await h.run(["skill", "uninstall", "--force"])).toBe(EXIT_USAGE);
 		expect(await h.run(["skill", "list"])).toBe(EXIT_USAGE);
 		expect(await h.run(["skill", "install", "extra"])).toBe(EXIT_USAGE);
+	});
+
+	it("--force replaces a foreign entry only for the agent it names, and needs --agent (P-1, R-1)", async () => {
+		const dir = home();
+		const claudeTarget = path.join(dir, ".claude", "skills", "review-panel");
+		const codexTarget = path.join(dir, ".codex", "skills", "review-panel");
+		mkdirSync(claudeTarget, { recursive: true });
+		writeFileSync(path.join(claudeTarget, "SKILL.md"), "mine");
+		mkdirSync(path.dirname(codexTarget), { recursive: true });
+		const foreign = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-foreign-")),
+		);
+		symlinkSync(foreign, codexTarget);
+		const kept = () => {
+			expect(readlinkSync(codexTarget)).toBe(foreign);
+			expect(existsSync(foreign)).toBe(true);
+		};
+
+		const h = harness({ home: dir });
+		expect(await h.run(["skill", "install"])).toBe(EXIT_FAILED);
+		expect(h.out()).toContain(
+			`Claude Code: skipped: ${claudeTarget} is a folder that is not this package's link. Re-run with --agent claude --force to replace it.`,
+		);
+		expect(h.out()).toContain("Re-run with --agent codex --force");
+		expect(readFileSync(path.join(claudeTarget, "SKILL.md"), "utf8")).toBe(
+			"mine",
+		);
+		kept();
+
+		expect(await h.run(["skill", "install", "--force"])).toBe(EXIT_USAGE);
+		expect(h.err()).toContain(
+			"skill install: --force needs --agent, so it replaces only the agents you name",
+		);
+		expect(readFileSync(path.join(claudeTarget, "SKILL.md"), "utf8")).toBe(
+			"mine",
+		);
+		kept();
+
+		const forced = harness({ home: dir });
+		expect(
+			await forced.run(["skill", "install", "--agent", "claude", "--force"]),
+		).toBe(EXIT_OK);
+		expect(realpathSync(claudeTarget)).toBe(realpathSync(SKILL_SOURCE));
+		expect(forced.out()).not.toContain("Codex");
+		kept();
 	});
 
 	it("uninstall removes the link it made", async () => {

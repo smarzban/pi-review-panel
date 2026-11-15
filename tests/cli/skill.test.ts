@@ -245,10 +245,10 @@ describe("skill install", () => {
 		expect(refused.ok).toBe(false);
 		const text = refused.lines.join("\n");
 		expect(text).toContain(
-			`Claude Code: skipped: ${target(claudeSkills)} is a folder that is not this package's link. Re-run with --force to replace it.`,
+			`Claude Code: skipped: ${target(claudeSkills)} is a folder that is not this package's link. Re-run with --agent claude --force to replace it.`,
 		);
 		expect(text).toContain(
-			`Codex: skipped: ${target(codexSkills)} links to ${foreign}, not this package. Re-run with --force to replace it.`,
+			`Codex: skipped: ${target(codexSkills)} links to ${foreign}, not this package. Re-run with --agent codex --force to replace it.`,
 		);
 		expect(
 			readFileSync(path.join(target(claudeSkills), "SKILL.md"), "utf8"),
@@ -257,7 +257,12 @@ describe("skill install", () => {
 		// The foreign link's own folder is never touched.
 		expect(existsSync(foreign)).toBe(true);
 
-		const forced = installSkill(options(home, source, { force: true }));
+		expect(() => installSkill(options(home, source, { force: true }))).toThrow(
+			"--force needs --agent",
+		);
+		const forced = installSkill(
+			options(home, source, { force: true, agents: ["claude", "codex"] }),
+		);
 		expect(forced.ok).toBe(true);
 		expect(readlinkSync(target(claudeSkills))).toBe(source);
 		expect(readlinkSync(target(codexSkills))).toBe(source);
@@ -276,11 +281,13 @@ describe("skill install", () => {
 		const refused = installSkill(options(home, fakePackage()));
 		expect(refused.ok).toBe(false);
 		expect(refused.lines.join("\n")).toContain(
-			`Grok: skipped: ${target(skills)} is a broken link to ${gone}. Re-run with --force to replace it.`,
+			`Grok: skipped: ${target(skills)} is a broken link to ${gone}. Re-run with --agent grok --force to replace it.`,
 		);
-		expect(installSkill(options(home, fakePackage(), { force: true })).ok).toBe(
-			true,
-		);
+		expect(
+			installSkill(
+				options(home, fakePackage(), { force: true, agents: ["grok"] }),
+			).ok,
+		).toBe(true);
 	});
 
 	it("hints at an old pi-review skill and never deletes it", () => {
@@ -506,7 +513,7 @@ describe("skill status for diagnose", () => {
 		expect(lines).toEqual([
 			`- Claude Code: linked (${target(path.join(home, ".claude", "skills"))})`,
 			`- Codex: not installed; run review-panel skill install`,
-			`- Grok: broken link to ${path.join(home, "gone")} at ${target(grokSkills)}; run review-panel skill install --force`,
+			`- Grok: broken link to ${path.join(home, "gone")} at ${target(grokSkills)}; run review-panel skill install --agent grok --force`,
 			`- Grok: old pi-review skill at ${path.join(grokSkills, "pi-review")}; remove it yourself`,
 			`- Pi: stale copy 1.0.0 (this is 1.2.3) at ${target(path.join(home, ".pi", "agent", "skills"))}; run review-panel skill install`,
 		]);
