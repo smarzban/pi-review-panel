@@ -226,6 +226,21 @@ describe("review-panel skill", () => {
 		expect(raw).not.toContain("—");
 	});
 
+	it("says runs take minutes: a long timeout or the background, wait, and resume (R-4)", () => {
+		const body = flat(splitFrontmatter(readSkill()).body);
+		expect(body).toContain("Review, audit, verify and resume run for minutes");
+		expect(body).toContain(
+			"Run them with a timeout of at least 30 minutes, or in the background, and wait for the command to exit",
+		);
+		expect(body).toContain("Do not start a second run while one is going");
+		expect(body).toContain(
+			"If the command is killed or times out, finish the run with `review-panel resume`",
+		);
+		const wait = body.indexOf("run for minutes");
+		expect(wait).toBeGreaterThan(-1);
+		expect(wait).toBeLessThan(body.indexOf("review-panel review --base"));
+	});
+
 	it("keeps the stop rule, promotion and the committed-snapshot rule", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
 		expect(body).toContain("At most three model passes, then ask the owner");

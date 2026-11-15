@@ -29,6 +29,13 @@ login is the owner's to fix.
 
 Run every command from inside the reviewed repository, or pass `--repo <path>`.
 
+Review, audit, verify and resume run for minutes (often 5 to 15), because every seat is a model
+working through the change. Run them with a timeout of at least 30 minutes, or in the
+background, and wait for the command to exit before you read the report. Progress goes to
+stderr; the report comes at the end on stdout. Do not start a second run while one is going. If
+the command is killed or times out, finish the run with `review-panel resume` (step 7) instead
+of starting over: the seats that finished are kept.
+
 ## 2. Check setup
 
 ```bash
