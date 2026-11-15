@@ -481,6 +481,48 @@ describe("a provider registered by an extension", () => {
 	});
 });
 
+describe("skill install from the built bin", () => {
+	it("finds Pi by its own folder, even when the CLI uses its own agent folder", () => {
+		const home = tempHome();
+		// Pi is installed but has no login, so the CLI itself uses
+		// ~/.pi-review-panel/agent; the skill still belongs in ~/.pi/agent.
+		mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+		const { code, stdout } = cli(home, ["skill", "install", "--dry-run"]);
+		expect(code).toBe(0);
+		expect(stdout).toContain(
+			`Pi: would link ${path.join(home, ".pi", "agent", "skills", "review-panel")}`,
+		);
+		expect(stdout).toContain(
+			`Claude Code: not found (${path.join(home, ".claude")} does not exist)`,
+		);
+		expect(readdirSync(home)).toEqual([".pi"]);
+		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
+	});
+
+	it("finds no agent in an empty home, exits 1 and creates nothing", () => {
+		const home = tempHome();
+		const { code, stdout } = cli(home, ["skill", "install", "--dry-run"]);
+		expect(code).toBe(1);
+		expect(stdout).toContain("No coding agent found");
+		expect(readdirSync(home)).toEqual([]);
+	});
+
+	it("links the package's own skill folder, and uninstall removes the link", () => {
+		const home = tempHome();
+		mkdirSync(path.join(home, ".claude"));
+		expect(cli(home, ["skill", "install"]).code).toBe(0);
+		const link = path.join(home, ".claude", "skills", "review-panel");
+		expect(realpathSync(link)).toBe(path.join(REPO, "skills", "review-panel"));
+		const diagnose = cli(home, ["diagnose"]);
+		expect(diagnose.stdout).toContain(`- Claude Code: linked (${link})`);
+		expect(cli(home, ["skill", "uninstall"]).code).toBe(0);
+		expect(existsSync(link)).toBe(false);
+		expect(
+			existsSync(path.join(REPO, "skills", "review-panel", "SKILL.md")),
+		).toBe(true);
+	});
+});
+
 describe("the packed tarball", () => {
 	it("is the public pi-review-panel package with the review-panel bin", () => {
 		const manifest = JSON.parse(

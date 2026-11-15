@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
@@ -24,6 +25,8 @@ import {
 } from "../../src/cli/run.js";
 
 const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
+/** The repository's own skill, as an installed package holds it. */
+const SKILL_SOURCE = path.join(REPO, "skills", "review-panel");
 
 type Call = { input: Record<string, unknown>; context: ActionContext };
 
@@ -34,6 +37,7 @@ function harness(
 		result?: string;
 		throws?: Error;
 		cwd?: string;
+		home?: string;
 		/** Replaces the default fake for one action. */
 		action?: Partial<ActionFunctions>;
 		deps?: Partial<RunDeps>;
@@ -84,7 +88,7 @@ function harness(
 	const io: RunIo = {
 		cwd: options.cwd ?? REPO,
 		env: {},
-		home: "/nonexistent-home",
+		home: options.home ?? "/nonexistent-home",
 		stdout: (text) => {
 			stdout += text;
 		},
@@ -108,6 +112,7 @@ function harness(
 		sdkVersion: async () => "1.5.2",
 		actions,
 		authSdk: {} as AuthSdk,
+		skillSource: { dir: SKILL_SOURCE, version: "9.9.9", platform: "darwin" },
 		...options.deps,
 	};
 	return {
@@ -531,6 +536,20 @@ describe("output", () => {
 		expect(h.out()).toContain("diagnose report");
 	});
 
+	it("diagnose lists the skill's state in each coding agent", async () => {
+		const home = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-diag-")));
+		mkdirSync(path.join(home, ".codex"));
+		const h = harness({ home });
+		expect(await h.run(["diagnose"])).toBe(EXIT_OK);
+		expect(h.out()).toContain(
+			[
+				"Skill (review-panel skill install links it into each agent):",
+				`- Claude Code: not found (${path.join(home, ".claude")} does not exist)`,
+				"- Codex: not installed; run review-panel skill install",
+			].join("\n"),
+		);
+	});
+
 	it("--help lists every command", async () => {
 		const h = harness();
 		expect(await h.run(["--help"])).toBe(EXIT_OK);
@@ -546,6 +565,8 @@ describe("output", () => {
 			"auth login",
 			"auth logout",
 			"auth status",
+			"skill install",
+			"skill uninstall",
 		]) {
 			expect(h.out()).toContain(command);
 		}
@@ -851,5 +872,84 @@ describe("suggest", () => {
 		).toBe(EXIT_USAGE);
 		expect(h.err()).toContain('suggest does not accept argument "seats"');
 		expect(h.calls.suggest).toBeUndefined();
+	});
+});
+
+describe("skill install and uninstall", () => {
+	function home(): string {
+		return realpathSync(mkdtempSync(path.join(tmpdir(), "rp-skill-home-")));
+	}
+
+	it("installs into the agents found under the user's home, from the package's skill", async () => {
+		const dir = home();
+		mkdirSync(path.join(dir, ".grok"));
+		const h = harness({ home: dir });
+		expect(await h.run(["skill", "install"])).toBe(EXIT_OK);
+		const link = path.join(dir, ".grok", "skills", "review-panel");
+		expect(realpathSync(link)).toBe(realpathSync(SKILL_SOURCE));
+		expect(h.out()).toContain(`Grok: linked ${link}`);
+		expect(h.calls.diagnose).toBeUndefined();
+	});
+
+	it("takes --agent as a list, --dry-run and --force", async () => {
+		const dir = home();
+		const h = harness({ home: dir });
+		expect(
+			await h.run([
+				"skill",
+				"install",
+				"--agent",
+				"claude,codex",
+				"--agent",
+				"pi",
+				"--dry-run",
+				"--force",
+			]),
+		).toBe(EXIT_OK);
+		for (const folder of [
+			[".claude", "skills"],
+			[".codex", "skills"],
+			[".pi", "agent", "skills"],
+		]) {
+			expect(h.out()).toContain(
+				`would link ${path.join(dir, ...folder, "review-panel")}`,
+			);
+		}
+		expect(h.out()).not.toContain("Grok");
+		expect(existsSync(path.join(dir, ".claude"))).toBe(false);
+	});
+
+	it("exits 1 when it installs nothing, and 2 on a usage error", async () => {
+		const h = harness({ home: home() });
+		expect(await h.run(["skill", "install"])).toBe(EXIT_FAILED);
+		expect(h.out()).toContain("No coding agent found");
+		expect(await h.run(["skill", "install", "--agent", "vim"])).toBe(
+			EXIT_USAGE,
+		);
+		expect(h.err()).toContain(
+			'skill install: unknown agent "vim"; use claude, codex, grok or pi',
+		);
+		expect(await h.run(["skill", "uninstall", "--force"])).toBe(EXIT_USAGE);
+		expect(await h.run(["skill", "list"])).toBe(EXIT_USAGE);
+		expect(await h.run(["skill", "install", "extra"])).toBe(EXIT_USAGE);
+	});
+
+	it("uninstall removes the link it made", async () => {
+		const dir = home();
+		mkdirSync(path.join(dir, ".claude"));
+		const h = harness({ home: dir });
+		await h.run(["skill", "install"]);
+		expect(await h.run(["skill", "uninstall"])).toBe(EXIT_OK);
+		expect(
+			existsSync(path.join(dir, ".claude", "skills", "review-panel")),
+		).toBe(false);
+		expect(existsSync(path.join(SKILL_SOURCE, "SKILL.md"))).toBe(true);
+	});
+
+	it("skill with no subcommand, or --help, shows the help", async () => {
+		const h = harness();
+		expect(await h.run(["skill"])).toBe(EXIT_OK);
+		expect(h.out()).toContain("skill install");
+		expect(await h.run(["skill", "install", "--help"])).toBe(EXIT_OK);
 	});
 });

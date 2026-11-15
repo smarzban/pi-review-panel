@@ -37,6 +37,12 @@ import {
 	renderStatus,
 	status,
 } from "./auth.js";
+import {
+	installSkill,
+	type SkillOptions,
+	skillStatus,
+	uninstallSkill,
+} from "./skill.js";
 
 export const EXIT_OK = 0;
 export const EXIT_FAILED = 1;
@@ -67,7 +73,18 @@ export type RunDeps = {
 	actions: ActionFunctions;
 	authSdk: AuthSdk;
 	loadConfig?: typeof loadConfig;
+	/** This package's `skills/review-panel`, its version, and the platform. */
+	skillSource: { dir: string; version: string; platform: NodeJS.Platform };
 };
+
+function skillOptions(io: RunIo, deps: RunDeps): SkillOptions {
+	return {
+		home: io.home,
+		env: io.env,
+		platform: deps.skillSource.platform,
+		source: { dir: deps.skillSource.dir, version: deps.skillSource.version },
+	};
+}
 
 function message(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -155,6 +172,8 @@ async function runAction(
 		const header = [
 			`review-panel ${deps.cliVersion} (Pi SDK ${await deps.sdkVersion()})`,
 			`Agent folder: ${describeAgentDir(deps.agentDir)}`,
+			"Skill (review-panel skill install links it into each agent):",
+			...skillStatus(skillOptions(io, deps)),
 		].join("\n");
 		result = { content: [{ type: "text", text: header }, ...result.content] };
 	}
@@ -256,6 +275,21 @@ async function execute(
 				})}\n`,
 			);
 			return EXIT_OK;
+		case "skill-install":
+		case "skill-uninstall": {
+			const options: SkillOptions = {
+				...skillOptions(io, deps),
+				...(command.agents === undefined ? {} : { agents: command.agents }),
+				dryRun: command.dryRun,
+				...(command.kind === "skill-install" ? { force: command.force } : {}),
+			};
+			const result =
+				command.kind === "skill-install"
+					? installSkill(options)
+					: uninstallSkill(options);
+			io.stdout(`${result.lines.join("\n")}\n`);
+			return result.ok ? EXIT_OK : EXIT_FAILED;
+		}
 		case "auth-status": {
 			const repoDir = resolveRepo(io, command.repo);
 			const config = (deps.loadConfig ?? loadConfig)({

@@ -5,6 +5,8 @@
  * `--provider` or `--model` flags: seats come only from the owner config.
  */
 
+import { AGENT_IDS, type AgentId, isAgentId } from "./skill.js";
+
 export class UsageError extends Error {}
 
 /**
@@ -82,7 +84,14 @@ export type Command =
 	| { kind: "call"; json: boolean; repo?: string; payload: string }
 	| { kind: "auth-login"; provider: string; apiKey: boolean }
 	| { kind: "auth-logout"; provider: string }
-	| { kind: "auth-status"; repo?: string; json: boolean };
+	| { kind: "auth-status"; repo?: string; json: boolean }
+	| {
+			kind: "skill-install";
+			agents?: AgentId[];
+			dryRun: boolean;
+			force: boolean;
+	  }
+	| { kind: "skill-uninstall"; agents?: AgentId[]; dryRun: boolean };
 
 type FlagKind = "string" | "list" | "boolean";
 
@@ -357,6 +366,64 @@ function parseAuth(argv: readonly string[]): Command {
 	);
 }
 
+function parseSkill(argv: readonly string[]): Command {
+	const [sub, ...rest] = argv;
+	if (sub === undefined || sub === "--help" || sub === "-h" || sub === "help") {
+		return { kind: "help", topic: "skill" };
+	}
+	if (sub !== "install" && sub !== "uninstall") {
+		throw new UsageError(
+			`skill: unknown command ${shown(sub)}; use install or uninstall`,
+		);
+	}
+	const command = `skill ${sub}`;
+	const flags = readFlags(
+		rest,
+		{
+			agent: LIST("agent"),
+			"dry-run": BOOLEAN("dryRun"),
+			...(sub === "install" ? { force: BOOLEAN("force") } : {}),
+		},
+		command,
+	);
+	if (flags.help) {
+		return { kind: "help", topic: "skill" };
+	}
+	if (flags.positionals.length > 0) {
+		throw new UsageError(
+			`${command}: unexpected argument ${shown(flags.positionals[0] as string)}`,
+		);
+	}
+	const listed = flags.values.get("agent");
+	let agents: AgentId[] | undefined;
+	if (Array.isArray(listed)) {
+		agents = [];
+		for (const name of splitList(listed)) {
+			if (!isAgentId(name)) {
+				throw new UsageError(
+					`${command}: unknown agent ${shown(name)}; use ${AGENT_IDS.slice(0, -1).join(", ")} or ${AGENT_IDS.at(-1)}`,
+				);
+			}
+			if (!agents.includes(name)) {
+				agents.push(name);
+			}
+		}
+		if (agents.length === 0) {
+			throw new UsageError(`${command}: --agent needs at least one agent`);
+		}
+	}
+	const dryRun = flags.values.get("dry-run") === true;
+	const optional = agents === undefined ? {} : { agents };
+	return sub === "install"
+		? {
+				kind: "skill-install",
+				...optional,
+				dryRun,
+				force: flags.values.get("force") === true,
+			}
+		: { kind: "skill-uninstall", ...optional, dryRun };
+}
+
 export function parseCommand(argv: readonly string[]): Command {
 	const [first, ...rest] = argv;
 	if (
@@ -381,6 +448,9 @@ export function parseCommand(argv: readonly string[]): Command {
 	}
 	if (first === "auth") {
 		return parseAuth(rest);
+	}
+	if (first === "skill") {
+		return parseSkill(rest);
 	}
 	throw new UsageError(`unknown command ${shown(first)}`);
 }
@@ -410,6 +480,15 @@ Logins (stored in the agent folder in use; see diagnose):
                                Save an API key, read from stdin or a hidden prompt (never from the command line)
   auth logout <provider>       Remove the stored credential
   auth status                  Show login status for each provider in the owner config's roster
+
+The skill (links skills/review-panel into each coding agent's skills folder):
+  skill install [--agent claude,codex,grok,pi] [--dry-run] [--force]
+                               Link it into every agent whose home folder exists (~/.claude, ~/.codex, ~/.grok,
+                               ~/.pi/agent, or CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME, PI_CODING_AGENT_DIR);
+                               --agent also creates a missing agent's skills folder; --force replaces a
+                               review-panel entry that is not this package's link. Windows gets a stamped copy.
+  skill uninstall [--agent ...] [--dry-run]
+                               Remove only this package's own link or copy
 
 Options for actions, call and auth status:
   --repo <path>                The repository (default: the Git top-level of the current folder)
