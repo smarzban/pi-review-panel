@@ -15,6 +15,8 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -839,6 +841,74 @@ describe("an install stopped by Ctrl-C (N-3)", () => {
 			: [];
 		expect(packages).toEqual([]);
 	}, 60_000);
+});
+
+/** The bin, run without blocking this process (a test server must answer). */
+function cliAsync(
+	home: string,
+	args: string[],
+	options: { env?: Record<string, string> } = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+	const child = spawn(process.execPath, [BIN, ...args], {
+		cwd: REPO,
+		env: { PATH: process.env.PATH ?? "", HOME: home, ...options.env },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let stdout = "";
+	let stderr = "";
+	child.stdout.on("data", (chunk) => {
+		stdout += chunk;
+	});
+	child.stderr.on("data", (chunk) => {
+		stderr += chunk;
+	});
+	const guard = setTimeout(() => child.kill("SIGKILL"), 90_000);
+	return new Promise((resolve) => {
+		child.on("close", (code) => {
+			clearTimeout(guard);
+			resolve({ code, stdout, stderr });
+		});
+	});
+}
+
+describe("an npm: source that is a URL (N3-1)", () => {
+	it("is refused before npm runs: the server sees no request and settings.json is not written", async () => {
+		const TOKEN = "npm-TOKEN-9012";
+		const requests: string[] = [];
+		const server = createServer((request, response) => {
+			requests.push(`${request.method} ${request.url}`);
+			response.statusCode = 404;
+			response.end();
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const { port } = server.address() as AddressInfo;
+		try {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			const result = await cliAsync(
+				home,
+				["extension", "install", `npm:http://${TOKEN}@127.0.0.1:${port}/x.tgz`],
+				{
+					env: {
+						PI_CODING_AGENT_DIR: agent,
+						npm_config_update_notifier: "false",
+						npm_config_audit: "false",
+						npm_config_fund: "false",
+					},
+				},
+			);
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain(".npmrc");
+			expect(result.stdout + result.stderr).not.toContain(TOKEN);
+			expect(requests).toEqual([]);
+			expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+			expect(existsSync(path.join(agent, "npm"))).toBe(false);
+		} finally {
+			server.close();
+		}
+	}, 120_000);
 });
 
 describe("setup commands run from a hostile working folder", () => {

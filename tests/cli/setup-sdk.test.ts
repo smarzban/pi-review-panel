@@ -453,7 +453,7 @@ describe("auth providers is bounded (N-4)", () => {
 	}, 5_000);
 });
 
-describe("which sources install refuses, decided on Pi's own parse (N2-1, N2-2, N2-4)", () => {
+describe("which sources install refuses, decided on Pi's own parse (N2-1, N2-2, N2-4, N3-1, N3-3)", () => {
 	const S = "tok-SECRET";
 	// From the re-check's probe: every form that carries a credential, however
 	// it is spaced, cased or ported, and the forms Pi cannot read as remote.
@@ -492,13 +492,54 @@ describe("which sources install refuses, decided on Pi's own parse (N2-1, N2-2, 
 		`git:git+https://${S}@host.com/o/r`,
 		`git:https://host.com/o/r?token=${S}`,
 		"github:o/r",
+		// npm: registry packages only (N3-1): every URL, protocol or path spec,
+		// with or without a credential, from the re-check's npm probe.
+		`npm:https://${S}@example.com/x.tgz`,
+		"npm:https://u:p@example.com/x.tgz",
+		`npm:http://example.com/x.tgz?token=${S}`,
+		`npm:git+https://${S}@github.com/o/r.git`,
+		"npm:git+https://u:p@github.com/o/r.git",
+		`npm:git+ssh://${S}@github.com/o/r.git`,
+		"npm:git+https://github.com/o/r.git?tok",
+		"npm:github:o/r",
+		`npm:pkg@npm:other@https://${S}@x.com/a.tgz`,
+		"npm:alias@npm:@s/p@1.0.0",
+		`npm:@s/p@https://${S}@x.com/a.tgz`,
+		`npm:HTTPS://${S}@x.com/a.tgz`,
+		`npm:pkg@HTTPS://${S}@x.com/a.tgz`,
+		`npm:pkg@ HTTPS://${S}@x.com/a.tgz`,
+		`npm:pkg@http://x.com/a.tgz#${S}`,
+		`npm:${S}@x.com/a.tgz`,
+		`npm://${S}@x.com/a.tgz`,
+		`npm:git://${S}@github.com/o/r.git`,
+		`npm:pkg@git://${S}@github.com/o/r.git`,
+		"npm:pkg@git+file:///tmp/x",
+		"npm:./local@x",
+		"npm:pkg@https://x.com/a.tgz",
+		"npm:pkg@git+ssh://git@github.com/o/r.git",
+		"npm:pkg@github:o/r",
+		"npm:pkg@file:../x",
+		"npm:@tok:pass@x/y",
+		`npm: pkg@https://${S}@x.com/a.tgz`,
+		// SSH: only the user git (N3-3).
+		`ssh://${S}@example.com/o/r`,
+		`ssh://${S}@github.com/o/r`,
+		`git:ssh://${S}@example.com/o/r`,
+		"git:ssh://deploy@host.com/o/r",
+		`git+ssh://${S}@example.com/o/r`,
+		// A percent sign in the host, a query or an odd character in the ref.
+		`git:${S}%40example.com/o/r`,
+		`git:git@example.com:o/r@ref?${S}=1`,
+		`git:example.com/o/r@ref:${S}@x`,
 	];
 	const ALLOWED = [
 		"git:github.com/earendil-works/pi-claude-code",
 		"git:git@host.com:o/r",
+		"git:git@github.com:o/r.git",
 		"ssh://git@github.com/o/r",
-		// An SSH user name is an account, not a secret: SSH signs in with keys.
-		`git:ssh://deploy@host.com/o/r`,
+		"git:ssh://git@example.com/o/r",
+		"git:bitbucket.org/o/r",
+		"git:gitlab.com/g/s/r",
 		// A #fragment is a ref.
 		"git:github.com/o/r#v1.2.0",
 		// Branch refs with a slash (N2-2).
@@ -507,6 +548,15 @@ describe("which sources install refuses, decided on Pi's own parse (N2-1, N2-2, 
 		"https://github.com/o/r@feature/x",
 		"npm:@scope/name@1.2.3",
 		"npm:foo@1",
+		"npm:pkg",
+		"npm:pi-foo",
+		"npm:@scope/pkg@^1.2.0",
+		"npm:pkg@latest",
+		"npm:pkg@1.2.3",
+		"npm:@scope/pi-foo@latest",
+		"npm:pkg@>=1.0.0 <2",
+		"./ext@v2",
+		"~/x@y/z",
 		"/Users/me/ext@v2/src",
 		"/home/u/.pnpm/pi-foo@1.2.0/node_modules/pi-foo",
 	];

@@ -1096,3 +1096,65 @@ describe("local paths and recorded credentials in printed paths (N2-3)", () => {
 		expect(models.out()).not.toContain(SECRET);
 	});
 });
+
+describe("models problem lines use the recorded source's own redaction (F-2)", () => {
+	const raw = `git:user:${SECRET}@git.example.com/o/r`;
+	const clone = `/agent/git/user:${SECRET}@git.example.com/o/r`;
+	const entry = `${clone}/extensions/index.ts`;
+	const recorded = async () => [
+		{ source: raw, installedPath: clone, filtered: false, entries: [entry] },
+	];
+
+	it("an extension that fails to load", async () => {
+		const { sdk } = fakeSdk({
+			listExtensions: recorded,
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: {
+							registeredProviders: [],
+							models: [],
+							extensionFailures: [
+								{
+									extension: entry,
+									message: `Cannot find module 'x' imported from ${entry}`,
+								},
+							],
+						},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["models"])).toBe(EXIT_OK);
+		expect(h.out()).toContain("failed to load");
+		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+
+	it("an extension whose load throws", async () => {
+		const { sdk } = fakeSdk({
+			listExtensions: recorded,
+			models: async (input) => {
+				if (input.extensionPaths.length === 0) {
+					return BASE;
+				}
+				throw new Error(`load of ${entry} failed`);
+			},
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["models", "--json"])).toBe(EXIT_OK);
+		expect(h.out()).toContain("failed to load");
+		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+
+	it("an extension that times out, and a missing provider that lists it", async () => {
+		const { sdk } = fakeSdk({
+			listExtensions: recorded,
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: new Promise<ModelGroup>(() => {}),
+		});
+		const h = harness({ sdk, extensionTimeoutMs: 20 });
+		expect(await h.run(["models", "claude-code"])).toBe(EXIT_FAILED);
+		expect(h.err()).toContain("did not finish loading");
+		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+});
