@@ -137,7 +137,7 @@ describe("claimRound: verify N is posted at most once (its number is its chain l
 	const LIVE = { reason: "another process is posting verify 1" };
 	const STALE = {
 		reason:
-			"round-1.claim was left by a post of verify 1 that stopped; delete it from the review's run record to post it",
+			"round-1.claim was left by a post of verify 1 that stopped, so verify 1 is not on the PR; later rounds and the card still post",
 	};
 
 	it("a signed round-N.posted means it is on the PR already", async () => {

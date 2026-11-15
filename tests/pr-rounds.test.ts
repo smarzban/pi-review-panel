@@ -2922,7 +2922,7 @@ describe("fix round 3: round markers and claims through the verify action", () =
 			const reply = textOf(await verifyOnce(repo, gh, "v-1"));
 			expect(headingsOf(gh.calls)).toEqual([]);
 			expect(reply).toContain(
-				"PR comment: not posted (round-1.claim was left by a post of verify 1 that stopped; delete it from the review's run record to post it)",
+				"PR comment: not posted (round-1.claim was left by a post of verify 1 that stopped, so verify 1 is not on the PR; later rounds and the card still post)",
 			);
 			expect(
 				existsSync(path.join(reviewRecordDir(repo), "round-1.claim")),

@@ -796,7 +796,7 @@ describe("no forks: a verify claims the link it chains from (S-2)", () => {
 		);
 	});
 
-	it("comment is never blocked by a chain claim: it reads only signed records", async () => {
+	it("comment with nothing resolved runs no final check, so a chain claim does not stop it", async () => {
 		await verify(REVIEW, commits[2] as string, ["F-1"], STILL);
 		const v1 = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)[0]?.runId ?? "";
 		writeFileSync(

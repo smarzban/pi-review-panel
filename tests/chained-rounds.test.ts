@@ -24,6 +24,7 @@ import type { Config } from "../src/config/schema.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
 import { runVerify } from "../src/run/run-verify.js";
 import type { StampedFinding } from "../src/run/types.js";
+import { loadVerifyChain } from "../src/run/verify-chain.js";
 import type { SeatSpec } from "../src/seat/sdk-session.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
 import type { RoundGhRunner } from "../src/tool/round-post.js";
@@ -839,6 +840,88 @@ describe("the final check before the card (S-6)", () => {
 		]);
 		expect(card.body).toContain("**Final check:** verify 2");
 		expect(v1.runId).not.toBe("");
+	});
+
+	it("comment, when nothing was open, refuses a card the final check found something in, naming it and the latest verify; run again, it lists it as open", async () => {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		await verify(
+			{ priorRunId: v2.runId, head: commits[4] },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		answers.push({ items: [], regressions: [UNDONE] });
+		let refusal = "";
+		await stopWith({}).catch((error: unknown) => {
+			refusal = String(error);
+		});
+		const final = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY).at(-1);
+		expect(final?.final).toBe(true);
+		expect(refusal).toContain(
+			`comment refused: the final check, verify 4, reported V4-R1; verify a fix against the latest verify, "${final?.runId}", or run comment again to post the card with it open`,
+		);
+		const card = await stopWith({});
+		expect(specs).toHaveLength(4);
+		expect(card.body).toContain("### Open (not resolved)");
+		expect(card.body).toContain("V4-R1");
+	});
+
+	it("comment, when nothing was open, refuses after a lost final-check seat, and run again it checks again", async () => {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		await verify(
+			{ priorRunId: v2.runId, head: commits[4] },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		answers.push({ items: [], lost: true });
+		await expect(stopWith({})).rejects.toThrow(
+			"comment refused: the final check, verify 4, lost its seat, so nothing was checked; run comment again to check again",
+		);
+		answers.push({ items: [] });
+		const card = await stopWith({});
+		expect(specs).toHaveLength(5);
+		expect(card.body).toContain(
+			"**Final check:** verify 5, from the reviewed head to the final head",
+		);
+	});
+
+	it("comment with ids open and a lost final-check seat posts the card, saying nothing was checked", async () => {
+		await round1();
+		answers.push({ items: [], lost: true });
+		const card = await stopWith({});
+		expect(card.body).toContain(
+			"**Final check:** verify 2 lost its seat, so nothing was checked",
+		);
+		expect(card.body).toContain("terra/fix-verification (verify)");
+		expect(card.body).not.toContain("from the reviewed head to the final head");
+	});
+
+	it("comment names the final check as the latest verify when the post then fails", async () => {
+		await round1();
+		answers.push({ items: [] });
+		let refusal = "";
+		await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId: REVIEW,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{
+				deps: {
+					...deps(),
+					postComment: () => {
+						throw new Error("comment refused: no open PR has this head");
+					},
+				},
+			},
+		).catch((error: unknown) => {
+			refusal = String(error);
+		});
+		const final = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY).at(-1);
+		expect(refusal).toContain(
+			`comment refused: no open PR has this head; the final check is recorded: the latest verify is now "${final?.runId}"`,
+		);
 	});
 
 	it("comment refuses before any seat runs what it would refuse anyway, and says why while a verify runs from the tip", async () => {
