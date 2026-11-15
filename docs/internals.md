@@ -161,7 +161,7 @@ A verify record with neither field was written before chaining: its review is re
 and comment, with "run a new review". `loadChainPrior` refuses a prior that is the review once a
 verify exists, or a verify that is not the tip, naming the tip. `chainState` walks the links:
 dismissals and low/advisory first, then each kept id resolved (every voting seat that answered
-said resolved, `resolvedIdsOf`) or open, then the link's regressions, open, with ids
+said resolved, `resolvedIdsOf`, in a round that lost no seat) or open, then the link's regressions, open, with ids
 `V<link>-R<n>` numbered across its voting seats in order (`regressionsOf`; `runVerify` stamps the
 same ids into the record). A resolved, dismissed or low/advisory id is not judged again. The diff
 base is the prior link's head, checked to be a commit here. The undo guard passes every resolved

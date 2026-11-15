@@ -59,7 +59,10 @@ export type ChainLink = {
 	lowAdvisory: string[];
 	/** Per id, every disposition a voting seat gave it. */
 	dispositions: Map<string, Set<string>>;
-	/** Ids every voting seat that answered marked resolved. */
+	/**
+	 * Ids every voting seat that answered marked resolved; none when the
+	 * round lost a verify seat.
+	 */
 	resolved: Set<string>;
 	/** Per resolved id, the first voting seat's evidence. */
 	notes: Map<string, { file: string; explanation: string }>;
@@ -313,10 +316,16 @@ export type LinkParts = {
 	outcomes: unknown;
 };
 
-/** A link from its parts: dispositions, resolved ids, notes and regressions. */
+/**
+ * A link from its parts: dispositions, resolved ids, notes and regressions.
+ * A round that lost any verify seat resolves nothing: its ids stay open
+ * until a round with no lost seat confirms them.
+ */
 export function makeLink(parts: LinkParts): ChainLink {
 	const dispositions = dispositionsOf(parts.outcomes);
-	const resolved = resolvedIdsOf(dispositions);
+	const lost = lostSeatsOf(parts.outcomes);
+	const resolved =
+		lost.length > 0 ? new Set<string>() : resolvedIdsOf(dispositions);
 	return {
 		runId: parts.runId,
 		link: parts.link,
@@ -330,7 +339,7 @@ export function makeLink(parts: LinkParts): ChainLink {
 		notes: notesOf(parts.outcomes, resolved),
 		regressions: regressionsOf(parts.outcomes, parts.link),
 		seats: votedSeatsOf(parts.outcomes),
-		lost: lostSeatsOf(parts.outcomes),
+		lost,
 	};
 }
 

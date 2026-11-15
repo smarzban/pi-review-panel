@@ -423,7 +423,9 @@ it, against the diff from that verify's head:
    `keptFindingIds` to check all of it, or pass part of it. The verify comment's
    `Open after this round:` line and the card's open list name the same ids.
 3. An id is resolved by the round in which every voting seat that answered for it said
-   resolved. It is not checked again: naming it in `keptFindingIds`, `dismissed` or
+   resolved, and no verify seat was lost. A round that lost a seat resolves nothing: its ids
+   stay open, can be checked again, and its comment's `Open after this round:` line says so.
+   A resolved id is not checked again: naming it in `keptFindingIds`, `dismissed` or
    `lowAdvisory` is refused, and so is an id an earlier round dismissed or left as low/advisory.
 4. Regressions get ids `V<link>-R<n>`: the link is the verify's place in the chain (1 for the
    first verify), and n counts the regressions its voting seats reported, in seat order. A later

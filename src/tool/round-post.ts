@@ -811,7 +811,7 @@ export function renderVerifyRound(
 			state.open.length === 0
 				? "none"
 				: state.open.map((id) => githubSafe(id, 40)).join(", ")
-		}`,
+		}${failed.length === 0 ? "" : " · a verify seat was lost, so this round resolved nothing"}`,
 	];
 	const rows: string[][] = [];
 	const section = (title: string, items: string[][]) => {
