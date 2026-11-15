@@ -145,7 +145,7 @@ async function verify(
 	prior: string,
 	head: string,
 	kept: string[],
-	answers: Array<{ items: Item[]; regressions?: Regression[] }>,
+	answers: Array<{ items: Item[]; regressions?: Regression[]; lost?: boolean }>,
 	extra: {
 		dismissed?: Array<{ id: string; reason: string }>;
 		lowAdvisory?: string[];
@@ -183,6 +183,15 @@ async function verify(
 				specs.push(spec as SeatSpec);
 				const answer = answers[call] ?? answers[0];
 				call += 1;
+				if (answer?.lost === true) {
+					return {
+						outcome: {
+							kind: "failure",
+							class: "provider-error",
+							reason: "provider down",
+						},
+					} as never;
+				}
 				return {
 					outcome: {
 						kind: "verification",
@@ -356,6 +365,54 @@ describe("a three-round chain", () => {
 			loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY),
 		);
 		expect(state.open).toEqual(["V1-R1", "V1-R2", "V1-R3"]);
+	});
+});
+
+describe("a round that lost a verify seat", () => {
+	it("resolves nothing: its ids stay open until a round with no lost seat confirms them (S-5)", async () => {
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1", "F-2"],
+			[
+				{
+					items: [
+						{ id: "F-1", disposition: "resolved" },
+						{ id: "F-2", disposition: "resolved" },
+					],
+				},
+				{ items: [], lost: true },
+			],
+			{ seats: ["terra", "glm"] },
+		);
+		let state = chainState(
+			FINDINGS,
+			loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY),
+		);
+		expect(state.open).toEqual(["F-1", "F-2"]);
+		// They can be checked again, and a whole round confirms them.
+		await verify(
+			runIdOf(v1),
+			commits[3] as string,
+			["F-1", "F-2"],
+			[
+				{
+					items: [
+						{ id: "F-1", disposition: "resolved" },
+						{ id: "F-2", disposition: "resolved" },
+					],
+				},
+			],
+		);
+		state = chainState(
+			FINDINGS,
+			loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY),
+		);
+		expect(state.open).toEqual([]);
+		expect(state.items.get("F-1")?.state).toMatchObject({
+			status: "resolved",
+			link: 2,
+		});
 	});
 });
 

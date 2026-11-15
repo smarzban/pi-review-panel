@@ -80,7 +80,7 @@ type Regression = {
 	evidence: string;
 	undoes?: string;
 };
-type Answer = { items: Item[]; regressions?: Regression[] };
+type Answer = { items: Item[]; regressions?: Regression[]; lost?: boolean };
 
 let root: string;
 let repo: string;
@@ -204,6 +204,15 @@ function deps(): ActionDependencies {
 				runAdvisorySeat: async (spec) => {
 					specs.push(spec as SeatSpec);
 					const answer = answers.shift() ?? { items: [] };
+					if (answer.lost === true) {
+						return {
+							outcome: {
+								kind: "failure",
+								class: "provider-error",
+								reason: "provider down",
+							},
+						} as never;
+					}
 					return {
 						outcome: {
 							kind: "verification",
@@ -516,6 +525,46 @@ describe("--close-out", () => {
 		expect(() =>
 			parseVerifyArguments({ priorRunId: "v", head: "H", closeOut: "yes" }),
 		).toThrow("closeOut must be true or false");
+	});
+});
+
+describe("a verify that lost a seat", () => {
+	it("says on its Open line that it resolved nothing (S-5)", async () => {
+		answers.push(
+			{ items: [{ id: "F-1", disposition: "resolved" }] },
+			{ items: [], lost: true },
+		);
+		const reply = textOf(
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW,
+					head: commits[2] as string,
+					keptFindingIds: ["F-1"],
+					dismissed: ["F-2", "F-3", "F-5"].map((id) => ({
+						id,
+						reason: "not in this test",
+					})),
+				},
+				{
+					deps: {
+						...deps(),
+						loadConfig: () => ({
+							...config,
+							roster: [
+								...config.roster,
+								{ id: "glm", provider: "ollama", model: "glm-5.2" },
+							],
+							defaults: { seats: ["terra"], verifySeats: ["terra", "glm"] },
+						}),
+					},
+				},
+			),
+		);
+		expect(reply).toContain("PR comment: posted to #12");
+		expect(posted().at(-1)).toContain(
+			"**Open after this round:** F-1 · a verify seat was lost, so this round resolved nothing",
+		);
 	});
 });
 
