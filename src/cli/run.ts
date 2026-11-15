@@ -129,6 +129,42 @@ async function dismissedText(
 	}
 }
 
+/** What diagnose prints before the readiness report: this install's own state. */
+async function diagnoseHeader(io: RunIo, deps: RunDeps): Promise<string> {
+	return [
+		`review-panel ${deps.cliVersion} (Pi SDK ${await deps.sdkVersion()})`,
+		`Agent folder: ${describeAgentDir(deps.agentDir)}`,
+		"Skill (review-panel skill install links it into each agent):",
+		...skillStatus(skillOptions(io, deps)),
+	].join("\n");
+}
+
+/**
+ * Finds the repository. When diagnose cannot (outside a Git repository), it
+ * still prints the install's own state first, then fails as before.
+ */
+async function repositoryFor(
+	action: string,
+	find: () => string,
+	io: RunIo,
+	deps: RunDeps,
+	json: boolean,
+): Promise<string> {
+	try {
+		return find();
+	} catch (error) {
+		if (action === "diagnose") {
+			io.stdout(
+				render(
+					{ content: [{ type: "text", text: await diagnoseHeader(io, deps) }] },
+					json,
+				),
+			);
+		}
+		throw error;
+	}
+}
+
 /** Validates one argument record and runs its action. */
 async function runAction(
 	action: ActionName,
@@ -169,12 +205,7 @@ async function runAction(
 		throw new Error("interrupted before the action finished");
 	}
 	if (action === "diagnose") {
-		const header = [
-			`review-panel ${deps.cliVersion} (Pi SDK ${await deps.sdkVersion()})`,
-			`Agent folder: ${describeAgentDir(deps.agentDir)}`,
-			"Skill (review-panel skill install links it into each agent):",
-			...skillStatus(skillOptions(io, deps)),
-		].join("\n");
+		const header = await diagnoseHeader(io, deps);
 		result = { content: [{ type: "text", text: header }, ...result.content] };
 	}
 	io.stdout(render(result, json));
@@ -216,7 +247,13 @@ async function execute(
 			if (command.dismissed !== undefined) {
 				args.dismissed = await dismissedText(command.dismissed, io);
 			}
-			const repoDir = resolveRepo(io, command.repo);
+			const repoDir = await repositoryFor(
+				command.action,
+				() => resolveRepo(io, command.repo),
+				io,
+				deps,
+				command.json,
+			);
 			return runAction(command.action, args, repoDir, io, deps, command.json);
 		}
 		case "call": {
@@ -239,10 +276,16 @@ async function execute(
 					'call: give the repository either as --repo or as "repository", not both',
 				);
 			}
-			const repoDir =
-				command.repo === undefined
-					? resolveReviewRepository(args.repository, io.cwd)
-					: resolveRepo(io, command.repo);
+			const repoDir = await repositoryFor(
+				action,
+				() =>
+					command.repo === undefined
+						? resolveReviewRepository(args.repository, io.cwd)
+						: resolveRepo(io, command.repo),
+				io,
+				deps,
+				command.json,
+			);
 			return runAction(
 				action as ActionName,
 				args,

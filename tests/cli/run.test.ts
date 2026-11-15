@@ -539,6 +539,21 @@ describe("output", () => {
 		expect(h.out()).toContain("diagnose report");
 	});
 
+	it("diagnose outside a Git repository still prints the version, agent folder and skill rows, then fails (R-3)", async () => {
+		const home = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-diag-")));
+		const loose = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-loose-")));
+		mkdirSync(path.join(home, ".claude"));
+		const h = harness({ home, cwd: loose });
+		expect(await h.run(["diagnose"])).toBe(EXIT_FAILED);
+		expect(h.out()).toContain("review-panel 9.9.9 (Pi SDK 1.5.2)");
+		expect(h.out()).toContain("Agent folder: /agent");
+		expect(h.out()).toContain(
+			"- Claude Code: not installed; run review-panel skill install",
+		);
+		expect(h.err()).toMatch(/not a Git repository/i);
+		expect(h.calls.diagnose).toBeUndefined();
+	});
+
 	it("diagnose lists the skill's state in each coding agent", async () => {
 		const home = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-diag-")));
 		mkdirSync(path.join(home, ".codex"));
