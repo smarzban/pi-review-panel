@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { diagnoseReadiness } from "../src/config/readiness.js";
+import { SEAT_PROFILES } from "../src/seat/channel-profile.js";
 import { createSdkSeatSession } from "../src/seat/sdk-session.js";
 import { createConfinementGuard } from "../src/seat/seat-extension.js";
 
@@ -91,11 +92,11 @@ function modelRows(provider: string) {
 	return [
 		{
 			prerequisite: `model ${provider}/${MODEL}`,
-			remediation: `Configure the exact Pi model "${provider}/${MODEL}".`,
+			remediation: `Configure the exact Pi model "${provider}/${MODEL}". Check both ids for a typo; a provider that an extension registers needs extraExtensionPaths on its roster row.`,
 		},
 		{
 			prerequisite: `authentication ${provider}`,
-			remediation: `Authenticate the Pi provider "${provider}" for the configured model.`,
+			remediation: `Authenticate the Pi provider "${provider}" for the configured model. For a provider with a login, run: review-panel auth login ${provider}`,
 		},
 	];
 }
@@ -149,6 +150,23 @@ describe("readiness for a provider registered by a seat extension", () => {
 			ready: false,
 			rows: [modelRows(UNAUTHED_PROVIDER)[1]],
 		});
+	});
+
+	it("keeps the reason when the provider's own check throws", async () => {
+		const provider = "review-panel-fixture-brokencheck";
+		const report = await readiness([
+			{
+				id: "broken-check",
+				provider,
+				extraExtensionPaths: [PROVIDER_EXTENSION],
+			},
+		]);
+
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.prerequisite).toBe(`authentication ${provider}`);
+		expect(report.rows[0]?.remediation).toMatch(
+			/ The check failed: .*fixture login CLI is missing$/,
+		);
 	});
 
 	it("names an extension that fails to load", async () => {
@@ -469,4 +487,38 @@ describe("seat session for a provider registered by a seat extension", () => {
 			}),
 		).rejects.toThrow(BROKEN_EXTENSION);
 	});
+
+	it.each(["findings", "verification", "grouping"] as const)(
+		"keeps files of the reviewed repository and the agent folder out of the %s seat's system prompt",
+		async (kind) => {
+			const sdk = await realSdk();
+			mkdirSync(path.join(root, ".pi"), { recursive: true });
+			writeFileSync(
+				path.join(root, ".pi", "APPEND_SYSTEM.md"),
+				"PLANTED-APPEND",
+			);
+			writeFileSync(path.join(agentDir, "APPEND_SYSTEM.md"), "PLANTED-AGENT");
+			// The SDK reads a system prompt that names an existing file as that
+			// file. The shipped prompts are too long to be a file name, so a
+			// stand-in that is one goes through the same path.
+			const standIn = path.join(root, "stand-in-prompt");
+			writeFileSync(standIn, "PLANTED-SYSTEM");
+
+			const result = await createSdkSeatSession({
+				spec: {
+					...seatSpec(PROVIDER, [PROVIDER_EXTENSION]),
+					profile: { ...SEAT_PROFILES[kind], systemPrompt: standIn },
+				} as never,
+				tools: [{ name: SEAT_PROFILES[kind].submitTool }],
+				confinementGuard: createConfinementGuard({ worktree: root }),
+				sdk: sdk as never,
+			});
+			const prompt = (result.session as unknown as { systemPrompt: string })
+				.systemPrompt;
+			result.session.dispose();
+
+			expect(prompt).toContain(standIn);
+			expect(prompt).not.toContain("PLANTED");
+		},
+	);
 });

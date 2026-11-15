@@ -4,8 +4,9 @@ import path from "node:path";
 import { COMPLETE_MARKER } from "./record.js";
 
 /**
- * Shared prior-record discovery: the durable run records a later review may
- * consume for persistence flagging. Completed runs carry the COMPLETE marker.
+ * Shared prior-record discovery: the completed run records under a
+ * repository, newest first. Completed runs carry the COMPLETE marker. A
+ * caller authenticates a record before it trusts anything in it.
  *
  * Filesystem-honest by construction: only real completed directories are
  * discovered, and nothing here follows symlinks. lstat does not follow

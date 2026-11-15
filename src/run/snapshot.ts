@@ -13,7 +13,7 @@ import {
 	type Stats,
 	writeSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import path from "node:path";
 
 import { isProcessAlive } from "./liveness.js";
@@ -82,7 +82,17 @@ export function pinSnapshot(
 		// The owner is on disk before the worktree is registered, so a sweep
 		// never sees a registered snapshot of this version without an owner.
 		writeOwnerFile(snapshotOwnerPath(worktreePath), owner);
-		git(repoDir, ["worktree", "add", "--detach", worktreePath, commit]);
+		// No hooks: `worktree add` checks the commit out, and a relative
+		// core.hooksPath would run the reviewed commit's own post-checkout.
+		git(repoDir, [
+			"-c",
+			`core.hooksPath=${devNull}`,
+			"worktree",
+			"add",
+			"--detach",
+			worktreePath,
+			commit,
+		]);
 	} catch (error) {
 		rmSync(holder, { recursive: true, force: true });
 		throw error;

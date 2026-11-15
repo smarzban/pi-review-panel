@@ -151,6 +151,30 @@ function legacySnapshot(repo: string): string {
 }
 
 describe("pinSnapshot", () => {
+	it("pinning runs no hook from the repository: a post-checkout hook stays unrun", () => {
+		const repo = createHostRepo();
+		const marker = path.join(repo, "hook-ran");
+		const hooks = path.join(repo, ".githooks");
+		mkdirSync(hooks);
+		writeFileSync(
+			path.join(hooks, "post-checkout"),
+			`#!/bin/sh\ntouch "${marker}"\n`,
+			{ mode: 0o755 },
+		);
+		git(repo, ["config", "core.hooksPath", ".githooks"]);
+		git(repo, ["add", "."]);
+		git(repo, ["commit", "-m", "hook"]);
+		rmSync(marker, { force: true });
+
+		const snapshot = pinSnapshot(repo);
+		try {
+			expect(existsSync(marker)).toBe(false);
+		} finally {
+			snapshot.release();
+			removeFixture(repo);
+		}
+	});
+
 	it("pins an explicit commit oid even when HEAD has moved on", () => {
 		const repo = createHostRepo();
 		const frozen = git(repo, ["rev-parse", "HEAD"]).trim();

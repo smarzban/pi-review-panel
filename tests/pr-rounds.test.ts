@@ -123,6 +123,11 @@ type GhScript = {
 	delayMs?: number;
 };
 
+/** PR 12, open, at this head: what `comment --pr 12` checks before it posts. */
+function openPrAt(head: string): Record<number, unknown> {
+	return { 12: { number: 12, state: "open", head: { sha: head } } };
+}
+
 function fakeGh(script: GhScript = {}): { calls: GhCall[]; runGh: GhRunner } {
 	const calls: GhCall[] = [];
 	let nextId = 100;
@@ -4185,7 +4190,10 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				],
 				posted: false,
 			});
-			const gh = fakeGh({ comments: [] });
+			const gh = fakeGh({
+				comments: [],
+				prs: openPrAt(git(repo, ["rev-parse", "HEAD"])),
+			});
 			const result = await commentAction(
 				{
 					repoDir: repo,
@@ -4322,7 +4330,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					headOid: VERIFY_HEAD,
 					posted: false,
 				});
-				const gh = fakeGh({ comments: [] });
+				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				const { body } = await manual(repo, gh, { dismissed: ALL_DISMISSED });
 				const lines = body.split("\n");
 				expect(lines[2]).toBe(
@@ -4347,7 +4355,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					posted: false,
 					signed: false,
 				});
-				const gh = fakeGh({ comments: [] });
+				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				await expect(
 					manual(repo, gh, { dismissed: ALL_DISMISSED }),
 				).rejects.toThrow(/^comment refused: /);
@@ -4374,7 +4382,10 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					votes: [{ seat: OPUS, items: [resolved("F-1")] }],
 				});
 				writeSignedMarker(reviewDir, "round-2.posted", LATE, { pr: 12 });
-				const gh = fakeGh({ comments: [] });
+				const gh = fakeGh({
+					comments: [],
+					prs: openPrAt(git(repo, ["rev-parse", "HEAD"])),
+				});
 				const { body } = await manual(repo, gh, { verifyRunId: NAMED });
 				expect(body).toContain("**2 resolved** in 2 verify rounds");
 				expect(body).toContain("**Verified by:** fix-verification (glm)\n");
@@ -4403,6 +4414,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				// Not decoy 2: it is this author's manual card, which comment
 				// would update in place.
 				const gh = fakeGh({
+					prs: openPrAt(VERIFY_HEAD),
 					comments: [decoys[0], decoys[2], reviewComment, verifyOneComment],
 				});
 				const { text, body } = await manual(repo, gh);
@@ -4438,7 +4450,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					headOid: VERIFY_HEAD,
 					posted: false,
 				});
-				const gh = fakeGh({ comments: [] });
+				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				const { body } = await manual(repo, gh);
 				expect(body).toContain("**2 resolved** in 1 verify round");
 				expect(body).toContain("- **F-1 [high]** auth bypass · resolved\n");

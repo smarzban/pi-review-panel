@@ -162,7 +162,11 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   that cannot be made ends the report with one line saying why, and the exit code does not
   change. See [Posting rounds to the pull request](../docs/configuration.md#posting-rounds-to-the-pull-request).
 - `comment` posts or updates the manual close-out card on the pull request. It is refused
-  without `--owner-approved`: pass that flag only after the owner said to post. The card shows the
+  without `--owner-approved`: pass that flag only after the owner said to post. It posts only to an
+  open pull request whose head is the commit the card is about (the verify's, or else the review's):
+  the one `--pr` names, or with no `--pr` the one open PR at that head. Anything else is refused with
+  the reason. After a commit pushed since the last verify, run `verify` at the new head and pass
+  that verify to `comment`. The card shows the
   head as the short id of the commit the verify checked; `--head` is still accepted and no longer
   shown. See [The close-out card](../docs/configuration.md#the-close-out-card).
 - `--dismissed` (comment, verify) is a JSON list of `{"id": "...", "reason": "..."}` objects, given inline,

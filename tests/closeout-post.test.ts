@@ -11,9 +11,20 @@ const BODY = [
 	"`main` (`a1b2c3d`) → `HEAD` (`e4f5a6b`)",
 ].join("\n");
 
+const HEAD = "e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3";
+
+/** The PR row GitHub gives for an open pull request at HEAD. */
+function openPr(number: number): string {
+	return JSON.stringify({ number, state: "open", head: { sha: HEAD } });
+}
+
 type GhCall = { args: readonly string[]; input?: string };
 
-function posterWith(script: (call: GhCall) => string): {
+function posterWith(
+	script: (call: GhCall) => string,
+	/** Set to let the script answer `pulls/<n>` itself. */
+	prRows?: "scripted",
+): {
 	calls: GhCall[];
 	run: typeof postCloseoutComment;
 } {
@@ -26,6 +37,12 @@ function posterWith(script: (call: GhCall) => string): {
 				runGh: (args, options) => {
 					const call = { args, input: options?.input };
 					calls.push(call);
+					const named = /^repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(
+						args[1] ?? "",
+					);
+					if (named !== null && prRows === undefined) {
+						return openPr(Number(named[1]));
+					}
 					return script(call);
 				},
 			}),
@@ -41,8 +58,8 @@ function is(call: GhCall, ...tokens: string[]): boolean {
 describe("postCloseoutComment", () => {
 	it("creates a comment when none matches the author and heading", () => {
 		const { calls, run } = posterWith((call) => {
-			if (is(call, "pr", "view")) {
-				return "29";
+			if (is(call, `commits/${HEAD}/pulls`)) {
+				return `[${openPr(29)}]`;
 			}
 			if (is(call, "repo", "view")) {
 				return "smarzban/demo";
@@ -70,7 +87,7 @@ describe("postCloseoutComment", () => {
 			throw new Error(`unexpected gh ${call.args.join(" ")}`);
 		});
 
-		expect(run({ repository: "/repo", body: BODY })).toEqual({
+		expect(run({ repository: "/repo", headOid: HEAD, body: BODY })).toEqual({
 			action: "created",
 			commentId: 42,
 			pr: 29,
@@ -123,7 +140,9 @@ describe("postCloseoutComment", () => {
 			throw new Error(`unexpected gh ${call.args.join(" ")}`);
 		});
 
-		expect(run({ repository: "/repo", pr: "7", body: BODY })).toEqual({
+		expect(
+			run({ repository: "/repo", headOid: HEAD, pr: "7", body: BODY }),
+		).toEqual({
 			action: "updated",
 			commentId: 9,
 			pr: 7,
@@ -140,6 +159,7 @@ describe("postCloseoutComment", () => {
 		expect(() =>
 			postCloseoutComment({
 				repository: "/repo",
+				headOid: HEAD,
 				body: "PR is ready for merge.",
 				runGh: () => {
 					throw new Error("gh must not run");
@@ -172,9 +192,9 @@ describe("postCloseoutComment reads every page of comments", () => {
 			}
 			throw new Error(`unexpected gh ${call.args.join(" ")}`);
 		});
-		expect(run({ repository: "/repo", body: BODY, pr: 29 }).action).toBe(
-			"updated",
-		);
+		expect(
+			run({ repository: "/repo", headOid: HEAD, body: BODY, pr: 29 }).action,
+		).toBe("updated");
 		expect(calls.some((call) => is(call, "--method", "POST"))).toBe(false);
 	});
 
@@ -200,6 +220,7 @@ describe("postCloseoutComment reads every page of comments", () => {
 		const seen: unknown[] = [];
 		const result = run({
 			repository: "/repo",
+			headOid: HEAD,
 			pr: 7,
 			body: BODY,
 			render: (listing) => {
@@ -218,10 +239,95 @@ describe("postCloseoutComment reads every page of comments", () => {
 		expect(() =>
 			run({
 				repository: "/repo",
+				headOid: HEAD,
 				pr: 7,
 				body: BODY,
 				render: () => "## Something else",
 			}),
 		).toThrow(/body must start with ## Review panel/);
 	});
+
+	const base = (call: GhCall): string | undefined => {
+		if (is(call, "repo", "view")) return "smarzban/demo";
+		if (is(call, "user")) return "saeed";
+		return undefined;
+	};
+
+	it.each([
+		[
+			"a closed pull request",
+			{ number: 7, state: "closed", head: { sha: HEAD } },
+			"PR #7 is not open",
+		],
+		[
+			"a pull request at another head",
+			{ number: 7, state: "open", head: { sha: "0".repeat(40) } },
+			"PR #7's head is not the head this card is about; run verify at the PR's head, then comment with that verify",
+		],
+	] as const)(
+		"refuses %s named with pr, before any comment call",
+		(_name, row, message) => {
+			const { calls, run } = posterWith((call) => {
+				const fixed = base(call);
+				if (fixed !== undefined) return fixed;
+				if (is(call, "pulls/7")) return JSON.stringify(row);
+				throw new Error(`unexpected gh ${call.args.join(" ")}`);
+			}, "scripted");
+
+			expect(() =>
+				run({ repository: "/repo", headOid: HEAD, body: BODY, pr: 7 }),
+			).toThrow(`comment refused: ${message}`);
+			expect(calls.some((call) => is(call, "issues/"))).toBe(false);
+		},
+	);
+
+	it("refuses a number that is not a pull request", () => {
+		const { run } = posterWith((call) => {
+			const fixed = base(call);
+			if (fixed !== undefined) return fixed;
+			if (is(call, "pulls/7")) throw new Error("gh: Not Found (HTTP 404)");
+			throw new Error(`unexpected gh ${call.args.join(" ")}`);
+		}, "scripted");
+
+		expect(() =>
+			run({ repository: "/repo", headOid: HEAD, body: BODY, pr: 7 }),
+		).toThrow("comment refused: #7 is not a pull request here");
+	});
+
+	it.each([
+		[
+			"nothing",
+			[],
+			"no open PR has this head; pass --pr to name one, or if the PR has moved on, run verify at its head first",
+		],
+		[
+			"an open pull request at another head, and none at this one,",
+			[{ number: 5, state: "open", head: { sha: "f".repeat(40) } }],
+			"no open PR has this head; pass --pr to name one, or if the PR has moved on, run verify at its head first",
+		],
+		[
+			"two open pull requests at this head",
+			[
+				{ number: 3, state: "open", head: { sha: HEAD } },
+				{ number: 9, state: "open", head: { sha: HEAD } },
+				{ number: 4, state: "closed", head: { sha: HEAD } },
+			],
+			"2 open PRs have this head: #3, #9; pass --pr to choose one",
+		],
+	] as const)(
+		"without pr, refuses when %s is what GitHub lists",
+		(_name, rows, message) => {
+			const { calls, run } = posterWith((call) => {
+				const fixed = base(call);
+				if (fixed !== undefined) return fixed;
+				if (is(call, `commits/${HEAD}/pulls`)) return JSON.stringify(rows);
+				throw new Error(`unexpected gh ${call.args.join(" ")}`);
+			});
+
+			expect(() =>
+				run({ repository: "/repo", headOid: HEAD, body: BODY }),
+			).toThrow(`comment refused: ${message}`);
+			expect(calls.some((call) => is(call, "pr", "view"))).toBe(false);
+		},
+	);
 });

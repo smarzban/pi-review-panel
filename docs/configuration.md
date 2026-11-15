@@ -186,7 +186,8 @@ A review also writes `plan.json` before pinning: its kind, the frozen base and h
 commits, the scoping note, and the planned seat rows (`rosterId`, `lens`, `provider`, `model`, as in
 `panel.json`). It holds no prompt text and no extension paths. Each seat's outcome is written to
 `seats/<planned index>.json` the moment that seat settles, by a temp file and a rename. A seat torn
-down because the run was cancelled is not written there. While a run is going, `run.lock` names its
+down because the run was cancelled is not written there; a seat that had already submitted when
+the run was cancelled is, so `resume` does not run it again. While a run is going, `run.lock` names its
 process; the run removes it when it ends.
 
 ### The record key
@@ -352,9 +353,7 @@ key:
 When a call names a G-id, it expands only from the grouping in the review's signed
 `execution.json`; G-ids are refused, asking for F-ids, when that grouping is absent or lost.
 
-One reader of the record is not covered: a review's persistence flags (which earlier findings
-look repeated) still count unsigned earlier records. They do not decide what verify checks or what
-`comment` lists as resolved. The verify round number and the close-out read only signed records and
+A review reads no earlier record. The verify round number and the close-out read only signed records and
 signed markers (see [Posting rounds to the pull request](#posting-rounds-to-the-pull-request)).
 
 ## Posting rounds to the pull request

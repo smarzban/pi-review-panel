@@ -11,7 +11,6 @@ import type { Config } from "../config/schema.js";
 import { commitResolves, isOid } from "./commits.js";
 import { planConsolidator } from "./grouping.js";
 import { isProcessAlive } from "./liveness.js";
-import { discoverPriorRecords } from "./prior-records.js";
 import { resolvePriorRunId } from "./prior-run.js";
 import {
 	acquireRunLock,
@@ -305,9 +304,6 @@ export async function resumeRun(
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
 		const consolidator = planConsolidator(config);
-		const priorRecordPaths = discoverPriorRecords(run.repoDir).map(
-			(entry) => entry.path,
-		);
 		onStart?.({
 			toRun: settled.filter((facts) => facts === undefined).length,
 		});
@@ -322,7 +318,6 @@ export async function resumeRun(
 				headOid: plan.headOid,
 				seats,
 				...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
-				priorRecordPaths,
 				// The grouping step always runs again over the final list,
 				// so its groups match the F-ids this resume stamps.
 				...(consolidator === undefined ? {} : { consolidator }),

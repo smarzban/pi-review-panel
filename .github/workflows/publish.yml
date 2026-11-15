@@ -13,6 +13,11 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check the tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - name: Set up toolchain
         uses: actions/setup-node@v6
@@ -40,6 +45,9 @@ jobs:
 
       - name: Verify
         run: npm run typecheck && npm test && npm run check
+
+      - name: Installed-package smoke run
+        run: npm run smoke:installed
 
       - name: Publish
         run: npm publish --access public

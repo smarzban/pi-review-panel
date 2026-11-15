@@ -40,6 +40,11 @@ const baseConfig = {
 	defaults: { seats: ["terra"], lenses: ["correctness"] },
 };
 
+const MODEL_FIX =
+	'Configure the exact Pi model "openai-codex/gpt-5.6-terra". Check both ids for a typo; a provider that an extension registers needs extraExtensionPaths on its roster row.';
+const AUTH_FIX =
+	'Authenticate the Pi provider "openai-codex" for the configured model. For a provider with a login, run: review-panel auth login openai-codex';
+
 describe("readiness diagnostic", () => {
 	it("cuts appended text by whole code points, never splitting a character", () => {
 		const text = `${"a".repeat(1_499)}😀b`;
@@ -123,13 +128,11 @@ describe("readiness diagnostic", () => {
 		expect(report.rows).toEqual([
 			{
 				prerequisite: "model openai-codex/gpt-5.6-terra",
-				remediation:
-					'Configure the exact Pi model "openai-codex/gpt-5.6-terra".',
+				remediation: MODEL_FIX,
 			},
 			{
 				prerequisite: "authentication openai-codex",
-				remediation:
-					'Authenticate the Pi provider "openai-codex" for the configured model.',
+				remediation: AUTH_FIX,
 			},
 			{
 				prerequisite: "extension /missing/provider-extension.ts",
@@ -162,7 +165,7 @@ describe("readiness diagnostic", () => {
 		expect(report).toEqual({ ready: true, rows: [] });
 	});
 
-	it("turns model inspection failures into model and authentication remediations", async () => {
+	it("turns model inspection failures into model and authentication remediations that keep the cause", async () => {
 		const completeConfig = {
 			...baseConfig,
 			roster: [
@@ -189,13 +192,11 @@ describe("readiness diagnostic", () => {
 			rows: [
 				{
 					prerequisite: "model openai-codex/gpt-5.6-terra",
-					remediation:
-						'Configure the exact Pi model "openai-codex/gpt-5.6-terra".',
+					remediation: `${MODEL_FIX} The check failed: unavailable credential storage`,
 				},
 				{
 					prerequisite: "authentication openai-codex",
-					remediation:
-						'Authenticate the Pi provider "openai-codex" for the configured model.',
+					remediation: `${AUTH_FIX} The check failed: unavailable credential storage`,
 				},
 			],
 		});
@@ -298,16 +299,88 @@ describe("readiness diagnostic", () => {
 		});
 
 		expect(modelChecks).toBe(0);
-		expect(report).toEqual({
-			ready: false,
-			rows: [
-				{
-					prerequisite: "configuration",
-					remediation:
-						"Create the outside-repository config shown in the configuration guide.",
-				},
-			],
+		expect(report.ready).toBe(false);
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.prerequisite).toBe("configuration");
+		// Where the file goes and what to put in it.
+		expect(report.rows[0]?.remediation).toContain(
+			`No config file at "${path.join(root, "missing.json")}"`,
+		);
+		expect(report.rows[0]?.remediation).toContain('"roster"');
+	});
+
+	it("says why a config path cannot be used: a relative override, a file it cannot read", async () => {
+		root = mkdtempSync(path.join(tmpdir(), "review-panel-readiness-path-"));
+		const repoDir = path.join(root, "repo");
+		mkdirSync(repoDir, { recursive: true });
+		const diagnose = (override: string) =>
+			diagnoseReadiness({
+				repoDir,
+				env: { PI_REVIEW_PANEL_CONFIG: override },
+				home: path.join(root, "home"),
+				inspectModel: async () => ({ model: true, auth: true }),
+			});
+
+		const relative = await diagnose("rel/config.json");
+		expect(relative.rows).toHaveLength(1);
+		expect(relative.rows[0]?.remediation).toContain(
+			"PI_REVIEW_PANEL_CONFIG must be an absolute path",
+		);
+
+		// A folder where a file is expected: readable by no one as a config.
+		const folder = path.join(root, "config.json");
+		mkdirSync(folder);
+		const unreadable = await diagnose(folder);
+		expect(unreadable.rows).toHaveLength(1);
+		expect(unreadable.rows[0]?.remediation).toContain("Could not read config");
+		expect(unreadable.rows[0]?.remediation).toContain("EISDIR");
+	});
+
+	it("names defaults.seats when it names an id that is not in the roster", async () => {
+		const { repoDir, configPath } = setup({
+			roster: [{ id: "a", provider: "p", model: "m" }],
+			defaults: { seats: ["a", "b"] },
 		});
+		let modelChecks = 0;
+		const report = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: configPath },
+			home: path.join(root, "home"),
+			inspectModel: async () => {
+				modelChecks += 1;
+				return { model: true, auth: true };
+			},
+		});
+		expect(modelChecks).toBe(0);
+		expect(report.ready).toBe(false);
+		expect(report.rows).toHaveLength(1);
+		expect(report.rows[0]?.remediation).toContain(
+			"defaults.seats[1] must name a roster id",
+		);
+	});
+
+	it("gives the provider's own reason when a login check fails", async () => {
+		const { repoDir, configPath } = setup({
+			roster: [{ id: "a", provider: "p", model: "m" }],
+			defaults: { seats: ["a"] },
+		});
+		const report = await diagnoseReadiness({
+			repoDir,
+			env: { PI_REVIEW_PANEL_CONFIG: configPath },
+			home: path.join(root, "home"),
+			inspectModel: async () => ({
+				model: true,
+				auth: false,
+				authError: "EACCES: cannot read\nauth.json",
+			}),
+		});
+		expect(report.rows).toEqual([
+			{
+				prerequisite: "authentication p",
+				remediation:
+					'Authenticate the Pi provider "p" for the configured model. For a provider with a login, run: review-panel auth login p The check failed: EACCES: cannot read auth.json',
+			},
+		]);
 	});
 
 	it("names the problem for a config that is not JSON, or sits inside the repository", async () => {

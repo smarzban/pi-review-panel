@@ -113,6 +113,24 @@ describe("prompt role registry", () => {
 		}
 	});
 
+	it("ends every review lens with the one shared closing rule", () => {
+		const closing =
+			"Confirm suspicions by reading full files, not just the diff hunks. Report only issues this change introduces, including in code it does not touch, that you are confident are real; do not report style preferences or speculative concerns. Submit a finding only when you can name a concrete failure scenario and an actual consumer that would hit it. Hypothetical or unnamed consumers are not enough. Unless this lens sets it above, rate severity by the harm to that consumer: high when it loses or corrupts data, opens a security hole, or breaks a main path; medium when a reachable path that is not the main one gives a wrong result or fails; low for anything else worth knowing.";
+		for (const [name, entry] of loadRoleTable()) {
+			if (entry.kind === "check") {
+				continue;
+			}
+			expect(
+				entry.prompt.endsWith(closing),
+				`${name}.md ends with the shared closing rule`,
+			).toBe(true);
+			expect(
+				entry.prompt.split(closing).length,
+				`${name}.md holds the closing rule once`,
+			).toBe(2);
+		}
+	});
+
 	it("does not resolve prototype-chain hostile role names", () => {
 		const table = loadRoleTable();
 		expect(table.get("constructor")).toBeUndefined();

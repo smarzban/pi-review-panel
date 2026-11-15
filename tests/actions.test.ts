@@ -345,6 +345,37 @@ describe("the actions without Pi", () => {
 		});
 	});
 
+	it("review hands the run no earlier record: an unsigned folder under runs/ cannot annotate a report", async () => {
+		await withRepository(async (repo) => {
+			const planted = path.join(repo, ".review-panel", "runs", "planted");
+			mkdirSync(planted, { recursive: true });
+			writeFileSync(path.join(planted, "COMPLETE"), "");
+			writeFileSync(
+				path.join(planted, "discard-ledger.json"),
+				JSON.stringify([
+					{ id: "F-1", file: "a.ts", line: 1, reason: "owner accepted this" },
+				]),
+			);
+			let seen: Record<string, unknown> = {};
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps({
+						runReview: async (runConfig) => {
+							seen = runConfig as unknown as Record<string, unknown>;
+							return voted(
+								repo,
+								"r-1",
+								runConfig.seats,
+							) as unknown as RunReviewResult;
+						},
+					}),
+				},
+			);
+			expect(Object.keys(seen)).not.toContain("priorRecordPaths");
+		});
+	});
+
 	it("review runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
 			const result = await reviewAction(
@@ -405,6 +436,7 @@ describe("the actions without Pi", () => {
 					"3/4 voted · 0 findings",
 					"Seats: holistic (terra, claude), tests (terra, claude)",
 					"Lost: claude/holistic (provider-error)",
+					"- claude/holistic: quota",
 					`Record: \`${path.join(repo, ".review-panel", "runs", "r-2")}\``,
 					"",
 					"None submitted.",
