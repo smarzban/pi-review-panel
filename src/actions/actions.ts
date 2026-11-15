@@ -1026,6 +1026,7 @@ export async function verifyAction(
 			lowAdvisory,
 			...(reviewFindings === undefined ? {} : { reviewFindings }),
 			review: prior,
+			recordKey: verifyKey,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));

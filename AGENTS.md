@@ -37,8 +37,8 @@ seat runs or post. They use only the bytes they authenticated (the close-out car
 Review and resume reply and post the findings the run stamped, never `findings.json` read back.
 A review's groups live only in its signed `execution.json` (`grouping`); there is no
 `groups.json` or `groups.mac` any more, and one left in an older record is never read.
-Verify reads those trees and writes only its posting claims and markers into the review's record
-(`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
+Verify reads those trees and writes only its posting claims and signed markers into the review's
+record (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
 review-derived semantic stop signal: agents judge, and the human is the merge gate.
@@ -136,7 +136,14 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   reports as failed after GitHub accepted it gives its number back; that repeat is set aside). The
   close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
   to the PR's comments, then to the next generation; only a generation's creator posts, and a
-  posted card writes `closeout.posted` (`wx`), which stops every later verify. The close-out posts
+  posted card writes `closeout.posted` (`wx`), which stops every later verify. Every posted marker
+  (`round-<N>.posted`, `closeout.posted`, a verify's own `round.posted`) holds a MAC from the
+  owner's record key over the record's run id, the marker's file name and the verify that wrote
+  it; an unsigned or copied marker is no marker, and the verify that posts replaces it. `verify N`
+  counts only complete verify records signed with that key (`record.mac`) whose signed meta names
+  the review and that hold a signed `round.posted`. Claims are not signed: a planted live-looking
+  claim can stop an automatic post (never forge one), and deleting genuine markers can repeat a
+  `verify N`; both are documented limits. The close-out posts
   at most once per review, with two exceptions set aside: a crash between GitHub accepting the
   card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
   whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a

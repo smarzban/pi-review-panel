@@ -240,3 +240,40 @@ export function signVerifyRecord(
 		),
 	);
 }
+
+/**
+ * The MAC of a posted marker (`round-<N>.posted` or `closeout.posted` in a
+ * review's record, `round.posted` in a verify's), bound to the record's run
+ * id, the marker's file name and the verify that wrote it.
+ */
+export function testPostedMac(
+	recordRunId: string,
+	name: string,
+	verifyRunId: string,
+	key: Buffer = TEST_RECORD_KEY,
+): string {
+	return createHmac("sha256", key)
+		.update(
+			`pi-review-panel/posted/v1\0${recordRunId}\0${name}\0${verifyRunId}\0`,
+		)
+		.digest("hex");
+}
+
+/** Writes a posted marker signed as the package would. */
+export function writeSignedMarker(
+	recordPath: string,
+	name: string,
+	verifyRunId: string,
+	extra: Record<string, unknown> = {},
+	key: Buffer = TEST_RECORD_KEY,
+): void {
+	writeFileSync(
+		path.join(recordPath, name),
+		`${JSON.stringify({
+			verifyRunId,
+			postedAt: Date.now(),
+			...extra,
+			mac: testPostedMac(path.basename(recordPath), name, verifyRunId, key),
+		})}\n`,
+	);
+}

@@ -348,9 +348,10 @@ key:
 When a call names a G-id, it expands only from the grouping in the review's signed
 `execution.json`; G-ids are refused, asking for F-ids, when that grouping is absent or lost.
 
-Two readers of the record are not covered: a review's persistence flags (which earlier findings
-look repeated) and the verify round number in a PR comment still count unsigned earlier records.
-Neither decides what verify checks or what `comment` posts as fixed.
+One reader of the record is not covered: a review's persistence flags (which earlier findings
+look repeated) still count unsigned earlier records. They do not decide what verify checks or what
+`comment` posts as fixed. The verify round number and the close-out read only signed records and
+signed markers (see [Posting rounds to the pull request](#posting-rounds-to-the-pull-request)).
 
 ## Posting rounds to the pull request
 
@@ -377,9 +378,16 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     **Evidence:** renderAuditResult splits finding.file on "/" …
   ```
 - Each verify posts `## Review panel · verify N`. N starts one past the earlier verifies of the
-  same review whose comment reached the PR (each records that in its run record). The number is
-  then claimed in the review's run record, by these rules:
-  - The verify skips every N with a `round-<N>.posted`, then creates `round-<N>.claim`
+  same review whose comment reached the PR: complete verify records signed with the owner's record
+  key (`record.mac`) whose signed `meta.json` names this review, each holding a signed
+  `round.posted`. The number is then claimed in the review's run record, by these rules:
+  - Every posted marker (`round-<N>.posted` and `closeout.posted` in the review's record,
+    `round.posted` in a verify's) holds the verify run id and a MAC from the owner's record key
+    bound to the record's run id, the marker's file name and that verify. A marker without a valid
+    MAC (planted in the repository, copied from another record or round, or written before markers
+    were signed) counts as no marker, and the verify that posts that round or card replaces it
+    with a signed one.
+  - The verify skips every N with a signed `round-<N>.posted`, then creates `round-<N>.claim`
     exclusively (`wx`), holding the verify run id, its process id, the host name and when.
   - After the create it checks `round-<N>.posted` again: another verify can post N and settle
     between the first check and the create. If it is there now, the verify deletes its claim and
@@ -417,8 +425,11 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   names the review's lost seats; it never names a verify seat, because a lost verify seat stops
   the automatic card.
 - The close-out posts at most once per review, by these rules and with the exceptions below:
-  - A `closeout.posted` in the review's run record means it is posted. The verify does not ask the
-    PR, and the reply says `PR close-out: not posted (this review's close-out is already posted)`.
+  - A signed `closeout.posted` in the review's run record means it is posted. The verify does not
+    ask the PR, and the reply says
+    `PR close-out: not posted (this review's close-out is already posted)`. An unsigned one does
+    not stop the card: the verify goes on to claim it, checks the PR's comments as below, and
+    replaces the marker once the card is posted or found.
   - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
     round claim, and checks `closeout.posted` again after the create. Only the creator of a claim
     posts. Before posting it checks the PR's comments for a close-out of this review by the same
@@ -445,6 +456,19 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     verify can lead to a second card. That happens when it pauses for over 65 s mid-post, when
     its machine's clock runs over 65 s behind the other's, or when it runs in a container that
     shares the host's hostname in its own process namespace.
+- What someone who can write files into the checkout can still do, and what they cannot:
+  - They cannot make a verify skip or repeat a number, or skip the close-out, by planting a record
+    or a marker: only signed ones count.
+  - Claims are not signed. A planted `round-<N>.claim` or `closeout.claim-<g>` that looks live (a
+    `claimedAt` in the future, or another host's process) holds that round or the close-out:
+    the verify waits and then posts no comment for that round, or says another verify is posting
+    the close-out. Five planted close-out claims judged stale end as "all left by verifies that
+    stopped". A planted claim can stop an automatic post, never forge one or post a second card;
+    the reply says why, and `comment` still posts the card on the owner's yes.
+  - Deleting a genuine marker undoes it: a deleted `closeout.posted` is caught by the PR-comment
+    check, so no second card posts, but with both a review's `round-<N>.posted` and the verify's
+    `round.posted` deleted, the next verify can post `verify N` again.
+  - Markers written before markers were signed are ignored in the same way.
 - When the card cannot be built (for example a high or medium finding that was neither kept nor
   dismissed with a reason), the reply says why.
 - An explicit `pr` must be an open pull request whose head is the run's head. Otherwise nothing is
