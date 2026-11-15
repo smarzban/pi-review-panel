@@ -466,11 +466,15 @@ any seat runs:
   host by a process that is gone, was left by a verify that stopped. It is never taken over: it
   stays where it is and the next one, `-2`, `-3`, …, is tried, so a crash never ends the chain.
   A live-looking claim that no verify holds (another host's, or planted) is named in the
-  refusal, with the file to delete;
+  refusal, with the file to delete. A verify whose claim went stale while it ran (its process
+  stalled for over 65 s, or a laptop slept) can be overtaken by a second one; just before it
+  signs, a verify reads the chain again and refuses to sign when the record it chained from is
+  no longer the latest: `Verify refused: verify "<run>" chained from "<prior>" while this verify
+  ran, so this run is not signed; verify against "<run>"`. That run is lost, not the chain;
 - against an unsigned verify record: run a new review;
 - when the chain is not one line of signed links: two verifies chained from one record (a
-  fork: possible only when a verify paused for over 65 s, so that its claim looked stale and a
-  second verify claimed the next one), a link whose previous record is not a complete signed
+  fork: possible only when two verifies, each with a claim the other saw as stale, both pass
+  that last check at the same moment), a link whose previous record is not a complete signed
   verify of the same review (a gap, or a link of another review's chain), or a link out of
   place. The message says to run a new review.
 

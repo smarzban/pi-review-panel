@@ -35,6 +35,7 @@ import {
 	type JudgmentRow,
 	judgeRound,
 	loadChainPrior,
+	loadVerifyChain,
 	regressionId,
 } from "./verify-chain.js";
 
@@ -240,6 +241,28 @@ export function buildFinalCheckScope(input: {
 		"Also report any place where two of these fixes conflict, as a regression.",
 		"There are no kept findings to answer. Do not rediscover the original change.",
 	].join("\n");
+}
+
+/**
+ * Refuses to sign when another verify chained from `previousRunId` while
+ * this one ran, naming it. Reads the chain from signed records again.
+ */
+function assertStillTip(
+	repoDir: string,
+	reviewRunId: string,
+	previousRunId: string,
+	key: Buffer,
+): void {
+	const links = loadVerifyChain(repoDir, reviewRunId, key);
+	const tip = links.at(-1)?.runId ?? reviewRunId;
+	if (tip === previousRunId) {
+		return;
+	}
+	const winner =
+		links.find((row) => row.previousRunId === previousRunId)?.runId ?? tip;
+	throw new Error(
+		`Verify refused: verify "${winner}" chained from "${previousRunId}" while this verify ran, so this run is not signed; verify against "${tip}"`,
+	);
 }
 
 /** The final check runs from the latest verify, at its head, with no kept ids. */
@@ -639,6 +662,16 @@ export async function runVerify(
 				null,
 				2,
 			)}\n`,
+		);
+		// No forks: a verify whose claim went stale while it ran (a stalled
+		// process) may have been overtaken. It signs only while the record it
+		// chained from is still the tip; otherwise this run is lost, not the
+		// chain.
+		assertStillTip(
+			input.repoDir,
+			prior.runId,
+			previousRunId,
+			options.recordKey,
 		);
 		// Signed last, so comment can tell this record from a planted one.
 		sealRecord(record, "verify", options.recordKey, "");

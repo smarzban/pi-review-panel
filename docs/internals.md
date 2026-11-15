@@ -174,9 +174,12 @@ between is named as the latest; a live claim refuses naming its holder after the
 The holder rewrites its `claimedAt` every 15 s (`refresh`, only while the file is still its own)
 and releases the claim in a `finally`, signed or not. Staleness is the posting-claim rule (65 s,
 or this host's pid gone); a stale generation stays and the next is tried (at most 100), so a
-crash never ends the chain. The fork refusal in `loadVerifyChain` stays as a backstop: a verify
-paused for over 65 s (a sleeping laptop, a stopped process) has a claim that looks stale, so a
-second verify can claim the next generation and both can sign. `comment` reads no claim; it
+crash never ends the chain. A verify paused for over 65 s (a sleeping laptop, a stopped process)
+has a claim that looks stale, so a second verify can claim the next generation; just before
+`sealRecord`, `assertStillTip` reads the chain again and refuses to sign unless `previousRunId`
+is still the tip, naming the verify that chained from it, so the paused run is lost and the
+chain goes on. The fork refusal in `loadVerifyChain` stays as a backstop for the one window
+left: two verifies that both pass that check before either signs. `comment` reads no claim; it
 takes one only through the final check it runs, and a live one refuses it with the holder named.
 
 The final check (S-6) is `runVerify` with `final: true`, from the tip at the tip's head: base is
