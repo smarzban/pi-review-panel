@@ -701,6 +701,55 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 		120_000,
 	);
 
+	it("install refuses the whitespace form git: user:token@host/o/r: no clone, nothing in settings.json (N2-1)", () => {
+		const home = tempHome();
+		const repo = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-space-")),
+		);
+		writeExtensionPackage(repo, { git: true });
+		const agent = path.join(home, "agent");
+		const result = cli(
+			home,
+			[
+				"extension",
+				"install",
+				`git: user:${SECRET}@example.invalid/fixture/pi-ext`,
+			],
+			{ env: { ...formEnv(repo), PI_CODING_AGENT_DIR: agent } },
+		);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("credential helper");
+		expect(result.stdout + result.stderr).not.toContain(SECRET);
+		expect(existsSync(path.join(agent, "git"))).toBe(false);
+		expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+	}, 120_000);
+
+	it("a branch ref with a slash installs (N2-2)", () => {
+		const home = tempHome();
+		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-ref-")));
+		writeExtensionPackage(repo, { git: true, branch: "release/1.0" });
+		const agent = path.join(home, "agent");
+		const result = cli(
+			home,
+			["extension", "install", `${FIXTURE_GIT_SOURCE}@release/1.0`],
+			{ env: { ...gitSourceEnv(repo), PI_CODING_AGENT_DIR: agent } },
+		);
+		expect(result.code).toBe(0);
+		expect(
+			existsSync(
+				path.join(
+					agent,
+					"git",
+					"example.invalid",
+					"fixture",
+					"pi-ext",
+					"extensions",
+					"index.ts",
+				),
+			),
+		).toBe(true);
+	}, 120_000);
+
 	it("a source Pi installed earlier with a token is listed redacted, and removed by the printed source", () => {
 		const home = tempHome();
 		const agent = path.join(home, "agent");

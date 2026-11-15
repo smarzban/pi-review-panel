@@ -29,6 +29,8 @@ export function writeExtensionPackage(
 		git?: boolean;
 		/** A file in tests/fixtures/extension-provider; the provider fixture by default. */
 		extension?: string;
+		/** Also make this branch at the commit (with `git`). */
+		branch?: string;
 	} = {},
 ): string {
 	mkdirSync(path.join(dir, "extensions"), { recursive: true });
@@ -74,6 +76,9 @@ export function writeExtensionPackage(
 			git(["init", "-q", "--template="]);
 			git(["add", "."]);
 			git(["commit", "-qm", "fixture"]);
+			if (options.branch !== undefined) {
+				git(["branch", options.branch]);
+			}
 		} finally {
 			rmSync(home, { recursive: true, force: true });
 		}

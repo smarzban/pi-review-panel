@@ -16,8 +16,8 @@ import {
 	type RunIo,
 	run,
 } from "../../src/cli/run.js";
+import { realSetupSdk } from "../../src/cli/sdk.js";
 import {
-	carriesCredential,
 	type InstalledExtension,
 	type ModelGroup,
 	redactSecrets,
@@ -143,6 +143,8 @@ function fakeSdk(overrides: Partial<SetupSdk> = {}) {
 			removals.push(input.source);
 			return INSTALLED.some((entry) => entry.source === input.source);
 		}),
+		// Pi's own parser: the refusal decides on what Pi would parse.
+		parseSource: realSetupSdk.parseSource,
 		...overrides,
 	};
 	return { sdk, modelCalls, installs, removals };
@@ -663,55 +665,32 @@ describe("credentials in an extension source are never printed (F-2, F-7)", () =
 		expect(redactSecrets("/home/user/my ext")).toBe("/home/user/my ext");
 	});
 
-	it("redactSecrets hides scheme-less git: user info and the token in an install path (N-1)", () => {
-		expect(redactSecrets(`git:user:${SECRET}@git.example.com/o/r`)).toBe(
-			"git:***@git.example.com/o/r",
-		);
-		expect(redactSecrets(`git:${SECRET}@git.example.com/o/r`)).toBe(
-			"git:***@git.example.com/o/r",
-		);
-		expect(
-			redactSecrets(
-				`/home/u/.pi-review-panel/agent/git/user:${SECRET}@git.example.com/o/r/extensions/index.ts`,
-			),
-		).toBe(
-			"/home/u/.pi-review-panel/agent/git/***@git.example.com/o/r/extensions/index.ts",
-		);
-		expect(
-			redactSecrets(
-				`/agent/git/git.example.com/o/r?private_token=${SECRET}/index.ts`,
-			),
-		).toBe("/agent/git/git.example.com/o/r?private_token=***/index.ts");
-		// An scp-style SSH source names a user, not a secret.
-		expect(redactSecrets("git:git@github.com:o/r")).toBe(
-			"git:git@github.com:o/r",
-		);
+	it("redactSecrets hides scheme-less git: user info, with any spacing, port or case (N-1, N2-1)", () => {
+		for (const [text, shown] of [
+			[`git:user:${SECRET}@git.example.com/o/r`, "git:***@git.example.com/o/r"],
+			[`git:${SECRET}@git.example.com/o/r`, "git:***@git.example.com/o/r"],
+			[`git: user:${SECRET}@host.com/o/r`, "git: ***@host.com/o/r"],
+			[`git:\tuser:${SECRET}@host.com/o/r`, "git:\t***@host.com/o/r"],
+			[`git:${SECRET}@host.com:8443/o/r`, "git:***@host.com:8443/o/r"],
+			[`HTTPS://${SECRET}@host.com/o/r`, "HTTPS://***@host.com/o/r"],
+			[
+				`npm:foo@GIT+HTTPS://${SECRET}@host.com/x.git`,
+				"npm:foo@GIT+HTTPS://***@host.com/x.git",
+			],
+			// An scp-style SSH source names a user, not a secret.
+			["git:git@github.com:o/r", "git:git@github.com:o/r"],
+		]) {
+			expect(redactSecrets(text as string), text).toBe(shown);
+		}
 	});
 
-	it("carriesCredential finds a credential in every form, and passes the plain ones (N-1)", () => {
-		for (const source of [
-			`https://${SECRET}@git.example.com/o/r.git`,
-			`https://user:${SECRET}@git.example.com/o/r.git`,
-			`git:https://user:${SECRET}@git.example.com/o/r`,
-			`git:user:${SECRET}@git.example.com/o/r`,
-			`git:${SECRET}@git.example.com/o/r`,
-			`git:git.example.com/o/r?private_token=${SECRET}`,
-			`git:github.com/o/r?token=${SECRET}`,
-			`ssh://git:${SECRET}@git.example.com/o/r`,
-			`npm:https://user:${SECRET}@registry.example.com/x.tgz`,
+	it("redactSecrets never rewrites a local path holding an @ (N2-3)", () => {
+		for (const text of [
+			"/Users/me/ext@v2/src/index.ts",
+			"/home/u/.pnpm/pi-foo@1.2.0/node_modules/pi-foo/index.ts",
+			"/agent/npm/node_modules/@scope/name/index.ts",
 		]) {
-			expect(carriesCredential(source), source).toBe(true);
-		}
-		for (const source of [
-			"git:github.com/earendil-works/pi-claude-code",
-			"git:git@github.com:o/r",
-			"ssh://git@github.com/o/r",
-			"https://github.com/o/r",
-			"git:github.com/o/r@v1.2.0",
-			"npm:@scope/name@1.2.3",
-			"/home/user/my-ext",
-		]) {
-			expect(carriesCredential(source), source).toBe(false);
+			expect(redactSecrets(text)).toBe(text);
 		}
 	});
 
@@ -1059,5 +1038,61 @@ describe("an aborted install says what was recorded (N-3)", () => {
 		expect(await h.run(["extension", "install", "npm:late"])).toBe(EXIT_FAILED);
 		expect(installs).toEqual([]);
 		expect(h.err()).toContain("npm:late was not recorded");
+		// Honest about the final state: the user is told where to look (N2-5).
+		expect(h.err()).toContain("review-panel extension list shows");
+	});
+});
+
+describe("local paths and recorded credentials in printed paths (N2-3)", () => {
+	it("a local extension path with an @ prints as it is, in the table and the roster row", async () => {
+		const entry = "/Users/me/ext@v2/src/index.ts";
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{
+					source: "../../Users/me/ext@v2",
+					installedPath: "/Users/me/ext@v2",
+					filtered: false,
+					entries: [entry],
+				},
+			],
+			models: async (input) =>
+				input.extensionPaths.length === 0 ? BASE : CLAUDE_CODE,
+		});
+		const h = harness({ sdk });
+		expect(await h.run(["models", "claude-code", "--json"])).toBe(EXIT_OK);
+		const result = JSON.parse(h.out());
+		expect(result.rosterRow.extraExtensionPaths).toEqual([entry]);
+		expect(result.problems).toEqual([]);
+		const list = harness({ sdk });
+		await list.run(["extension", "list"]);
+		expect(list.out()).toContain(`    ${entry}`);
+	});
+
+	it("a recorded source's credential is hidden in its paths, which are said to be uncopyable", async () => {
+		const raw = `git:user:${SECRET}@git.example.com/o/r`;
+		const clone = `/agent/git/user:${SECRET}@git.example.com/o/r`;
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{
+					source: raw,
+					installedPath: clone,
+					filtered: false,
+					entries: [`${clone}/index.ts`],
+				},
+			],
+			models: async (input) =>
+				input.extensionPaths.length === 0 ? BASE : CLAUDE_CODE,
+		});
+		const list = harness({ sdk });
+		await list.run(["extension", "list"]);
+		expect(list.out()).toContain(
+			"    /agent/git/***@git.example.com/o/r/index.ts",
+		);
+		expect(list.out()).toContain("cannot be copied");
+		expect(list.out()).not.toContain(SECRET);
+		const models = harness({ sdk });
+		await models.run(["models", "claude-code"]);
+		expect(models.out()).toContain("cannot be copied");
+		expect(models.out()).not.toContain(SECRET);
 	});
 });

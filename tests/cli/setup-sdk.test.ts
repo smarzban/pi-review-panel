@@ -29,6 +29,7 @@ import {
 } from "vitest";
 
 import { providerRows, realSetupSdk } from "../../src/cli/sdk.js";
+import { sourceProblem } from "../../src/cli/setup.js";
 import {
 	resolveSeatRuntime,
 	type SeatServicesSdk,
@@ -450,4 +451,75 @@ describe("auth providers is bounded (N-4)", () => {
 			["slow", false, "the login check did not finish within 0.05 s"],
 		]);
 	}, 5_000);
+});
+
+describe("which sources install refuses, decided on Pi's own parse (N2-1, N2-2, N2-4)", () => {
+	const S = "tok-SECRET";
+	// From the re-check's probe: every form that carries a credential, however
+	// it is spaced, cased or ported, and the forms Pi cannot read as remote.
+	const REFUSED = [
+		`git:${S}@host.com:8443/o/r`,
+		`git:${S}@host.com/o/r`,
+		`git: user:${S}@host.com/o/r`,
+		`git:\tuser:${S}@host.com/o/r`,
+		`git: ${S}@host.com/o/r`,
+		`git:user:${S}@host.com/o/r`,
+		`git:host.com/o/r?private_to%6Ben=${S}`,
+		`git:host.com/o/r?pat=${S}`,
+		`git:user%3A${S}@host.com/o/r`,
+		`git:git:${S}@host.com/o/r`,
+		`git:${S}@localhost:8080/o/r`,
+		`git:user:${S}@localhost:8080/o/r`,
+		`git:https://${S}@host.com/o/r`,
+		`git:HTTPS://${S}@host.com/o/r`,
+		`git:HTTPS://user:${S}@host.com/o/r`,
+		`https://user:${S}@host.com/o/r`,
+		`HTTPS://${S}@host.com/o/r`,
+		`ssh://user:${S}@host.com/o/r`,
+		`npm:foo@https://user:${S}@host.com/x.tgz`,
+		`npm:foo@HTTPS://user:${S}@host.com/x.tgz`,
+		`npm:foo@git+https://${S}@host.com/x.git`,
+		`npm:foo@GIT+HTTPS://${S}@host.com/x.git`,
+		`git:${S}@github.com/o/r`,
+		`git:user:${S}@gitlab.com/o/r`,
+		`git:${S}@host.com:o/r`,
+		`git:${S}@git@host.com/o/r`,
+		`git:git@${S}@host.com/o/r`,
+		"git:git@host.com/o/r?x=1",
+		`git:user:${S}@[::1]/o/r`,
+		`git:@${S}@host.com/o/r`,
+		`git+https://${S}@host.com/o/r`,
+		`git:git+https://${S}@host.com/o/r`,
+		`git:https://host.com/o/r?token=${S}`,
+		"github:o/r",
+	];
+	const ALLOWED = [
+		"git:github.com/earendil-works/pi-claude-code",
+		"git:git@host.com:o/r",
+		"ssh://git@github.com/o/r",
+		// An SSH user name is an account, not a secret: SSH signs in with keys.
+		`git:ssh://deploy@host.com/o/r`,
+		// A #fragment is a ref.
+		"git:github.com/o/r#v1.2.0",
+		// Branch refs with a slash (N2-2).
+		"git:host.com/o/r@release/1.0",
+		"git:git@host.com:o/r@feature/x",
+		"https://github.com/o/r@feature/x",
+		"npm:@scope/name@1.2.3",
+		"npm:foo@1",
+		"/Users/me/ext@v2/src",
+		"/home/u/.pnpm/pi-foo@1.2.0/node_modules/pi-foo",
+	];
+
+	it.each(REFUSED)("refuses %s", async (source) => {
+		expect(
+			sourceProblem(source, await realSetupSdk.parseSource(source)),
+		).toEqual(expect.any(String));
+	});
+
+	it.each(ALLOWED)("installs %s", async (source) => {
+		expect(
+			sourceProblem(source, await realSetupSdk.parseSource(source)),
+		).toBeUndefined();
+	});
 });
