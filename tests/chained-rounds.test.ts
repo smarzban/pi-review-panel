@@ -458,6 +458,31 @@ describe("--close-out", () => {
 		);
 	});
 
+	it("without it, says nothing is open only when the card could post: a medium no round kept is open", async () => {
+		// Verify 1 keeps everything but F-5, a medium, and resolves it all.
+		const v1 = await verify(
+			{
+				priorRunId: REVIEW,
+				head: commits[2],
+				keptFindingIds: ["F-1", "F-2", "F-3"],
+				lowAdvisory: ["F-4"],
+			},
+			{
+				items: [
+					{ id: "F-1", disposition: "resolved" },
+					{ id: "F-2", disposition: "resolved" },
+					{ id: "F-3", disposition: "resolved" },
+				],
+			},
+		);
+		expect(v1.reply).not.toContain("PR close-out");
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
+			{ items: [] },
+		);
+		expect(v2.reply).toContain("PR close-out: not posted (still open: F-5)");
+	});
+
 	it("is taken by the parser and by a call object", () => {
 		expect(
 			parseVerifyArguments(
@@ -566,6 +591,32 @@ describe("comment when the owner stops the rounds", () => {
 			"- **F-1 [high]** cache key misses the tenant · not verified",
 		);
 		expect(body).toContain("**4 open**");
+	});
+
+	it("takes the owner's judgment on top of the chain: an open id dismissed now is dismissed, not open", async () => {
+		const v1 = await round1();
+		await round2(v1.runId);
+		const { body } = await stop({
+			dismissed: [{ id: "F-2", reason: "the owner accepts the risk" }],
+		});
+		expect(body).not.toContain("### Open");
+		expect(body).toContain(
+			"- **F-2** token compared with === — the owner accepts the risk",
+		);
+		// F-5 keeps the reason verify 2 recorded.
+		expect(body).toContain(
+			"- **F-5** log line prints the request body — the body is redacted upstream",
+		);
+	});
+
+	it("refuses to dismiss an id a round resolved", async () => {
+		const v1 = await round1();
+		await expect(
+			stop({ dismissed: [{ id: "F-1", reason: "no" }] }),
+		).rejects.toThrow(
+			"comment refused: F-1 was resolved in a verify round; it cannot also be kept out",
+		);
+		expect(v1.runId).not.toBe("");
 	});
 
 	it("refuses a verify that is not the latest, naming the latest", async () => {

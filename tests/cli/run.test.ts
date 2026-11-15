@@ -179,6 +179,25 @@ describe("action commands map flags onto the actions' arguments", () => {
 		});
 	});
 
+	it("verify: a chained verify leaves out --kept-finding-ids, and --close-out asks for the card", async () => {
+		const h = harness();
+		await h.run([
+			"verify",
+			"--prior-run-id",
+			"v-1",
+			"--head",
+			"HEAD",
+			"--close-out",
+		]);
+		// Omitted stays absent (every open id), unlike `--kept-finding-ids ""`.
+		expect(h.calls.verify?.[0]?.input).toEqual({
+			repoDir: REPO,
+			priorRunId: "v-1",
+			head: "HEAD",
+			closeOut: true,
+		});
+	});
+
 	it("resume: --prior-run-id", async () => {
 		const h = harness();
 		await h.run(["resume", "--prior-run-id", "run-2"]);
