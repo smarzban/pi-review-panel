@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { PanelRecord, StampedFinding } from "../src/run/types.js";
+import { chainState, makeLink } from "../src/run/verify-chain.js";
 import {
 	assembleCloseoutComment,
+	type CloseoutItem,
 	type CloseoutVerifyRound,
 	renderCloseoutComment,
 } from "../src/tool/closeout-comment.js";
-import { cardRounds } from "../src/tool/closeout-rounds.js";
+import { chainRounds } from "../src/tool/closeout-rounds.js";
 
 function seatsOf(
 	...groups: Array<[lens: string, ids: string[]]>
@@ -108,6 +110,52 @@ function round(
 
 const PR_URL = "https://github.com/smarzban/demo/pull/35";
 
+/** Review findings as resolved card rows, each resolved in verify `n`. */
+function items(rows: readonly StampedFinding[], n: number): CloseoutItem[] {
+	return rows.map((row) => ({
+		id: row.id,
+		title: row.finding.title,
+		severity: row.finding.severity,
+		label: `resolved in verify ${n}`,
+	}));
+}
+
+/** A chain link whose one seat answered each id as given. */
+function link(
+	runId: string,
+	n: number,
+	answers: Record<string, "resolved" | "still present">,
+	regressions: Array<{ title: string; undoes?: string }> = [],
+) {
+	return makeLink({
+		runId,
+		link: n,
+		previousRunId: "r-1",
+		headOid,
+		keptFindingIds: Object.keys(answers),
+		outcomes: [
+			{
+				seat: verifySeat,
+				outcome: {
+					kind: "voted",
+					result: {
+						items: Object.entries(answers).map(([id, disposition]) => ({
+							id,
+							disposition,
+						})),
+						regressions: regressions.map((row) => ({
+							file: "src/a.ts",
+							line: 2,
+							evidence: "e",
+							...row,
+						})),
+					},
+				},
+			},
+		],
+	});
+}
+
 describe("renderCloseoutComment", () => {
 	it("renders the agreed close-out card (T505 target)", () => {
 		const four = [1, 2, 3, 4].map((n) =>
@@ -115,7 +163,7 @@ describe("renderCloseoutComment", () => {
 		);
 		const text = renderCloseoutComment({
 			findings: four,
-			resolved: four,
+			resolved: items(four, 1),
 			dismissed: [],
 			lowAdvisory: [],
 			seats: seatsOf(
@@ -181,7 +229,7 @@ describe("renderCloseoutComment", () => {
 	it("rule 2: hides zero counts and an empty Lost line", () => {
 		const text = renderCloseoutComment({
 			findings: [finding("F-1", "high", "auth bypass")],
-			resolved: [finding("F-1", "high", "auth bypass")],
+			resolved: items([finding("F-1", "high", "auth bypass")], 1),
 			dismissed: [],
 			lowAdvisory: [],
 			seats: seatsOf(["holistic", ["terra"]]),
@@ -210,7 +258,7 @@ describe("renderCloseoutComment", () => {
 				finding("F-8", "low", "rename the helper"),
 				finding("F-9", "low", "extra log line"),
 			],
-			resolved: [finding("F-1", "high", "auth bypass")],
+			resolved: items([finding("F-1", "high", "auth bypass")], 1),
 			dismissed: [
 				{
 					id: "F-4",
@@ -258,85 +306,95 @@ describe("renderCloseoutComment", () => {
 		);
 	});
 
-	it("rule 3: each kept finding names the verify round that first marked it resolved, and the card never says fixed", () => {
+	it("rule 3: each id names the round of the chain that resolved it, and the card never says fixed", () => {
 		const rows = [
 			finding("F-2", "medium", "missing timeout"),
 			finding("F-1", "high", "auth bypass"),
 			finding("F-3", "low", "kept low"),
 		];
-		const text = renderCloseoutComment({
+		// F-2 resolved in link 1; F-1 and F-3 still present there, then
+		// resolved in links 2 and 3. A link that posted as verify 4 (verify
+		// 3 never posted) keeps its posted number.
+		const links = [
+			link("v-1", 1, {
+				"F-1": "still present",
+				"F-2": "resolved",
+				"F-3": "still present",
+			}),
+			link("v-2", 2, { "F-1": "resolved", "F-3": "still present" }),
+			link("v-3", 3, { "F-3": "resolved" }),
+		];
+		const rounds = chainRounds(links, [
+			round("v-1", 1, []),
+			round("v-2", 2, []),
+			round("v-3", 4, []),
+		]);
+		const text = assembleCloseoutComment({
 			findings: rows,
-			resolved: rows,
+			state: chainState(rows, links),
+			rounds,
 			dismissed: [],
 			lowAdvisory: [],
-			seats: seatsOf(["holistic", ["terra"]]),
+			panel,
 			lost: [],
-			rounds: [
-				round("v-3", 3, ["F-1", "F-2", "F-3"]),
-				round("v-1", 1, ["F-2"]),
-				// A round with a gap in the numbering still counts once.
-				round("v-2", 2, ["F-2", "F-3"]),
-			],
-			baseRef: "main",
-			baseOid,
-			headOid,
+			meta: { baseRef: "main", baseOid, headOid },
 		});
 		expect(text).toContain("**3 resolved** in 3 verify rounds");
 		const list = text.split("\n").filter((line) => line.startsWith("- "));
 		expect(list).toEqual([
-			"- **F-1 [high]** auth bypass · resolved in verify 3",
+			"- **F-1 [high]** auth bypass · resolved in verify 2",
 			"- **F-2 [medium]** missing timeout · resolved in verify 1",
-			"- **F-3 [low]** kept low · resolved in verify 2",
+			"- **F-3 [low]** kept low · resolved in verify 4",
 		]);
 		expect(text).not.toMatch(/fixed/i);
 	});
 
-	it("rule 3: N is the round after which every later round that answered also resolved it (R-1)", () => {
-		const rows = [
-			finding("F-1", "high", "auth bypass"),
-			finding("F-2", "medium", "missing timeout"),
-		];
-		const text = renderCloseoutComment({
-			findings: rows,
-			resolved: rows,
-			dismissed: [],
-			lowAdvisory: [],
-			seats: seatsOf(["holistic", ["terra"]]),
-			lost: [],
-			rounds: [
-				round("v-1", 1, ["F-1", "F-2"]),
-				{ ...round("v-2", 2, []), unresolved: new Set(["F-1"]) },
-				round("v-3", 3, ["F-1"]),
-			],
-			baseRef: "main",
-			baseOid,
-			headOid,
-		});
-		expect(text).toContain(
-			"- **F-1 [high]** auth bypass · resolved in verify 3",
-		);
-		expect(text).toContain(
-			"- **F-2 [medium]** missing timeout · resolved in verify 1",
-		);
-	});
-
-	it("rule 3: a verify that never posted has no number, so its ids read plain resolved", () => {
+	it("rule 3: a link that never posted has no number, so its ids read plain resolved", () => {
 		const rows = [finding("F-1", "high", "auth bypass")];
-		const text = renderCloseoutComment({
+		const links = [link("v-9", 1, { "F-1": "resolved" })];
+		const text = assembleCloseoutComment({
 			findings: rows,
-			resolved: rows,
+			state: chainState(rows, links),
+			rounds: chainRounds(links, []),
 			dismissed: [],
 			lowAdvisory: [],
-			seats: seatsOf(["holistic", ["terra"]]),
+			panel,
 			lost: [],
-			rounds: [round("v-9", undefined, ["F-1"])],
-			baseRef: "main",
-			baseOid,
-			headOid,
+			meta: { baseRef: "main", baseOid, headOid },
 		});
 		expect(text).toContain("**1 resolved** in 1 verify round");
 		expect(text).toMatch(/^- \*\*F-1 \[high\]\*\* auth bypass · resolved$/m);
 		expect(text).not.toContain("verify undefined");
+	});
+
+	it("rule 3: regressions are listed after the findings, open ones under Open with what they undo", () => {
+		const rows = [finding("F-1", "high", "auth bypass")];
+		const links = [
+			link("v-1", 1, { "F-1": "resolved" }, [{ title: "null check gone" }]),
+			link("v-2", 2, { "V1-R1": "resolved" }, [
+				{ title: "guard reverted", undoes: "F-1" },
+			]),
+		];
+		const text = assembleCloseoutComment({
+			findings: rows,
+			state: chainState(rows, links),
+			rounds: chainRounds(links, [round("v-1", 1, []), round("v-2", 2, [])]),
+			dismissed: [],
+			lowAdvisory: [],
+			panel,
+			lost: [],
+			meta: { baseRef: "main", baseOid, headOid },
+		});
+		const lines = text.split("\n");
+		expect(lines).toContain(
+			"**1 finding** (1 high) · **2 resolved** in 2 verify rounds · **1 open**",
+		);
+		expect(lines.filter((line) => line.startsWith("- "))).toEqual([
+			"- **F-1 [high]** auth bypass · resolved in verify 1",
+			"- **V1-R1 [regression]** null check gone · resolved in verify 2",
+			"- **V2-R1 [regression]** guard reverted (undoes `F-1`)",
+		]);
+		expect(lines).toContain("### Open (not resolved)");
 	});
 
 	it("rule 4: Verified by lists every round's seats once, grouped by lens", () => {
@@ -456,7 +514,7 @@ describe("renderCloseoutComment", () => {
 		];
 		const text = renderCloseoutComment({
 			findings: rows,
-			resolved: rows,
+			resolved: items(rows, 1),
 			dismissed: [],
 			lowAdvisory: [],
 			seats: seatsOf(["holistic", ["terra"]]),
@@ -479,7 +537,7 @@ describe("renderCloseoutComment", () => {
 		);
 		const text = renderCloseoutComment({
 			findings: rows,
-			resolved: rows,
+			resolved: items(rows, 1),
 			dismissed: [],
 			lowAdvisory: [],
 			seats: seatsOf(["holistic", ["terra"]]),
@@ -528,7 +586,7 @@ describe("renderCloseoutComment", () => {
 				finding("F-2", "low", "@bot\n## ship it"),
 				finding("F-3", "high", "@team\n## kept"),
 			],
-			resolved: [finding("F-3", "high", "@team\n## kept")],
+			resolved: items([finding("F-3", "high", "@team\n## kept")], 1),
 			dismissed: [
 				{
 					id: "F-1",
@@ -581,15 +639,17 @@ describe("assembleCloseoutComment", () => {
 		finding("F-4", "high", "stale cache claim"),
 	];
 
-	it("lists the remaining findings as resolved and copies titles from the run", () => {
+	it("lists the findings a verify resolved and copies titles from the run", () => {
+		const links = [link("v-1", 1, { "F-1": "resolved", "F-2": "resolved" })];
 		const text = assembleCloseoutComment({
 			findings,
+			state: chainState(findings, links),
 			panel,
 			lost: [],
 			meta: { baseRef: "origin/main", baseOid, headOid },
 			dismissed: [{ id: "F-4", reason: "the cache key includes the tenant" }],
 			lowAdvisory: ["F-3"],
-			rounds: [round("v-1", 1, ["F-1", "F-2"])],
+			rounds: chainRounds(links, [round("v-1", 1, [])]),
 		});
 
 		expect(text).toContain(
@@ -615,6 +675,7 @@ describe("assembleCloseoutComment", () => {
 		expect(() =>
 			assembleCloseoutComment({
 				findings,
+				state: chainState(findings, []),
 				panel,
 				lost: [],
 				meta: { baseRef: "origin/main", baseOid, headOid },
@@ -629,6 +690,7 @@ describe("assembleCloseoutComment", () => {
 		expect(() =>
 			assembleCloseoutComment({
 				findings,
+				state: chainState(findings, []),
 				panel,
 				lost: [],
 				meta: { baseRef: "origin/main", baseOid, headOid },
@@ -642,6 +704,7 @@ describe("assembleCloseoutComment", () => {
 		expect(() =>
 			assembleCloseoutComment({
 				findings,
+				state: chainState(findings, []),
 				panel,
 				lost: [],
 				meta: { baseRef: "origin/main", baseOid, headOid },
@@ -652,6 +715,7 @@ describe("assembleCloseoutComment", () => {
 		expect(() =>
 			assembleCloseoutComment({
 				findings,
+				state: chainState(findings, []),
 				panel,
 				lost: [],
 				meta: { baseRef: "origin/main", baseOid, headOid },
@@ -662,43 +726,22 @@ describe("assembleCloseoutComment", () => {
 	});
 });
 
-describe("cardRounds (T505)", () => {
-	const r = (runId: string, n?: number) => round(runId, n, []);
-
-	it("counts the card's own verify last, and only the posted rounds before it", () => {
-		const posted = [r("v-1", 1), r("v-2", 2), r("v-3", 3)];
+describe("chainRounds", () => {
+	it("numbers each link by the round its comment posted as, and leaves an unposted link without one", () => {
+		const links = [
+			link("v-1", 1, { "F-1": "resolved" }),
+			link("v-2", 2, {}),
+			link("v-3", 3, {}),
+		];
 		expect(
-			cardRounds(posted, r("v-2")).map((row) => [row.runId, row.round]),
+			chainRounds(links, [round("v-1", 1, []), round("other", 2, [])], {
+				runId: "v-3",
+				round: 3,
+			}).map((row) => [row.runId, row.round, [...row.resolved]]),
 		).toEqual([
-			["v-1", 1],
-			// The card's own verify keeps the number it posted as.
-			["v-2", 2],
+			["v-1", 1, ["F-1"]],
+			["v-2", undefined, []],
+			["v-3", 3, []],
 		]);
-		expect(
-			cardRounds(posted, r("v-4", 4)).map((row) => [row.runId, row.round]),
-		).toEqual([
-			["v-1", 1],
-			["v-2", 2],
-			["v-3", 3],
-			["v-4", 4],
-		]);
-	});
-
-	it("a verify that never posted counts after the posted rounds made before it, with no number (R-3)", () => {
-		const at = (hour: number) =>
-			`2026-11-14T${String(hour).padStart(2, "0")}-00-00-000Z-main-abc`;
-		const posted = [r(at(10), 1), r(at(12), 2)];
-		expect(
-			cardRounds(posted, r(at(11))).map((row) => [row.runId, row.round]),
-		).toEqual([
-			[at(10), 1],
-			[at(11), undefined],
-		]);
-		// A run id with no creation time cannot be ordered: nothing posted
-		// counts before it.
-		expect(cardRounds(posted, r("v-9")).map((row) => row.runId)).toEqual([
-			"v-9",
-		]);
-		expect(cardRounds([r("v-1", 1)], undefined)).toHaveLength(1);
 	});
 });

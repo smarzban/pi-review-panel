@@ -17,15 +17,6 @@ import type { SeatSpec } from "../seat/sdk-session.js";
 import type { VerificationResult } from "../seat/verification-schema.js";
 import { inertLine } from "./inert-text.js";
 import {
-	assertChainJudgment,
-	type ChainItem,
-	type ChainLink,
-	chainState,
-	type JudgmentRow,
-	loadChainPrior,
-	regressionId,
-} from "./verify-chain.js";
-import {
 	complete,
 	reserve,
 	sealRecord,
@@ -35,6 +26,15 @@ import {
 import { DEFAULT_SEAT_BUDGET_MS, HEARTBEAT_INTERVAL_MS } from "./scheduler.js";
 import { pinSnapshot } from "./snapshot.js";
 import type { PlannedSeat } from "./types.js";
+import {
+	assertChainJudgment,
+	type ChainItem,
+	type ChainLink,
+	chainState,
+	type JudgmentRow,
+	loadChainPrior,
+	regressionId,
+} from "./verify-chain.js";
 
 const VERIFY_LENS = "fix-verification";
 export const DEFAULT_VERIFY_SEATS = 1;

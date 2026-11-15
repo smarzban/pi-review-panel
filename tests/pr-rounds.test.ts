@@ -28,6 +28,7 @@ import { validateConfig } from "../src/config/schema.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { RunVerifyResult } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
+import { chainState, loadVerifyChain } from "../src/run/verify-chain.js";
 import {
 	parseJsonPages,
 	postCloseoutComment,
@@ -350,6 +351,8 @@ function writeVerifyRecord(
 		 */
 		votes?: Array<{ seat: { rosterId: string; lens: string }; items?: Item[] }>;
 		headOid?: string;
+		/** Its place in the chain; absent, a verify written before chaining. */
+		chain?: { previousRunId: string; link: number };
 	} = {},
 ): void {
 	const recordPath = path.join(repo, ".review-panel", "runs", runId);
@@ -360,7 +363,10 @@ function writeVerifyRecord(
 			runId,
 			kind: options.kind ?? "verify",
 			priorRunId,
-			...(options.headOid === undefined ? {} : { headOid: options.headOid }),
+			...(options.chain ?? {}),
+			// A real verify names the commit it checked: here the one before
+			// HEAD, so a verify at HEAD can chain from it.
+			headOid: options.headOid ?? git(repo, ["rev-parse", "HEAD~1"]),
 		}),
 	);
 	const full = (seat: { rosterId: string; lens: string }) => ({
@@ -483,6 +489,20 @@ function verifyRun(
 }
 
 const REVIEW_ID = "20261113-review";
+
+/**
+ * What a verify chains from: the latest verify of the review, or the review
+ * itself before any. The tests here are about posting, not the chain.
+ */
+function latest(repo: string, review: string): string {
+	try {
+		return (
+			loadVerifyChain(repo, review, TEST_RECORD_KEY).at(-1)?.runId ?? review
+		);
+	} catch {
+		return review;
+	}
+}
 
 describe("a review round posts to the PR whose head it reviewed", () => {
 	it("posts exactly one new review comment with the run id in its hidden marker and no local path", async () => {
@@ -814,8 +834,9 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1", "F-2"],
 					dismissed: [{ id: "F-3", reason: "by design, see ADR 4" }],
@@ -899,8 +920,9 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["G-1"],
 					dismissed: [{ id: "G-2", reason: "by design, see ADR 4" }],
@@ -942,8 +964,9 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			await expect(
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 						dismissed: [{ id: "F-9", reason: "dup" }],
@@ -971,8 +994,9 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			await expect(
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-2"],
 						lowAdvisory: ["F-1"],
@@ -983,8 +1007,9 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			await expect(
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-2"],
 						dismissed: [{ id: "F-2", reason: "x" }],
@@ -996,7 +1021,7 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 	});
 });
 
-describe("a clean verify also posts the close-out card, once per review", () => {
+describe("a clean verify with --close-out also posts the close-out card, once per review", () => {
 	const ROWS: Row[] = [
 		{ id: "F-1", severity: "high" },
 		{ id: "F-2", severity: "medium" },
@@ -1014,8 +1039,9 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 					dismissed: [{ id: "F-2", reason: "out of scope for this PR" }],
@@ -1061,8 +1087,9 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 					dismissed: [{ id: "F-2", reason: "out of scope for this PR" }],
@@ -1137,8 +1164,9 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			});
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 					dismissed: [{ id: "F-2", reason: "out of scope" }],
@@ -1169,8 +1197,9 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 					lowAdvisory: ["F-3"],
@@ -1200,8 +1229,9 @@ describe("a clean verify also posts the close-out card, once per review", () => 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 					dismissed: [{ id: "F-2", reason: "out of scope" }],
@@ -1470,8 +1500,9 @@ describe("edge cases of the lookup and the run", () => {
 			writeReviewRecord(repo, REVIEW_ID, [{ id: "F-1", severity: "high" }]);
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -1614,12 +1645,13 @@ function expectInert(body: string): void {
 			continue;
 		}
 		// The tool's own bold labels: `**Seats:**` and the `- **F-1 …**` id,
-		// the close-out's `**3 findings**` and `**2 resolved**` counts, and
+		// the close-out's `**3 findings**`, `**2 resolved**` and `**1 open**`
+		// counts, and
 		// its links to this PR's own comments.
 		const line = raw
 			.replace(/^(\s*)\*\*([A-Z][A-Za-z ]*:)\*\*/, "$1$2")
 			.replace(/^- \*\*((?:[^*\\]|\\.)*?)\*\*/, "- $1")
-			.replace(/\*\*(\d+ (?:findings?|resolved))\*\*/g, "$1")
+			.replace(/\*\*(\d+ (?:findings?|resolved|open))\*\*/g, "$1")
 			.replace(
 				/ · \[(?:review|verify \d+)\]\(https:\/\/github\.com\/smarzban\/demo\/pull\/12#issuecomment-\d+\)/g,
 				"",
@@ -1641,7 +1673,7 @@ function expectInert(body: string): void {
 		expect(unpaired).not.toMatch(/(?<!\\)[<>*_~|&`]/);
 		expect(unpaired).not.toMatch(/(?<!\\)!\\?\[/);
 		expect(outside).not.toMatch(/www\./i);
-		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low)\])/);
+		expect(outside).not.toMatch(/(?<!\\)\[(?!(high|medium|low|regression)\])/);
 		expect(outside).not.toMatch(/(?<!\\)\]\(/);
 		expect(outside).not.toMatch(/#(?!\u200D)/);
 		expect(outside).not.toMatch(/GH-(?!\u200D)/i);
@@ -1708,15 +1740,16 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 		});
 	});
 
-	it("the verify comment and the automatic close-out card, with a hostile head ref", async () => {
+	it("the verify comment and the close-out card, with a hostile head ref", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
 			git(repo, ["branch", HOSTILE_REF]);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: HOSTILE_REF,
 					keptFindingIds: ["F-1"],
 					dismissed: [{ id: "F-2", reason: `r ${HOSTILE}` }],
@@ -1766,8 +1799,9 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -1800,6 +1834,7 @@ describe("fix round 1: one sanitizer for every posted body", () => {
 		);
 		const card = assembleCloseoutComment({
 			findings: ROWS.map(stamped),
+			state: chainState(ROWS.map(stamped), []),
 			panel: {
 				runId: "r",
 				baseRef: HOSTILE_REF,
@@ -1843,8 +1878,9 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1", "F-2"],
 				},
@@ -1888,8 +1924,9 @@ describe("fix round 1: kept findings of any severity (M3)", () => {
 				const gh = fakeGh({ pulls: [openPr(12, head)] });
 				const result = await verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1", "F-3"],
 						...(listed ? { lowAdvisory: ["F-3"] } : {}),
@@ -1934,8 +1971,9 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 			text = textOf(
 				await verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 					},
@@ -2015,6 +2053,7 @@ describe("fix round 1: the close-out needs full coverage and agreement (M4)", ()
 		);
 		const card = assembleCloseoutComment({
 			findings: ROWS.map(stamped),
+			state: chainState(ROWS.map(stamped), []),
 			panel: {
 				runId: "r",
 				baseRef: "main",
@@ -2068,8 +2107,9 @@ describe("fix round 1: the comment listing is read across pages (F-2)", () => {
 				const gh = fakeGh({ pulls: [openPr(12, head)], commentsRaw: raw });
 				const result = await verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 					},
@@ -2175,8 +2215,9 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 			const run = (id: string) =>
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 					},
@@ -2217,8 +2258,9 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 			const verify = (gh: { runGh: GhRunner }, id: string) =>
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 					},
@@ -2254,8 +2296,9 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -2286,8 +2329,9 @@ describe("fix round 1: verify N counts only verifies that posted (L4, L7)", () =
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -2355,8 +2399,9 @@ describe("fix round 1: verify N counts only verifies that posted (L4, L7)", () =
 			const verify = (id: string, runGh: GhRunner) =>
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 					},
@@ -2421,8 +2466,9 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 				const gh = fakeGh({ pulls: [openPr(12, head)], comments: [comment] });
 				const result = await verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 					},
@@ -2448,8 +2494,9 @@ describe("fix round 1: the dedupe guard's filters (F-9, L7)", () => {
 			await expect(
 				verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 						lowAdvisory: ["F-9"],
@@ -2484,8 +2531,9 @@ describe("fix round 1: verify honours the posting gates (F-5)", () => {
 			text = textOf(
 				await verifyAction(
 					{
+						closeOut: true,
 						repoDir: repo,
-						priorRunId: REVIEW_ID,
+						priorRunId: latest(repo, REVIEW_ID),
 						head: "HEAD",
 						keptFindingIds: ["F-1"],
 						...input,
@@ -2541,8 +2589,9 @@ describe("fix round 1: gh runs in the reviewed repository (F-7)", () => {
 			writeReviewRecord(repo, REVIEW_ID, rows);
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -2604,8 +2653,9 @@ describe("fix round 1: the reply stays under its cap with the PR lines (F-8)", (
 			});
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -2670,8 +2720,9 @@ function verifyOnce(
 ) {
 	return verifyAction(
 		{
+			closeOut: true,
 			repoDir: repo,
-			priorRunId: reviewId,
+			priorRunId: latest(repo, reviewId),
 			head: "HEAD",
 			keptFindingIds: ["F-1"],
 		},
@@ -3066,8 +3117,9 @@ describe("fix round 3: round markers and claims through the verify action", () =
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 				},
@@ -3243,8 +3295,9 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_ID,
+					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1", "F-2"],
 				},
@@ -3345,6 +3398,7 @@ describe("fix round 2: the manual card is capped too (L5)", () => {
 		}));
 		const card = assembleCloseoutComment({
 			findings: rows.map(stamped),
+			state: chainState(rows.map(stamped), []),
 			panel: {
 				runId: "r",
 				baseRef: "main",
@@ -3549,7 +3603,7 @@ describe("T498: readable PR comments", () => {
 		});
 	});
 
-	it("the verify comment and the automatic close-out: no visible run id, bold labels, the marker last", async () => {
+	it("the verify comment and the close-out: no visible run id, bold labels, the marker last", async () => {
 		await withRepository(async (repo, head) => {
 			const rows: Row[] = [
 				{ id: "F-1", severity: "high" },
@@ -3559,8 +3613,9 @@ describe("T498: readable PR comments", () => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
 				{
+					closeOut: true,
 					repoDir: repo,
-					priorRunId: REVIEW_RUN,
+					priorRunId: latest(repo, REVIEW_RUN),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
 					dismissed: [{ id: "F-2", reason: "by design (ADR 4)" }],
@@ -3585,6 +3640,7 @@ describe("T498: readable PR comments", () => {
 					`\`bbbbbbb\` → \`${head.slice(0, 7)}\``,
 					"1/1 voted · F-1 resolved · no regressions",
 					"**Seats:** fix-verification (terra)",
+					"**Open after this round:** none",
 					"",
 					"### Kept",
 					"- **F-1 resolved** — F-1 title — `src/a.ts`: fixed",
@@ -3629,6 +3685,7 @@ describe("T498: readable PR comments", () => {
 		);
 		const card = assembleCloseoutComment({
 			findings: [stamped({ id: "F-1", severity: "low" })],
+			state: chainState([stamped({ id: "F-1", severity: "low" })], []),
 			panel: {
 				runId: REVIEW_RUN,
 				baseRef: "main",
@@ -3969,13 +4026,29 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		}
 	}
 
+	/**
+	 * A verify at HEAD, chained from the latest verify, that keeps every
+	 * high/medium id still open or never kept, and resolves each one.
+	 */
 	async function cleanVerify(repo: string, gh: ReturnType<typeof fakeGh>) {
+		const prior = latest(repo, REVIEW_ID);
+		const state = chainState(
+			ROWS.map(stamped),
+			loadVerifyChain(repo, REVIEW_ID, TEST_RECORD_KEY),
+		);
+		const kept = ROWS.filter((row) => {
+			const status = state.items.get(row.id)?.state.status;
+			return (
+				status === "open" || (status === "untracked" && row.severity !== "low")
+			);
+		});
 		return verifyAction(
 			{
+				closeOut: true,
 				repoDir: repo,
-				priorRunId: REVIEW_ID,
+				priorRunId: prior,
 				head: "HEAD",
-				keptFindingIds: ["F-1", "F-2"],
+				keptFindingIds: kept.map((row) => row.id),
 				lowAdvisory: ["F-3"],
 			},
 			{
@@ -3984,8 +4057,8 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 						repo,
 						"v-1",
 						REVIEW_ID,
-						[ROWS[0] as Row, ROWS[1] as Row],
-						[resolved("F-1"), resolved("F-2")],
+						kept,
+						kept.map((row) => resolved(row.id)),
 					),
 				}),
 			},
@@ -4083,27 +4156,44 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		});
 	});
 
-	for (const [name, options] of [
-		["an unsigned round-1.posted", { markerSigned: false }],
-		["an unsigned verify record", { recordSigned: false }],
-	] as const) {
-		it(`${name} is no round: not counted, numbered, listed or linked`, async () => {
-			await withRepository(async (repo, head) => {
-				writeReviewRecord(repo, REVIEW_ID, ROWS);
-				earlierVerify(repo, options);
-				const gh = fakeGh({
-					pulls: [openPr(12, head)],
-					comments: [reviewComment, verifyOneComment],
-				});
-				await cleanVerify(repo, gh);
-				const card = bodyOf(posts(gh.calls)[1]);
-				expect(card).toContain("**2 resolved** in 1 verify round");
-				expect(card).toContain("**Verified by:** fix-verification (terra)\n");
-				expect(card).not.toContain("verify 1");
-				expect(card).not.toContain("glm");
+	it("an unsigned verify record is no round: not counted, numbered, listed or linked", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			earlierVerify(repo, { recordSigned: false });
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [reviewComment, verifyOneComment],
 			});
+			await cleanVerify(repo, gh);
+			const card = bodyOf(posts(gh.calls)[1]);
+			expect(card).toContain("**2 resolved** in 1 verify round");
+			expect(card).toContain("**Verified by:** fix-verification (terra)\n");
+			expect(card).not.toContain("verify 1");
+			expect(card).not.toContain("glm");
 		});
-	}
+	});
+
+	it("an unsigned round-1.posted gives its verify no number: it is still a link of the chain, unnumbered and unlinked", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			earlierVerify(repo, { markerSigned: false });
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [reviewComment, verifyOneComment],
+			});
+			await cleanVerify(repo, gh);
+			const [verifyPost, card] = posts(gh.calls).map(bodyOf);
+			// v-0's own signed round.posted still counts it on the PR, but the
+			// review's unsigned round-1.posted gives it no number on the card.
+			expect(verifyPost?.split("\n")[0]).toBe("## Review panel · verify 2");
+			expect(card).toContain("**2 resolved** in 2 verify rounds");
+			expect(card).toContain("- **F-2 [medium]** missing timeout · resolved\n");
+			expect(card).toContain(
+				"- **F-1 [high]** auth bypass · resolved in verify 2",
+			);
+			expect(card).not.toContain(`${PR}#issuecomment-6`);
+		});
+	});
 
 	const GLM = { rosterId: "glm", lens: "fix-verification" };
 	const OPUS = { rosterId: "opus", lens: "fix-verification" };
@@ -4130,10 +4220,12 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		});
 	});
 
-	it("an id resolved, then not, then resolved again reads the round after which it stayed resolved (R-1)", async () => {
+	it("of verifies written before chaining, only the newest is a link: an id reads the round of the link that resolved it (R-1)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
 			const reviewDir = reviewRecordDir(repo);
+			// v-0 resolved both, but v-a, newer, re-checked the review and
+			// split on F-1: v-a is the first link, v-0 is superseded.
 			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
 				votes: [{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] }],
 			});
@@ -4148,15 +4240,15 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await cleanVerify(repo, gh);
 			const card = bodyOf(closeoutPosts(gh.calls)[0]);
-			expect(card).toContain("**2 resolved** in 3 verify rounds");
-			// Verify 2 split on F-1, so only verify 3 resolved it for good.
+			expect(card).toContain("**2 resolved** in 2 verify rounds");
+			// v-a split on F-1 and never answered for F-2: verify 3 resolved both.
 			expect(card).toContain(
 				"- **F-1 [high]** auth bypass · resolved in verify 3",
 			);
-			// Verify 2 said nothing of F-2, so verify 1 still stands.
 			expect(card).toContain(
-				"- **F-2 [medium]** missing timeout · resolved in verify 1",
+				"- **F-2 [medium]** missing timeout · resolved in verify 3",
 			);
+			expect(card).not.toContain("resolved in verify 1");
 		});
 	});
 
@@ -4176,7 +4268,9 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			expect(card).toContain(
 				"**Verified by:** fix-verification (glm, terra)\n",
 			);
-			expect(card).not.toContain("opus");
+			// A lost seat is lost coverage, named as such, never a voter.
+			expect(card).toContain("**Lost:** opus/fix-verification (verify)\n");
+			expect(card.match(/opus/gu)).toHaveLength(1);
 		});
 	});
 
@@ -4189,6 +4283,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					{ seat: OPUS },
 				],
 				posted: false,
+				headOid: git(repo, ["rev-parse", "HEAD"]),
 			});
 			const gh = fakeGh({
 				comments: [],
@@ -4220,7 +4315,9 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			expect(textOf(result)).toContain(
 				"**Verified by:** fix-verification (glm)\n",
 			);
-			expect(bodyOf(posts(gh.calls)[0])).not.toContain("opus");
+			expect(bodyOf(posts(gh.calls)[0]).match(/^.*opus.*$/gmu)).toEqual([
+				"**Lost:** opus/fix-verification (verify)",
+			]);
 		});
 	});
 
@@ -4236,7 +4333,11 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				pr: 12,
 				round: 7,
 			});
-			writeVerifyRecord(repo, "v-a", REVIEW_ID, { items: [] });
+			// The next link of the chain, after v-0.
+			writeVerifyRecord(repo, "v-a", REVIEW_ID, {
+				items: [],
+				chain: { previousRunId: "v-0", link: 2 },
+			});
 			// Signed, with no round field at all.
 			writeSignedMarker(reviewDir, "round-3.posted", "v-a", { pr: 12 });
 			const gh = fakeGh({
@@ -4363,17 +4464,11 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			});
 		});
 
-		it("counts only the posted rounds made before an unposted named verify (R-3)", async () => {
+		it("refuses a named verify that a newer one superseded, naming the latest (R-3)", async () => {
 			await withRepository(async (repo) => {
 				writeReviewRecord(repo, REVIEW_ID, ROWS);
-				const reviewDir = reviewRecordDir(repo);
-				const EARLY = "2026-11-14T17-00-00-000Z-main-e52d7adb77ca8882";
 				const NAMED = "2026-11-14T18-00-00-000Z-main-e52d7adb77ca8882";
 				const LATE = "2026-11-14T19-00-00-000Z-main-e52d7adb77ca8882";
-				writeVerifyRecord(repo, EARLY, REVIEW_ID, {
-					votes: [{ seat: GLM, items: [resolved("F-2")] }],
-				});
-				writeSignedMarker(reviewDir, "round-1.posted", EARLY, { pr: 12 });
 				writeVerifyRecord(repo, NAMED, REVIEW_ID, {
 					votes: [{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] }],
 					posted: false,
@@ -4381,22 +4476,14 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				writeVerifyRecord(repo, LATE, REVIEW_ID, {
 					votes: [{ seat: OPUS, items: [resolved("F-1")] }],
 				});
-				writeSignedMarker(reviewDir, "round-2.posted", LATE, { pr: 12 });
 				const gh = fakeGh({
 					comments: [],
 					prs: openPrAt(git(repo, ["rev-parse", "HEAD"])),
 				});
-				const { body } = await manual(repo, gh, { verifyRunId: NAMED });
-				expect(body).toContain("**2 resolved** in 2 verify rounds");
-				expect(body).toContain("**Verified by:** fix-verification (glm)\n");
-				expect(body).toMatch(
-					/^- \*\*F-1 \[high\]\*\* auth bypass · resolved$/m,
+				await expect(manual(repo, gh, { verifyRunId: NAMED })).rejects.toThrow(
+					`comment refused: verify run "${NAMED}" is not the latest verify of review "${REVIEW_ID}"; pass the latest, "${LATE}"`,
 				);
-				expect(body).toContain(
-					"- **F-2 [medium]** missing timeout · resolved in verify 1",
-				);
-				expect(body).not.toContain("verify 2");
-				expect(body).not.toContain("opus");
+				expect(posts(gh.calls)).toHaveLength(0);
 			});
 		});
 

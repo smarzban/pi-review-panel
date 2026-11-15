@@ -17,14 +17,15 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 
-import { runIdRecency, UNKNOWN_RECENCY } from "../run/prior-records.js";
 import { NEW_REVIEW_FIX, resolvePriorRunId } from "../run/prior-run.js";
 import { COMPLETE_MARKER, readSignedRecord } from "../run/record.js";
-import type {
-	CloseoutLinks,
-	CloseoutSeat,
-	CloseoutVerifyRound,
-} from "./closeout-comment.js";
+import {
+	type ChainLink,
+	dispositionsOf,
+	resolvedIdsOf,
+	votedSeatsOf,
+} from "../run/verify-chain.js";
+import type { CloseoutLinks, CloseoutVerifyRound } from "./closeout-comment.js";
 import { prCommentUrl, runMarkerIds } from "./posted-text.js";
 import { isRealFile, signedMarkerVerifyRunId } from "./round-claim.js";
 
@@ -34,89 +35,6 @@ const POSTED_ROUND = /^round-([1-9]\d{0,8})\.posted$/u;
 
 /** A verify round with the head its signed meta names. */
 export type SignedVerifyRound = CloseoutVerifyRound & { headOid?: string };
-
-type VoteRow = {
-	outcome?: {
-		kind?: unknown;
-		result?: { items?: Array<{ id?: unknown; disposition?: unknown }> };
-	};
-};
-
-/** Per id, every disposition a voting seat gave it. */
-export function dispositionsOf(outcomes: unknown): Map<string, Set<string>> {
-	const dispositions = new Map<string, Set<string>>();
-	if (!Array.isArray(outcomes)) {
-		return dispositions;
-	}
-	for (const row of outcomes as VoteRow[]) {
-		if (row?.outcome?.kind !== "voted") {
-			continue;
-		}
-		const items = row.outcome.result?.items;
-		for (const item of Array.isArray(items) ? items : []) {
-			if (
-				typeof item?.id !== "string" ||
-				typeof item.disposition !== "string"
-			) {
-				continue;
-			}
-			const seen = dispositions.get(item.id) ?? new Set<string>();
-			seen.add(item.disposition);
-			dispositions.set(item.id, seen);
-		}
-	}
-	return dispositions;
-}
-
-/**
- * The ids a verify marked resolved: at least one voting seat answered, and
- * every answer was `resolved` (the rule `comment` checks a verify by).
- */
-export function resolvedIdsOf(
-	dispositions: ReadonlyMap<string, ReadonlySet<string>>,
-): Set<string> {
-	const resolved = new Set<string>();
-	for (const [id, states] of dispositions) {
-		if (states.size === 1 && states.has("resolved")) {
-			resolved.add(id);
-		}
-	}
-	return resolved;
-}
-
-/** The ids a voting seat answered without every answer being `resolved`. */
-export function unresolvedIdsOf(
-	dispositions: ReadonlyMap<string, ReadonlySet<string>>,
-): Set<string> {
-	const unresolved = new Set<string>();
-	for (const [id, states] of dispositions) {
-		if (states.size !== 1 || !states.has("resolved")) {
-			unresolved.add(id);
-		}
-	}
-	return unresolved;
-}
-
-/**
- * The seats that voted in a verify, as roster id and lens, from its
- * outcomes: a lost seat (any other outcome) is not one.
- */
-export function votedSeatsOf(outcomes: unknown): CloseoutSeat[] {
-	if (!Array.isArray(outcomes)) {
-		return [];
-	}
-	return outcomes.flatMap(
-		(row: {
-			seat?: { rosterId?: unknown; lens?: unknown };
-			outcome?: { kind?: unknown };
-		}) =>
-			row?.outcome?.kind === "voted" &&
-			typeof row.seat?.rosterId === "string" &&
-			typeof row.seat.lens === "string"
-				? [{ rosterId: row.seat.rosterId, lens: row.seat.lens }]
-				: [],
-	);
-}
 
 function parse(text: string | undefined): unknown {
 	try {
@@ -156,7 +74,6 @@ export function verifyRoundOf(
 		runId,
 		seats: votedSeatsOf(verification.outcomes),
 		resolved: resolvedIdsOf(dispositions),
-		unresolved: unresolvedIdsOf(dispositions),
 		...(typeof meta.headOid === "string" ? { headOid: meta.headOid } : {}),
 	};
 }
@@ -236,42 +153,30 @@ export function postedVerifyRounds(
 }
 
 /**
- * The time a run was reserved, from its id, or undefined when the id
- * carries none. A record's run id is bound into its `record.mac`, so this
- * is the signed order of the owner's runs.
+ * The chain's links as the card's rounds, in link order: each with the
+ * `verify N` its comment posted as, when it posted (from the signed
+ * `round-<N>.posted` markers), its voting seats, the ids it resolved and its
+ * lost seats.
  */
-function reservedAt(runId: string): number | undefined {
-	const at = runIdRecency(runId);
-	return at === UNKNOWN_RECENCY ? undefined : at;
-}
-
-/**
- * The rounds a card counts: the card's own verify last, and before it each
- * posted round that came before it. A posted round after the card's own is
- * not counted: by number when the card's verify posted, otherwise by when
- * each run was reserved (its run id), and a run whose id carries no time
- * cannot be placed before it. The card's own verify keeps its posted
- * number, when it has one, from either list.
- */
-export function cardRounds(
+export function chainRounds(
+	links: readonly ChainLink[],
 	posted: readonly CloseoutVerifyRound[],
-	own: CloseoutVerifyRound | undefined,
+	own?: { runId: string; round: number },
 ): CloseoutVerifyRound[] {
-	if (own === undefined) {
-		return [...posted];
+	const numbers = new Map(posted.map((row) => [row.runId, row.round]));
+	if (own !== undefined) {
+		numbers.set(own.runId, own.round);
 	}
-	const round =
-		own.round ?? posted.find((row) => row.runId === own.runId)?.round;
-	const ownAt = reservedAt(own.runId);
-	const before = (row: CloseoutVerifyRound): boolean => {
-		if (round !== undefined) {
-			return (row.round ?? 0) < round;
-		}
-		const rowAt = reservedAt(row.runId);
-		return ownAt !== undefined && rowAt !== undefined && rowAt < ownAt;
-	};
-	const others = posted.filter((row) => row.runId !== own.runId && before(row));
-	return [...others, { ...own, ...(round === undefined ? {} : { round }) }];
+	return links.map((link) => {
+		const round = numbers.get(link.runId);
+		return {
+			runId: link.runId,
+			...(round === undefined ? {} : { round }),
+			seats: link.seats,
+			resolved: link.resolved,
+			lost: link.lost,
+		};
+	});
 }
 
 type ListedComment = {

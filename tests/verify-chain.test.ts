@@ -95,7 +95,10 @@ function writeReview(
 		path.join(recordPath, "meta.json"),
 		JSON.stringify({ runId, baseRef: "main", baseOid, headOid }),
 	);
-	writeFileSync(path.join(recordPath, "findings.json"), JSON.stringify(FINDINGS));
+	writeFileSync(
+		path.join(recordPath, "findings.json"),
+		JSON.stringify(FINDINGS),
+	);
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	signReviewRecord(recordPath);
 }
@@ -255,14 +258,19 @@ describe("a three-round chain", () => {
 
 		// Verify 2 chains from verify 1: its diff base is verify 1's head, and
 		// it checks only the open set: F-2 (still present) and V1-R1.
-		const v2 = await verify(runIdOf(v1), fix2, ["F-2", "V1-R1"], [
-			{
-				items: [
-					{ id: "F-2", disposition: "still present" },
-					{ id: "V1-R1", disposition: "resolved" },
-				],
-			},
-		]);
+		const v2 = await verify(
+			runIdOf(v1),
+			fix2,
+			["F-2", "V1-R1"],
+			[
+				{
+					items: [
+						{ id: "F-2", disposition: "still present" },
+						{ id: "V1-R1", disposition: "resolved" },
+					],
+				},
+			],
+		);
 		expect(v2.link).toBe(2);
 		expect(v2.priorRunId).toBe(REVIEW);
 		expect(v2.previousRunId).toBe(runIdOf(v1));
@@ -278,25 +286,24 @@ describe("a three-round chain", () => {
 			link: 2,
 		});
 
-		const v3 = await verify(runIdOf(v2), fix3, ["F-2"], [
-			{ items: [{ id: "F-2", disposition: "resolved" }] },
-		]);
+		const v3 = await verify(
+			runIdOf(v2),
+			fix3,
+			["F-2"],
+			[{ items: [{ id: "F-2", disposition: "resolved" }] }],
+		);
 		expect(v3.link).toBe(3);
 		expect(specs[2]?.baseRef).toBe(fix2);
 		expect(specs[2]?.expectedIds).toEqual(["F-2"]);
 
 		const links = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY);
-		expect(links.map((row) => row.runId)).toEqual(
-			[v1, v2, v3].map(runIdOf),
-		);
+		expect(links.map((row) => row.runId)).toEqual([v1, v2, v3].map(runIdOf));
 		const state = chainState(FINDINGS, links);
 		expect(state.open).toEqual([]);
 		const resolvedIn = Object.fromEntries(
 			[...state.items.values()].map((item) => [
 				item.id,
-				item.state.status === "resolved"
-					? item.state.link
-					: item.state.status,
+				item.state.status === "resolved" ? item.state.link : item.state.status,
 			]),
 		);
 		// The round that resolved it in the chain, not a vote across rounds.
@@ -364,11 +371,15 @@ describe("what a chained verify may name", () => {
 		).rejects.toThrow(
 			`Verify refused: F-1 was resolved by verify run "${runIdOf(v1)}"; it is not judged again`,
 		);
-		const v2 = await verify(runIdOf(v1), commits[3] as string, [], [
-			{ items: [] },
-		], {
-			dismissed: [{ id: "F-2", reason: "out of scope for this PR" }],
-		});
+		const v2 = await verify(
+			runIdOf(v1),
+			commits[3] as string,
+			[],
+			[{ items: [] }],
+			{
+				dismissed: [{ id: "F-2", reason: "out of scope for this PR" }],
+			},
+		);
 		const verification = JSON.parse(
 			readFileSync(path.join(v2.recordPath, "verification.json"), "utf8"),
 		) as { dismissed: unknown };
@@ -393,12 +404,17 @@ describe("what a chained verify may name", () => {
 	});
 
 	it("refuses a regression listed as low/advisory: it has no severity", async () => {
-		const v1 = await verify(REVIEW, commits[2] as string, ["F-1"], [
-			{
-				items: [{ id: "F-1", disposition: "resolved" }],
-				regressions: [REGRESSION],
-			},
-		]);
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			[
+				{
+					items: [{ id: "F-1", disposition: "resolved" }],
+					regressions: [REGRESSION],
+				},
+			],
+		);
 		await expect(
 			verify(runIdOf(v1), commits[3] as string, [], [], {
 				lowAdvisory: ["V1-R1"],
@@ -411,29 +427,39 @@ describe("what a chained verify may name", () => {
 
 describe("the undo guard", () => {
 	it("tells a chained verify every id an earlier round resolved, and records a regression that undoes one", async () => {
-		const v1 = await verify(REVIEW, commits[2] as string, ["F-1", "F-2"], [
-			{
-				items: [
-					{ id: "F-1", disposition: "resolved" },
-					{ id: "F-2", disposition: "still present" },
-				],
-			},
-		]);
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1", "F-2"],
+			[
+				{
+					items: [
+						{ id: "F-1", disposition: "resolved" },
+						{ id: "F-2", disposition: "still present" },
+					],
+				},
+			],
+		);
 		// The next fix reverts F-1's fix while fixing F-2.
-		const v2 = await verify(runIdOf(v1), commits[3] as string, ["F-2"], [
-			{
-				items: [{ id: "F-2", disposition: "resolved" }],
-				regressions: [
-					{
-						file: "src/F-1.ts",
-						line: 1,
-						title: "the F-2 fix reverts the F-1 guard",
-						evidence: "the guard line is gone again",
-						undoes: "F-1",
-					},
-				],
-			},
-		]);
+		const v2 = await verify(
+			runIdOf(v1),
+			commits[3] as string,
+			["F-2"],
+			[
+				{
+					items: [{ id: "F-2", disposition: "resolved" }],
+					regressions: [
+						{
+							file: "src/F-1.ts",
+							line: 1,
+							title: "the F-2 fix reverts the F-1 guard",
+							evidence: "the guard line is gone again",
+							undoes: "F-1",
+						},
+					],
+				},
+			],
+		);
 		expect(specs[1]?.undoableIds).toEqual(["F-1"]);
 		expect(specs[1]?.scopingNote).toContain(
 			"Earlier rounds marked these ids resolved: F-1.",
@@ -516,9 +542,12 @@ function writeLink(
 
 describe("the chain refuses what is not one line of signed links", () => {
 	it("refuses verifying the review again once it has a verify, naming the latest", async () => {
-		const v1 = await verify(REVIEW, commits[2] as string, ["F-1"], [
-			{ items: [{ id: "F-1", disposition: "still present" }] },
-		]);
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			[{ items: [{ id: "F-1", disposition: "still present" }] }],
+		);
 		await expect(
 			verify(REVIEW, commits[3] as string, ["F-1"], []),
 		).rejects.toThrow(
@@ -527,12 +556,18 @@ describe("the chain refuses what is not one line of signed links", () => {
 	});
 
 	it("refuses a stale prior: a verify that is not the latest, naming the latest", async () => {
-		const v1 = await verify(REVIEW, commits[2] as string, ["F-1"], [
-			{ items: [{ id: "F-1", disposition: "still present" }] },
-		]);
-		const v2 = await verify(runIdOf(v1), commits[3] as string, ["F-1"], [
-			{ items: [{ id: "F-1", disposition: "still present" }] },
-		]);
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			[{ items: [{ id: "F-1", disposition: "still present" }] }],
+		);
+		const v2 = await verify(
+			runIdOf(v1),
+			commits[3] as string,
+			["F-1"],
+			[{ items: [{ id: "F-1", disposition: "still present" }] }],
+		);
 		await expect(
 			verify(runIdOf(v1), commits[4] as string, ["F-1"], []),
 		).rejects.toThrow(
@@ -541,12 +576,18 @@ describe("the chain refuses what is not one line of signed links", () => {
 	});
 
 	it("refuses a fork: two links chained from one record", async () => {
-		const v1 = await verify(REVIEW, commits[2] as string, ["F-1"], [
-			{ items: [{ id: "F-1", disposition: "still present" }] },
-		]);
-		const v2 = await verify(runIdOf(v1), commits[3] as string, ["F-1"], [
-			{ items: [{ id: "F-1", disposition: "still present" }] },
-		]);
+		const v1 = await verify(
+			REVIEW,
+			commits[2] as string,
+			["F-1"],
+			[{ items: [{ id: "F-1", disposition: "still present" }] }],
+		);
+		const v2 = await verify(
+			runIdOf(v1),
+			commits[3] as string,
+			["F-1"],
+			[{ items: [{ id: "F-1", disposition: "still present" }] }],
+		);
 		// A second verify that chained from verify 1 at the same time.
 		const twin = `${runIdOf(v2)}-twin`;
 		cpSync(v2.recordPath, path.join(path.dirname(v2.recordPath), twin), {
@@ -562,16 +603,17 @@ describe("the chain refuses what is not one line of signed links", () => {
 	});
 
 	it("refuses an unsigned link as the prior", async () => {
-		writeLink("2026-11-15T11-00-00-000Z-planted", REVIEW, {
-			previousRunId: REVIEW,
-			link: 1,
-		}, { signed: false });
+		writeLink(
+			"2026-11-15T11-00-00-000Z-planted",
+			REVIEW,
+			{
+				previousRunId: REVIEW,
+				link: 1,
+			},
+			{ signed: false },
+		);
 		expect(() =>
-			loadChainPrior(
-				repo,
-				"2026-11-15T11-00-00-000Z-planted",
-				TEST_RECORD_KEY,
-			),
+			loadChainPrior(repo, "2026-11-15T11-00-00-000Z-planted", TEST_RECORD_KEY),
 		).toThrow(
 			/Verify refused: verify run "2026-11-15T11-00-00-000Z-planted" is not signed by this owner's record key .*; run a new review/,
 		);
@@ -580,10 +622,15 @@ describe("the chain refuses what is not one line of signed links", () => {
 	});
 
 	it("refuses a gap: a link whose previous record is unsigned or missing", async () => {
-		writeLink("2026-11-15T11-00-00-000Z-v1", REVIEW, {
-			previousRunId: REVIEW,
-			link: 1,
-		}, { signed: false });
+		writeLink(
+			"2026-11-15T11-00-00-000Z-v1",
+			REVIEW,
+			{
+				previousRunId: REVIEW,
+				link: 1,
+			},
+			{ signed: false },
+		);
 		writeLink("2026-11-15T12-00-00-000Z-v2", REVIEW, {
 			previousRunId: "2026-11-15T11-00-00-000Z-v1",
 			link: 2,

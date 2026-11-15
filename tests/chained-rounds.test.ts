@@ -49,7 +49,11 @@ function finding(
 ): StampedFinding {
 	return {
 		id,
-		seat: { provider: "openai-codex", model: "gpt-5.6-terra", lens: "holistic" },
+		seat: {
+			provider: "openai-codex",
+			model: "gpt-5.6-terra",
+			lens: "holistic",
+		},
 		finding: { file: "src/cache.ts", line: 3, severity, title, evidence: "e" },
 	};
 }
@@ -131,7 +135,10 @@ beforeEach(() => {
 			],
 		}),
 	);
-	writeFileSync(path.join(recordPath, "findings.json"), JSON.stringify(FINDINGS));
+	writeFileSync(
+		path.join(recordPath, "findings.json"),
+		JSON.stringify(FINDINGS),
+	);
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	signReviewRecord(recordPath);
 	specs = [];
@@ -416,7 +423,9 @@ describe("--close-out", () => {
 	it("with ids still open: posts the verify comment, and says why the card is not posted", async () => {
 		const v1 = await round1();
 		const v2 = await round2(v1.runId, { closeOut: true });
-		expect(v2.reply).toContain("PR close-out: not posted (F-2 is still present)");
+		expect(v2.reply).toContain(
+			"PR close-out: not posted (F-2 is still present)",
+		);
 		expect(closeouts()).toEqual([]);
 	});
 
@@ -541,9 +550,7 @@ describe("comment when the owner stops the rounds", () => {
 		);
 		const open = lines.indexOf("### Open (not resolved)");
 		expect(open).toBeGreaterThan(0);
-		expect(lines[open + 1]).toBe(
-			"- **F-2 [high]** token compared with ===",
-		);
+		expect(lines[open + 1]).toBe("- **F-2 [high]** token compared with ===");
 		expect(lines).toContain(
 			"- **V1-R1 [regression]** the new key builder drops the null check · resolved in verify 2",
 		);
@@ -555,7 +562,9 @@ describe("comment when the owner stops the rounds", () => {
 
 	it("lists a finding no verify kept as open, not verified", async () => {
 		const { body } = await stop({ lowAdvisory: ["F-4"] });
-		expect(body).toContain("- **F-1 [high]** cache key misses the tenant · not verified");
+		expect(body).toContain(
+			"- **F-1 [high]** cache key misses the tenant · not verified",
+		);
 		expect(body).toContain("**4 open**");
 	});
 

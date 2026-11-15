@@ -52,7 +52,7 @@ export function createSubmitVerificationTool({
 		name: "submit_verification",
 		label: "Submit verification",
 		description:
-			"Submit the complete verification result with one disposition row for every expected id and any direct regressions. This can be called once.",
+			"Submit the complete verification result with one disposition row for every expected id and any direct regressions. A regression row has file, line, title and evidence; set its undoes field to an id only when the scope lists that id as resolved by an earlier round and this fix range undoes that fix. This can be called once.",
 		parameters: {
 			type: "object",
 			required: ["items"],

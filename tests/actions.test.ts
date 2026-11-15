@@ -672,7 +672,9 @@ const CASES: Case[] = [
 	},
 	{
 		action: "verify",
-		args: { ...verifyArgs, keptFindingIds: undefined },
+		// Omitted is allowed (a chained verify checks every open id); a value
+		// that is not a list is not.
+		args: { ...verifyArgs, keptFindingIds: 7 },
 		message: "keptFindingIds must be an array of non-empty strings",
 	},
 	{
@@ -712,9 +714,9 @@ const CASES: Case[] = [
 	},
 	{
 		action: "comment",
-		args: { ...commentArgs, verifyRunId: "" },
+		args: { ...commentArgs, verifyRunId: "", lowAdvisory: ["F-1"] },
 		message:
-			"comment refused: F-1 still outstanding; pass verifyRunId after a clean verify or dismiss them",
+			"comment refused: F-1 is high; high/medium findings that are not kept must be dismissed with a reason, not listed as low/advisory",
 	},
 ];
 

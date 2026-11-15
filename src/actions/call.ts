@@ -81,8 +81,8 @@ export function isActionName(value: unknown): value is ActionName {
 
 /**
  * Lenient coercions for an argument object an agent wrote: a string for a
- * list, JSON text for `dismissed`, and `"true"`/`"false"` for `ownerApproved`
- * and `prComment`.
+ * list, JSON text for `dismissed`, and `"true"`/`"false"` for `ownerApproved`,
+ * `prComment` and `closeOut`.
  */
 export function coerceCallArguments(
 	args: Record<string, unknown>,
@@ -96,7 +96,7 @@ export function coerceCallArguments(
 	if (typeof next.dismissed === "string") {
 		next.dismissed = coerceJsonValue(next.dismissed);
 	}
-	for (const key of ["ownerApproved", "prComment"]) {
+	for (const key of ["ownerApproved", "prComment", "closeOut"]) {
 		if (next[key] === "true") {
 			next[key] = true;
 		} else if (next[key] === "false") {

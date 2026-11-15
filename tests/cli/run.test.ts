@@ -488,9 +488,16 @@ describe("exit codes never encode review content", () => {
 		expect(await h.run(["review", "--base", "a", "--base", "b"])).toBe(
 			EXIT_USAGE,
 		);
-		expect(await h.run(["verify", "--prior-run-id", "r", "--head", "H"])).toBe(
-			EXIT_USAGE,
-		);
+		expect(
+			await h.run([
+				"verify",
+				"--prior-run-id",
+				"r",
+				"--head",
+				"H",
+				"--close-out=yes",
+			]),
+		).toBe(EXIT_USAGE);
 		expect(
 			await h.run([
 				"verify",

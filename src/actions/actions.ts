@@ -44,16 +44,13 @@ import {
 	type ReadinessReport,
 } from "../config/readiness.js";
 import { suggestLenses } from "../run/changeset.js";
+import { isOid } from "../run/commits.js";
 import {
 	isGroupId,
 	planConsolidator,
 	recordedGrouping,
 } from "../run/grouping.js";
-import {
-	loadPriorRun,
-	type PriorRun,
-	resolvePriorRunId,
-} from "../run/prior-run.js";
+import type { PriorRun } from "../run/prior-run.js";
 import {
 	checkRecordKey,
 	loadRecordKey,
@@ -84,7 +81,13 @@ import {
 } from "../run/run-verify.js";
 import type { PlannedSeat, RunConfig } from "../run/types.js";
 import {
-	accountCloseoutFindings,
+	assertChainJudgment,
+	chainState,
+	defaultKeptIds,
+	loadChainPrior,
+	loadVerifyChain,
+} from "../run/verify-chain.js";
+import {
 	assembleCloseoutComment,
 	type CloseoutJudgmentRow,
 	type CloseoutLinks,
@@ -99,10 +102,9 @@ import {
 	postCloseoutComment,
 } from "../tool/closeout-post.js";
 import {
-	cardRounds,
+	chainRounds,
 	postedVerifyRounds,
 	roundCommentLinks,
-	type SignedVerifyRound,
 } from "../tool/closeout-rounds.js";
 import {
 	compactPanelRoster,
@@ -118,7 +120,6 @@ import {
 	truncateCodePoints,
 } from "../tool/review-presentation.js";
 import {
-	assertVerifyJudgment,
 	defaultRunGh,
 	postReviewRound,
 	postVerifyRound,
@@ -322,9 +323,19 @@ export type RoundInput = {
 const ROUND_KEYS = ["prComment", "pr", "ownerApproved"] as const;
 
 export type VerifyInput = RoundInput & {
+	/** The review, before any verify of it, or the latest verify of that review. */
 	priorRunId: string;
 	head: string;
-	keptFindingIds: string[];
+	/**
+	 * The ids to check. Omitted on a chained verify: every id still open
+	 * after the latest verify. Required for the first verify of a review.
+	 */
+	keptFindingIds?: string[];
+	/**
+	 * Post the close-out card after this verify, only when nothing is open
+	 * after it. The card is never posted otherwise by a verify.
+	 */
+	closeOut?: boolean;
 	seats?: string[];
 	scopingNote?: string;
 	/** Kept-out findings with the reason, shown in the verify comment and the close-out. */
@@ -399,6 +410,7 @@ export function parseVerifyArguments(
 		"scopingNote",
 		"dismissed",
 		"lowAdvisory",
+		"closeOut",
 		...ROUND_KEYS,
 	]);
 	return validateVerifyInput(args);
@@ -409,20 +421,25 @@ function validateVerifyInput(
 ): VerifyInput {
 	const priorRunId = validateNonEmptyString(args.priorRunId, "priorRunId");
 	const head = validateNonEmptyString(args.head, "head");
-	if (!Array.isArray(args.keptFindingIds)) {
+	if (
+		args.keptFindingIds !== undefined &&
+		!Array.isArray(args.keptFindingIds)
+	) {
 		throw new Error("keptFindingIds must be an array of non-empty strings");
 	}
-	const keptFindingIds = args.keptFindingIds.map((id, index) =>
+	const keptFindingIds = args.keptFindingIds?.map((id, index) =>
 		validateNonEmptyString(id, `keptFindingIds[${index}]`),
 	);
 	const seats = optionalStringArray(args.seats, "seats");
 	const scopingNote = optionalNonEmptyString(args.scopingNote, "scopingNote");
 	const dismissed = parseDismissed(args.dismissed);
 	const lowAdvisory = parseLowAdvisory(args.lowAdvisory);
+	const closeOut = optionalBoolean(args.closeOut, "closeOut");
 	return {
 		priorRunId,
 		head,
-		keptFindingIds,
+		...(keptFindingIds === undefined ? {} : { keptFindingIds }),
+		...(closeOut === undefined ? {} : { closeOut }),
 		...(seats === undefined ? {} : { seats }),
 		...(scopingNote === undefined ? {} : { scopingNote }),
 		...(args.dismissed === undefined ? {} : { dismissed }),
@@ -871,36 +888,39 @@ export async function verifyAction(
 	// when it is signed with the owner's record key, checked here before any
 	// seat runs. Verify never creates the key.
 	const verifyKey = ownerKey(resolved, repoDir, false, "Verify refused");
-	const prior = loadPriorRun(repoDir, priorRunId, verifyKey);
+	// The prior is the review or the latest verify of it; the whole chain is
+	// authenticated here, and refused when it is not one line of signed links.
+	const chain = loadChainPrior(repoDir, priorRunId, verifyKey);
+	const prior = chain.review;
 	// G-ids become F-ids here, before anything else reads them: verify
-	// itself checks F-ids only.
+	// itself checks F-ids and regression ids only.
 	const judged = expandGroupIds(
 		prior,
 		{
-			kept: valid.keptFindingIds,
+			kept: valid.keptFindingIds ?? [],
 			dismissed: valid.dismissed ?? [],
 			lowAdvisory: valid.lowAdvisory ?? [],
 		},
 		"Verify refused",
 	);
-	const keptFindingIds = judged.kept;
 	const { dismissed, lowAdvisory } = judged;
+	const state = chainState(prior.findings, chain.links);
+	// Omitted on a chained verify: every id still open.
+	const keptFindingIds =
+		valid.keptFindingIds === undefined
+			? defaultKeptIds(chain, state, dismissed, lowAdvisory)
+			: judged.kept;
+	// Checked against the review and the chain before any seat runs.
+	assertChainJudgment(
+		state,
+		chain.links,
+		keptFindingIds,
+		dismissed,
+		lowAdvisory,
+	);
 	const headRevision = resolved.oidOf(repoDir, head);
 	const panel = planVerifySeats(config, seats);
-	// The reasons for findings not kept are checked against the review
-	// record before any seat runs.
-	const reviewFindings =
-		dismissed.length === 0 && lowAdvisory.length === 0
-			? undefined
-			: prior.findings;
-	if (reviewFindings !== undefined) {
-		assertVerifyJudgment(
-			reviewFindings,
-			keptFindingIds,
-			dismissed,
-			lowAdvisory,
-		);
-	}
+	const reviewFindings = prior.findings;
 	const roster = compactPanelRoster(panel);
 	emit({
 		phase: "verify",
@@ -918,6 +938,8 @@ export async function verifyAction(
 			priorRunId,
 			headRevision,
 			keptFindingIds,
+			dismissed,
+			lowAdvisory,
 			...(seats === undefined ? {} : { seats }),
 			...(scopingNote === undefined ? {} : { scopingNote }),
 			...(config.defaults.seatBudgetMs === undefined
@@ -946,31 +968,24 @@ export async function verifyAction(
 			panel,
 			dismissed,
 			lowAdvisory,
-			...(reviewFindings === undefined ? {} : { reviewFindings }),
+			reviewFindings,
 			review: prior,
 			recordKey: verifyKey,
+			chain: chain.links,
+			...(valid.closeOut === undefined ? {} : { closeOut: valid.closeOut }),
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));
 }
 
-/**
- * The verify run id for the card's hidden marker: the run directory name,
- * also when `verifyRunId` was given as a record path. A value that names no
- * run under this repository is left out of the marker.
- */
-function markerVerifyId(
-	repoDir: string,
-	verifyRunId: string | undefined,
-): string | undefined {
-	if (verifyRunId === undefined) {
-		return undefined;
-	}
-	try {
-		return resolvePriorRunId(repoDir, verifyRunId);
-	} catch {
-		return undefined;
-	}
+/** A refusal worded as comment's own. */
+function commentError(error: unknown): Error {
+	const message = error instanceof Error ? error.message : String(error);
+	return new Error(
+		message.startsWith("comment refused:")
+			? message
+			: `comment refused: ${message.replace(/^Verify refused:\s*/u, "")}`,
+	);
 }
 
 export async function commentAction(
@@ -990,58 +1005,69 @@ export async function commentAction(
 		{ kept: [], dismissed: valid.dismissed, lowAdvisory: valid.lowAdvisory },
 		"comment refused",
 	);
-	const accounted = accountCloseoutFindings({
-		findings: facts.run.findings,
-		dismissed,
-		lowAdvisory,
-	});
-	if (accounted.resolved.length > 0 && valid.verifyRunId === undefined) {
-		throw new Error(
-			`comment refused: ${accounted.resolved.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
-		);
+	// The card shows where the review's verify chain left every id, from
+	// the owner's signed records only: the chain must be one line of links.
+	let links: ReturnType<typeof loadVerifyChain>;
+	try {
+		links = loadVerifyChain(repoDir, facts.run.runId, commentKey);
+	} catch (error) {
+		throw commentError(error);
 	}
-	// A supplied verify is authenticated and used whenever it is given, even
-	// with nothing left resolved: the card shows its head, counts it as a
-	// round and names its seats, as its marker names it.
-	const verified: SignedVerifyRound | undefined =
-		valid.verifyRunId === undefined
-			? undefined
-			: assertFixedResolved(
-					repoDir,
-					valid.verifyRunId,
-					accounted.resolved.map((row) => row.id),
-					facts.run.runId,
-					commentKey,
-				);
-	// The rounds and the head come from signed records only: the posted
-	// rounds the review record names, and the verify checked above.
-	const rounds = cardRounds(
+	const tip = links.at(-1);
+	if (valid.verifyRunId !== undefined) {
+		// A named verify is authenticated as a verify of this review, and
+		// must be the chain's latest: the card is about where the rounds
+		// stopped.
+		const named = assertFixedResolved(
+			repoDir,
+			valid.verifyRunId,
+			[],
+			facts.run.runId,
+			commentKey,
+		);
+		if (tip === undefined || named.runId !== tip.runId) {
+			throw new Error(
+				`comment refused: verify run "${named.runId}" is not the latest verify of review "${facts.run.runId}"${tip === undefined ? "" : `; pass the latest, "${tip.runId}"`}`,
+			);
+		}
+	}
+	const state = chainState(facts.run.findings, links);
+	// The rounds and the head come from signed records only: the chain's
+	// links, numbered by the posted rounds the review record names.
+	const rounds = chainRounds(
+		links,
 		postedVerifyRounds(repoDir, facts.run, commentKey),
-		verified,
 	);
-	const verifyRunId = markerVerifyId(repoDir, valid.verifyRunId);
+	const headOid =
+		tip !== undefined && isOid(tip.headOid)
+			? tip.headOid
+			: facts.run.meta.headOid;
 	const card = (links?: CloseoutLinks) =>
 		assembleCloseoutComment({
 			findings: facts.run.findings,
+			state,
+			rounds,
 			panel: facts.panel,
 			lost: facts.lost,
-			meta: {
-				...facts.run.meta,
-				headOid: verified?.headOid ?? facts.run.meta.headOid,
-			},
+			verifyLost: rounds.flatMap((row) => row.lost ?? []),
+			meta: { ...facts.run.meta, headOid },
 			dismissed,
 			lowAdvisory,
-			rounds,
 			runIds: {
 				review: facts.run.runId,
-				...(verifyRunId === undefined ? {} : { verify: verifyRunId }),
+				...(tip === undefined ? {} : { verify: tip.runId }),
 			},
 			...(links === undefined ? {} : { links }),
 		});
-	const body = card();
+	let body: string;
+	try {
+		body = card();
+	} catch (error) {
+		throw commentError(error);
+	}
 	const posted = resolved.postComment({
 		repository: repoDir,
-		headOid: verified?.headOid ?? facts.run.meta.headOid,
+		headOid,
 		body,
 		render: (listing) =>
 			card(
@@ -1049,7 +1075,7 @@ export async function commentAction(
 					listing.comments,
 					listing,
 					facts.run.runId,
-					rounds.map((round) => round.runId),
+					rounds.map((row) => row.runId),
 				),
 			),
 		...(valid.pr === undefined ? {} : { pr: valid.pr }),

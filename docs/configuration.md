@@ -226,8 +226,9 @@ the review's signed `execution.json` records: it must have grouped exactly the F
 `findings.json`, each once. A review with no grouping step or a lost grouping has no G-ids, so they
 are refused, and the message says why and asks for F-ids. An id that names neither a
 finding nor a group is refused as before, and so is a list that names one F-id twice, such as
-a G-id and one of its own members. Verify itself still checks F-ids, so the verify comment
-and the close-out card list F-ids.
+a G-id and one of its own members. Verify itself still checks F-ids (and regression ids such as
+`V1-R1`), so the verify comment and the close-out card list those. On a chained verify, every
+member of a G-id must still be open: name the open members when some were already judged.
 
 ## Interrupted runs and `resume`
 
@@ -382,9 +383,10 @@ key:
 - A review record needs a `plan.json` of kind `review` with a valid `plan.mac`, and a `record.mac`
   that matches the exact bytes of its `plan.json`, `panel.json`, `meta.json`, `findings.json` and
   `execution.json`, bound to its own run id. A verify record named by `comment`'s `verifyRunId`
-  needs a `record.mac` over its `panel.json`, `meta.json` and `verification.json`. Each file is
-  read once, and only those signed bytes are used: verify builds the automatic close-out card from
-  the review it checked before any seat ran, and checks G-ids against those signed findings, so a
+  needs a `record.mac` over its `panel.json`, `meta.json` and `verification.json`, and so does
+  every verify of the chain (see [Verify rounds chain](#verify-rounds-chain)). Each file is
+  read once, and only those signed bytes are used: verify builds the close-out card from
+  the review and the chain it checked before any seat ran, and checks G-ids against those signed findings, so a
   file changed while the seats run changes nothing posted. Review and resume reply and post the
   findings the run itself stamped, never `findings.json` read back after the record was sealed.
 - The key is per owner, not per repository, so a review record's `meta.json` must also name a base
@@ -405,6 +407,50 @@ When a call names a G-id, it expands only from the grouping in the review's sign
 A review reads no earlier record. The verify round number and the close-out read only signed records and
 signed markers (see [Posting rounds to the pull request](#posting-rounds-to-the-pull-request)).
 
+## Verify rounds chain
+
+Verify rounds form a chain. Each verify checks only what is still open after the verify before
+it, against the diff from that verify's head:
+
+1. The first verify takes the review's run id as `priorRunId` and needs `keptFindingIds`
+   (`""` for none). It checks those ids against `<review head>...<head>`.
+2. Every later verify takes the latest verify's run id as `priorRunId`. Its diff base is that
+   verify's head. It checks the open set: every id the latest verify, or an earlier one, left
+   still present or inconclusive (or that no voting seat answered), and every regression a
+   round reported, less what the caller dismisses or leaves as low/advisory now. Leave out
+   `keptFindingIds` to check all of it, or pass part of it. A review finding no round kept may
+   also be named.
+3. An id is resolved by the round in which every voting seat that answered for it said
+   resolved. It is not checked again: naming it in `keptFindingIds`, `dismissed` or
+   `lowAdvisory` is refused, and so is an id an earlier round dismissed or left as low/advisory.
+4. Regressions get ids `V<link>-R<n>`: the link is the verify's place in the chain (1 for the
+   first verify), and n counts the regressions its voting seats reported, in seat order. A later
+   round takes them in `keptFindingIds` and `dismissed`. A regression has no severity, so it
+   cannot be left as low/advisory. `V<link>` is the chain place, which matches the PR's
+   `verify N` unless a round did not post.
+5. The undo guard: a verify after the first is given every id an earlier round resolved, with
+   its title, file and the verifier's note, and asked whether the new commits touch or undo any
+   of those fixes. A hit is a regression whose `undoes` names that id; the seat's channel
+   accepts only those ids there.
+
+Each verify records, in its signed `meta.json`, the review (`priorRunId`, as before), the record
+it chained from (`previousRunId`: the review for the first link) and its place (`link`), and in
+its signed `verification.json` its kept ids, `dismissed` with the reasons, `lowAdvisory` and
+the outcomes. The open set comes only from those signed records. A verify is refused, before
+any seat runs:
+
+- against the review once it has a verify, or against a verify that is not the latest: the
+  message names the latest verify to use;
+- against an unsigned verify record: run a new review;
+- when the chain is not one line of signed links: two verifies chained from one record (a
+  fork, from two verifies run at once), a link whose previous record is not a complete signed
+  verify of the same review (a gap, or a link of another review's chain), or a link out of
+  place. The message says to run a new review.
+
+Verify records written before chaining have no `link` or `previousRunId`: each checked the
+review itself. The newest of them is the first link, and older ones are superseded by it; name
+the newest as `priorRunId`.
+
 ## Posting rounds to the pull request
 
 When a review or verify run's head commit is the head of exactly one open pull request, the tool
@@ -415,7 +461,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 - A review posts `## Review panel · review`: the commit range, the reply's summary, `Seats:`,
   `Lost:`, findings and `Suggest:`, without the local record path. Labels the tool writes are bold;
   seat text never is. No run id appears in visible text: every posted body (review, verify, the
-  automatic close-out and the manual `comment` card) ends with one hidden HTML comment carrying the
+  close-out and the manual `comment` card) ends with one hidden HTML comment carrying the
   ids that apply, such as `<!-- review-panel review=<review run id> verify=<verify run id> -->`.
   An id outside the run-id characters (`A-Z a-z 0-9 . _ -`) is left out of the marker. A review
   comment starts like this:
@@ -463,19 +509,24 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     duplicate. One case is set aside: when `gh` reports a POST as failed (it timed out or was
     interrupted) after GitHub had already accepted it, the number is given back and the next
     verify posts it again.
-  It lists each kept id as resolved, still present or inconclusive with the panel's one-line
-  evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept, and the
-  regressions as new findings. Verify checks `dismissed` and `lowAdvisory` against the review
-  record before any seat runs.
-- When every verify seat voted (none was lost), each marked every kept id resolved, and none
-  reported a regression, the verify also posts the close-out card as a separate comment,
-  `## Review panel · close-out`, built from the review, that verify and its `dismissed` and
-  `lowAdvisory`. A kept finding of any severity counts as resolved; a kept low need not be listed in
-  `lowAdvisory`. Otherwise only the verify comment is posted, and the reply says why, such as
-  `PR close-out: not posted (seats disagree on F-2)` or
-  `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card has a `Lost:`
-  line only when a review seat was lost; it never names a verify seat, because a lost verify seat
-  stops the automatic card. See [The close-out card](#the-close-out-card) for what it shows.
+  It is a short delta: an `Open after this round:` line naming every id still open after this
+  verify (or `none`), each kept id as resolved, still present or inconclusive with the panel's
+  one-line evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept,
+  and the regressions as new findings, by their `V<link>-R<n>` id, with `· undoes F-1` when
+  one undoes an earlier fix. Verify checks `dismissed` and `lowAdvisory` against the review
+  record and the chain before any seat runs.
+- A verify never posts the close-out card by itself. With `closeOut: true` (CLI `--close-out`),
+  it posts the card as a separate comment, `## Review panel · close-out`, only when every verify
+  seat voted (none was lost), each marked every id it checked resolved, none reported a
+  regression, and nothing is open after it: every review finding resolved in some round,
+  dismissed or left as low/advisory, and every regression resolved or dismissed. A kept finding
+  of any severity counts as resolved; a kept low need not be listed in `lowAdvisory`. Otherwise
+  only the verify comment is posted, and the reply says why, such as
+  `PR close-out: not posted (F-2 is still present)`, `PR close-out: not posted (still open: F-2)`
+  or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. Without
+  `closeOut`, a verify that leaves nothing open says how to ask for the card. When the owner
+  stops the rounds with ids still open, `comment` posts the card listing them as open. See
+  [The close-out card](#the-close-out-card) for what it shows.
 - The close-out posts at most once per review, by these rules and with the exceptions below:
   - A signed `closeout.posted` in the review's run record means it is posted. The verify does not
     ask the PR, and the reply says
@@ -517,7 +568,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     process) holds that round: the verify waits and then posts no comment for it. A planted
     `closeout.claim-<g>` that looks live makes the verify say another verify is posting the
     close-out; five that look stale end as "all left by verifies that stopped". A planted claim
-    can bump the number or stop an automatic post, never forge a post or post a second card; the
+    can bump the number or stop a post, never forge a post or post a second card; the
     reply says why, and `comment` still posts the card on the owner's yes.
   - Deleting a genuine marker undoes it: a deleted `closeout.posted` is caught by the PR-comment
     check, so no second card posts, but with both a review's `round-<N>.posted` and the verify's
@@ -532,7 +583,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 - No open PR, more than one, `gh` missing, signed out or failing: nothing is posted, and the reply
   ends with one line saying why, such as `PR comment: not posted (no open PR has this head)`. A
   failed post never fails the run and never changes an exit code.
-- Every posted body (the review and verify comments, the automatic close-out and the manual
+- Every posted body (the review and verify comments, the close-out and the manual
   `comment` card) uses one sanitizer. Text a seat wrote, dismissed reasons, record fields and refs
   become one line of plain text: line breaks fold to spaces; only what can form Markdown or HTML is
   backslash-escaped: `` \ ` * _ [ ] < > | ~ & ``, `!` before `[`, and at the start of the text
@@ -572,12 +623,13 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   verify)`. Comment listings read every page.
 
 The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
-or updates its own card with the heading `## Review panel`, separate from the automatic
-`## Review panel · close-out` comment. Its card is cut by whole rows below the same limit.
+or updates its own card with the heading `## Review panel`, separate from the
+`## Review panel · close-out` comment a verify posts with `--close-out`. Its card is cut by whole
+rows below the same limit.
 
 ### The close-out card
 
-Both cards, the automatic close-out and the manual `comment` card, read like this:
+Both cards, the `--close-out` card and the manual `comment` card, read like this:
 
 ```
 ## Review panel · close-out
@@ -594,36 +646,39 @@ Both cards, the automatic close-out and the manual `comment` card, read like thi
 ```
 
 - The counts line names the findings submitted with their counts by severity (high, medium,
-  low), the findings resolved and in how many verify rounds, and then the dismissed and
-  low/advisory counts. A count of zero is left out.
+  low), the ids resolved and in how many verify rounds, the ids still open, and then the
+  dismissed and low/advisory counts. A count of zero is left out.
 - `Review seats:` is the review's seats grouped by lens, in the reply's format. `Verified by:` is
-  the seats that voted in each counted verify round, each once, grouped the same way; a verify
-  seat that was lost is not named.
-- `Lost:` appears only when a seat was lost. The `### Dismissed` section (each id with its title
-  and reason) and the `### Low / advisory (not kept)` section appear only when they have ids.
+  the seats that voted in each verify of the chain, each once, grouped the same way; a verify
+  seat that was lost is not named there.
+- `Lost:` appears only when a seat was lost: review seats first, then verify seats of the chain,
+  each marked `(verify)`. The `### Open (not resolved)` section, the `### Dismissed` section
+  (each id with its title and reason) and the `### Low / advisory (not kept)` section appear
+  only when they have ids.
 - The range shows the base ref only when it is not itself a commit id (a full or abbreviated SHA
-  of the base); the head is one short SHA: the commit the card's verify checked, or for a
-  `comment` card with no `verifyRunId`, the review's head. `comment` checks and uses a
-  `verifyRunId` whenever one is given, even when every finding is dismissed or left as
-  low/advisory, and requires one only when ids are left resolved. `comment`'s `head` (`--head`) is
-  still accepted and no longer shown.
-- Each kept finding is listed, by severity, as `resolved in verify N`. A round marks an id
-  resolved when every voting seat that answered for it said resolved; N is the earliest counted
-  round that did so after which every later counted round that answered for the id also said
-  resolved (so resolved in verify 1, split in verify 2 and resolved in verify 3 reads verify 3).
-  A verify round's number is the `verify N` its comment posted as, read only from the file name of
-  the review record's signed `round-<N>.posted` (never from a field inside it); its voting seats
-  and dispositions come from its own signed verify record. The card counts its own verify and the
-  posted rounds before it. A verify that never posted (for example, run with `--no-pr-comment`
-  and then named in `comment`'s `verifyRunId`) counts as a round with no number, after the posted
-  rounds reserved before it (by the time in each run id, which `record.mac` binds; a run id with no
-  time cannot be placed), and its ids read plain `resolved`. The card never says “fixed”.
+  of the base); the head is one short SHA: the commit the chain's latest verify checked, or with
+  no verify, the review's head. `comment` reads the review's whole chain; a `verifyRunId`, when
+  given, is checked and must be the latest verify (an older one is refused, naming the latest).
+  `comment`'s `head` (`--head`) is still accepted and no longer shown.
+- Each resolved id is listed, review findings by severity and then regressions (tagged
+  `[regression]`, with `(undoes F-1)` when one undid an earlier fix), as
+  `resolved in verify N`: N is the round of the chain that resolved it, the `verify N` its
+  comment posted as, read only from the file name of the review record's signed
+  `round-<N>.posted` (never from a field inside it). Its voting seats and dispositions come from
+  its own signed verify record. A verify that never posted (for example, run with
+  `--no-pr-comment`) still counts as a round, with no number, and its ids read plain `resolved`.
+- Open ids are listed under `### Open (not resolved)`: what the chain left still present,
+  inconclusive or unanswered, open regressions, and review findings no round kept, marked
+  `not verified`. A low no round kept must be listed in `lowAdvisory` or dismissed. `comment`
+  may dismiss or leave as low/advisory an id that is open or that no round kept, or give a new
+  reason for an id the chain dismissed, never an id a round resolved. The card never says
+  “fixed”.
 - The range line links to the review comment and to each counted verify's comment on the same
   PR, when they can be found among the PR's comments: by this author, first line the round's
   heading (`## Review panel · review` or `## Review panel · verify N`), last non-empty line exactly
   that round's hidden marker. The link goes to the `html_url` gh gave for that comment, and only
   when it is exactly this PR's comment URL (`https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`).
-  The automatic card links its own verify comment by the URL gh gave when it was posted. A comment
+  The `--close-out` card links its own verify comment by the URL gh gave when it was posted. A comment
   that cannot be found gets no link, and the card still posts. Only the last 10 verify comments
   are linked, after a `…`, so the range line stays short however many rounds there were.
 - When the list is too long, rows are cut from the end, with the usual line counting them; the

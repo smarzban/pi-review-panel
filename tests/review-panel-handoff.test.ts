@@ -173,7 +173,7 @@ describe("the abort signal reaches the runner", () => {
 					action: "verify",
 					priorRunId: "run-1",
 					head: "HEAD",
-					keptFindingIds: ["F-1"],
+					keptFindingIds: [],
 				},
 				(capture) => ({
 					runVerify: async (_input, options) => {

@@ -1,4 +1,5 @@
 import type { PanelRecord, PlannedSeat, StampedFinding } from "../run/types.js";
+import type { ChainItem, ChainState } from "../run/verify-chain.js";
 import {
 	fitCommentBody,
 	markerTail,
@@ -6,7 +7,6 @@ import {
 	postedLink,
 	postedText,
 } from "./posted-text.js";
-import { orderFindings } from "./review-presentation.js";
 
 const OID_DISPLAY_LENGTH = 7;
 const SEVERITIES = ["high", "medium", "low"] as const;
@@ -26,6 +26,18 @@ export type CloseoutLow = {
 
 export type CloseoutSeat = Pick<PlannedSeat, "rosterId" | "lens">;
 
+/** A review finding or a regression as one row of the card. */
+export type CloseoutItem = {
+	id: string;
+	title: string;
+	/** A review finding's stated severity; a regression shows `regression`. */
+	severity?: string;
+	/** For a regression: the id an earlier round resolved that it undoes. */
+	undoes?: string;
+	/** Tool-written words after the title, such as `resolved in verify 2`. */
+	label?: string;
+};
+
 /** One verify of this review, as the card counts and names it. */
 export type CloseoutVerifyRound = {
 	runId: string;
@@ -34,8 +46,8 @@ export type CloseoutVerifyRound = {
 	seats: readonly CloseoutSeat[];
 	/** The ids it marked resolved: every voting seat that answered said resolved. */
 	resolved: ReadonlySet<string>;
-	/** The ids a voting seat answered without every answer being resolved. */
-	unresolved?: ReadonlySet<string>;
+	/** Its verify seats that were lost, as `rosterId/lens`. */
+	lost?: readonly string[];
 };
 
 /**
@@ -52,8 +64,10 @@ export type CloseoutLinks = {
 export type CloseoutCommentInput = {
 	/** Every finding the review submitted, for the counts by severity. */
 	findings: readonly StampedFinding[];
-	/** The kept findings a verify marked resolved, each listed. */
-	resolved: readonly StampedFinding[];
+	/** The ids a verify round resolved, each with the round that did. */
+	resolved: readonly CloseoutItem[];
+	/** The ids still open: never "fixed", listed so the owner sees them. */
+	open?: readonly CloseoutItem[];
 	dismissed: CloseoutDismissed[];
 	lowAdvisory: CloseoutLow[];
 	/** The review's seats, shown grouped by lens like the reply's `Seats:` line. */
@@ -82,19 +96,22 @@ export type CloseoutJudgmentRow = {
 
 export type AccountCloseoutInput = {
 	findings: readonly StampedFinding[];
+	/** Where every id stands after the verify chain (see `chainState`). */
+	state: ChainState;
+	/**
+	 * The chain's links as rounds, in link order: a resolved id names the
+	 * posted round of the link that resolved it.
+	 */
+	rounds?: readonly CloseoutVerifyRound[];
+	/** Judgment given with the card, on top of the chain's own. */
 	dismissed: readonly CloseoutJudgmentRow[];
 	lowAdvisory: readonly string[];
-	/**
-	 * Ids a verify kept, of any severity. They count as resolved, and are
-	 * left out of the dismissed and low/advisory accounting.
-	 */
-	kept?: readonly string[];
 };
 
 export type AccountedCloseout = {
 	submitted: number;
-	/** Every finding neither dismissed nor left as low/advisory. */
-	resolved: StampedFinding[];
+	resolved: CloseoutItem[];
+	open: CloseoutItem[];
 	dismissed: CloseoutDismissed[];
 	lowAdvisory: CloseoutLow[];
 };
@@ -174,6 +191,10 @@ function countsLine(input: CloseoutCommentInput, rounds: number): string {
 	} else if (verified !== "") {
 		parts.push(verified);
 	}
+	const open = input.open?.length ?? 0;
+	if (open > 0) {
+		parts.push(`**${open} open**`);
+	}
 	if (input.dismissed.length > 0) {
 		parts.push(`${input.dismissed.length} dismissed`);
 	}
@@ -220,27 +241,26 @@ function inOrder(
 	);
 }
 
-/**
- * `resolved in verify N`, N the earliest round that marked the id resolved
- * after which every later round that answered for it also said resolved: a
- * round that answered otherwise starts the count again. Plain `resolved`
- * when that round has no number (it never posted), or no round marked it.
- */
-function resolvedLabel(
-	id: string,
-	ordered: readonly CloseoutVerifyRound[],
-): string {
-	let since: CloseoutVerifyRound | undefined;
-	for (const round of ordered) {
-		if (round.resolved.has(id)) {
-			since ??= round;
-		} else if (round.unresolved?.has(id) === true) {
-			since = undefined;
+const SEVERITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
+
+/** Review findings by severity, high first, then id; regressions last, in chain order. */
+function orderItems(items: readonly CloseoutItem[]): CloseoutItem[] {
+	const rank = (item: CloseoutItem) =>
+		item.severity === undefined ? 3 : (SEVERITY_RANK[item.severity] ?? 3);
+	return [...items].sort((left, right) => {
+		const order = rank(left) - rank(right);
+		if (order !== 0) {
+			return order;
 		}
-	}
-	return since?.round === undefined
-		? "resolved"
-		: `resolved in verify ${since.round}`;
+		return left.severity === undefined ? 0 : left.id.localeCompare(right.id);
+	});
+}
+
+/** One card row: id, severity (or `regression`), title, what it undoes, label. */
+function itemRow(item: CloseoutItem): string {
+	const undoes =
+		item.undoes === undefined ? "" : ` (undoes ${postedCode(item.undoes, 40)})`;
+	return `- **${postedText(item.id, 40)} [${postedText(item.severity ?? "regression", 20)}]** ${postedText(item.title)}${undoes}${item.label === undefined ? "" : ` · ${item.label}`}`;
 }
 
 /** One close-out card as its head lines and its list rows. */
@@ -270,7 +290,9 @@ export function closeoutCardParts(
 	const rounds = inOrder(input.rounds ?? []);
 	const lostNames = [
 		...input.lost.map((name) => postedText(name)),
-		...(input.verifyLost ?? []).map((name) => `${postedText(name)} (verify)`),
+		...[...new Set(input.verifyLost ?? [])].map(
+			(name) => `${postedText(name)} (verify)`,
+		),
 	];
 	const verifiedBy = seatGroups(rounds.flatMap((round) => round.seats));
 	const head = [
@@ -294,13 +316,8 @@ export function closeoutCardParts(
 			);
 		}
 	};
-	section(
-		undefined,
-		orderFindings(input.resolved).map(
-			(row) =>
-				`- **${postedText(row.id, 40)} [${postedText(row.finding.severity, 20)}]** ${postedText(row.finding.title)} · ${resolvedLabel(row.id, rounds)}`,
-		),
-	);
+	section(undefined, orderItems(input.resolved).map(itemRow));
+	section("### Open (not resolved)", orderItems(input.open ?? []).map(itemRow));
 	section(
 		"### Dismissed",
 		input.dismissed.map(
@@ -352,69 +369,122 @@ export function renderCloseoutComment(input: CloseoutCommentInput): string {
 	return fitCommentBody(head, rows, tail, "row");
 }
 
-/** Split a review record into dismissed, leftover lows, and the rest (resolved). */
+function itemOf(item: ChainItem, label?: string): CloseoutItem {
+	return {
+		id: item.id,
+		title: item.title,
+		...(item.severity === undefined ? {} : { severity: item.severity }),
+		...(item.regression?.undoes === undefined
+			? {}
+			: { undoes: item.regression.undoes }),
+		...(label === undefined ? {} : { label }),
+	};
+}
+
+/**
+ * Sorts every review finding and regression onto the card from where the
+ * verify chain left it, plus judgment given with the card: resolved (with
+ * the posted round of the link that resolved it, or plain `resolved` when
+ * that link never posted), open, dismissed with the reason, or left as
+ * low/advisory. A finding no round kept is open (`not verified`), except a
+ * low, which must be listed as low/advisory or dismissed. Judgment given
+ * with the card may name an open or never-kept id, or replace a chain
+ * dismissal's reason; never an id a round resolved.
+ */
 export function accountCloseoutFindings(
 	input: AccountCloseoutInput,
 ): AccountedCloseout {
-	const byId = new Map(input.findings.map((row) => [row.id, row]));
-	const kept = new Set(input.kept ?? []);
-	const claimed = new Set<string>();
-
-	const dismissed: CloseoutDismissed[] = [];
-	for (const row of input.dismissed.filter((entry) => !kept.has(entry.id))) {
-		const entry = byId.get(row.id);
-		if (entry === undefined) {
+	const items = input.state.items;
+	const rounds = input.rounds ?? [];
+	const claimed = new Map<string, "dismissed" | "low">();
+	const reasons = new Map<string, string>();
+	const refuseResolved = (id: string, item: ChainItem) => {
+		if (item.state.status === "resolved") {
+			throw new Error(
+				`${id} was resolved in a verify round; it cannot also be kept out`,
+			);
+		}
+	};
+	for (const row of input.dismissed) {
+		const item = items.get(row.id);
+		if (item === undefined) {
 			throw new Error(`dismissed ${row.id} is not in the review record`);
 		}
 		if (claimed.has(row.id)) {
 			throw new Error(`${row.id} is listed more than once`);
 		}
-		claimed.add(row.id);
-		dismissed.push({
-			id: row.id,
-			title: entry.finding.title,
-			reason: requireReason(row.id, row.reason),
-		});
+		refuseResolved(row.id, item);
+		claimed.set(row.id, "dismissed");
+		reasons.set(row.id, requireReason(row.id, row.reason));
 	}
-
-	const lowAdvisory: CloseoutLow[] = [];
-	for (const id of input.lowAdvisory.filter((entry) => !kept.has(entry))) {
-		const entry = byId.get(id);
-		if (entry === undefined) {
+	for (const id of input.lowAdvisory) {
+		const item = items.get(id);
+		if (item === undefined) {
 			throw new Error(`low/advisory ${id} is not in the review record`);
 		}
 		if (claimed.has(id)) {
 			throw new Error(`${id} is listed more than once`);
 		}
-		if (entry.finding.severity !== "low") {
+		if (item.severity !== "low") {
 			throw new Error(
-				`${id} is ${entry.finding.severity}; high/medium findings that are not kept must be dismissed with a reason, not listed as low/advisory`,
+				item.severity === undefined
+					? `${id} is a regression, which has no severity; dismiss it with a reason, not as low/advisory`
+					: `${id} is ${item.severity}; high/medium findings that are not kept must be dismissed with a reason, not listed as low/advisory`,
 			);
 		}
-		claimed.add(id);
-		lowAdvisory.push({ id, title: entry.finding.title });
+		refuseResolved(id, item);
+		claimed.set(id, "low");
 	}
 
-	const resolved: StampedFinding[] = [];
-	for (const entry of input.findings) {
-		if (claimed.has(entry.id)) {
-			continue;
-		}
-		if (kept.has(entry.id) || entry.finding.severity !== "low") {
-			resolved.push(entry);
-			continue;
-		}
-		throw new Error(
-			`${entry.id} is low/advisory and was not listed; pass it in lowAdvisory or dismiss it with a reason`,
-		);
-	}
-
-	return {
+	const accounted: AccountedCloseout = {
 		submitted: input.findings.length,
-		resolved,
-		dismissed,
-		lowAdvisory,
+		resolved: [],
+		open: [],
+		dismissed: [],
+		lowAdvisory: [],
 	};
+	for (const item of items.values()) {
+		const given = claimed.get(item.id);
+		const state = item.state;
+		if (
+			given === "dismissed" ||
+			(given === undefined && state.status === "dismissed")
+		) {
+			accounted.dismissed.push({
+				id: item.id,
+				title: item.title,
+				reason:
+					reasons.get(item.id) ??
+					(state.status === "dismissed" ? state.reason : ""),
+			});
+			continue;
+		}
+		if (given === "low" || state.status === "low") {
+			accounted.lowAdvisory.push({ id: item.id, title: item.title });
+			continue;
+		}
+		if (state.status === "resolved") {
+			const round = rounds[state.link - 1]?.round;
+			accounted.resolved.push(
+				itemOf(
+					item,
+					round === undefined ? "resolved" : `resolved in verify ${round}`,
+				),
+			);
+			continue;
+		}
+		if (state.status === "open") {
+			accounted.open.push(itemOf(item));
+			continue;
+		}
+		if (item.severity === "low") {
+			throw new Error(
+				`${item.id} is low/advisory and was not listed; pass it in lowAdvisory or dismiss it with a reason`,
+			);
+		}
+		accounted.open.push(itemOf(item, "not verified"));
+	}
+	return accounted;
 }
 
 /** The close-out card's parts, from a review record plus orchestrator judgment. */
@@ -425,6 +495,7 @@ export function assembleCloseoutParts(
 	return closeoutCardParts({
 		findings: input.findings,
 		resolved: accounted.resolved,
+		open: accounted.open,
 		dismissed: accounted.dismissed,
 		lowAdvisory: accounted.lowAdvisory,
 		seats: input.panel.seats,

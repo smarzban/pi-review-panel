@@ -155,9 +155,7 @@ type VoteRow = {
 
 function votes(outcomes: unknown): VoteRow[] {
 	return Array.isArray(outcomes)
-		? (outcomes as VoteRow[]).filter(
-				(row) => row?.outcome?.kind === "voted",
-			)
+		? (outcomes as VoteRow[]).filter((row) => row?.outcome?.kind === "voted")
 		: [];
 }
 
@@ -195,19 +193,6 @@ export function resolvedIdsOf(
 		}
 	}
 	return resolved;
-}
-
-/** The ids a voting seat answered without every answer being `resolved`. */
-export function unresolvedIdsOf(
-	dispositions: ReadonlyMap<string, ReadonlySet<string>>,
-): Set<string> {
-	const unresolved = new Set<string>();
-	for (const [id, states] of dispositions) {
-		if (states.size !== 1 || !states.has("resolved")) {
-			unresolved.add(id);
-		}
-	}
-	return unresolved;
 }
 
 /** The seats that voted, as roster id and lens; a lost seat is not one. */
@@ -668,7 +653,10 @@ export function chainState(
 	};
 }
 
-function stateWords(state: ChainItemState, links: readonly ChainLink[]): string {
+function stateWords(
+	state: ChainItemState,
+	links: readonly ChainLink[],
+): string {
 	const by = (link: number) => {
 		const runId = links[link - 1]?.runId;
 		return runId === undefined ? `link ${link}` : `verify run "${runId}"`;
