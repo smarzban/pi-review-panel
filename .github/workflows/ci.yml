@@ -21,14 +21,8 @@ jobs:
       - name: Verify
         run: npm run typecheck && npm test && npm run check
 
-      - name: Install CLI
-        working-directory: cli
-        run: npm ci
+      - name: Pack
+        run: npm pack --dry-run
 
-      - name: Build CLI
-        working-directory: cli
-        run: npm run build
-
-      - name: Verify CLI
-        working-directory: cli
-        run: npm run typecheck && npm test && npm run check
+      - name: Installed-package smoke run
+        run: npm run smoke:installed
