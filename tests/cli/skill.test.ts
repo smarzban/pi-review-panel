@@ -303,6 +303,27 @@ describe("skill install", () => {
 		expect(readFileSync(path.join(old, "SKILL.md"), "utf8")).toBe("old");
 	});
 
+	it("keeps a stamped copy that holds a file of the user's own, unless --force", () => {
+		const home = tempDir("rp-home-");
+		const source = fakePackage();
+		const skills = path.join(home, ".codex", "skills");
+		mkdirSync(path.join(home, ".codex"));
+		const windows = { platform: "win32" as const };
+		installSkill(options(home, source, windows));
+		const own = path.join(target(skills), "OWN-NOTES.md");
+		writeFileSync(own, "mine\n");
+
+		for (const platform of ["win32", "linux"] as const) {
+			const again = installSkill(options(home, source, { platform }));
+			expect(again.ok).toBe(false);
+			expect(again.lines.join("\n")).toContain("--force");
+			expect(readFileSync(own, "utf8")).toBe("mine\n");
+		}
+		const removed = uninstallSkill(options(home, source, windows));
+		expect(removed.lines.join("\n")).toContain("left alone");
+		expect(readFileSync(own, "utf8")).toBe("mine\n");
+	});
+
 	it("on Windows copies the skill with a version stamp instead of linking, and refreshes its own copy", () => {
 		const home = tempDir("rp-home-");
 		const source = fakePackage();
