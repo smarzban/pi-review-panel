@@ -107,7 +107,11 @@ function expandTilde(value: string, home: string): string {
 	return value;
 }
 
-/** The agent's home folder: its variable when set and not empty, else the default. */
+/**
+ * The agent's home folder: its variable when set and not empty, else the
+ * default. A relative value is refused: the agent would resolve it against its
+ * own working folder, which this command cannot know.
+ */
 export function agentHome(
 	agent: AgentSpec,
 	home: string,
@@ -115,7 +119,13 @@ export function agentHome(
 ): string {
 	const fromEnv = env[agent.envVar];
 	if (fromEnv !== undefined && fromEnv !== "") {
-		return path.resolve(expandTilde(fromEnv, home));
+		const expanded = expandTilde(fromEnv, home);
+		if (!path.isAbsolute(expanded)) {
+			throw new Error(
+				`${agent.envVar} is a relative path (${JSON.stringify(fromEnv)}); set it to an absolute path`,
+			);
+		}
+		return path.normalize(expanded);
 	}
 	return path.join(home, ...agent.defaultHome);
 }
@@ -211,12 +221,20 @@ type Planned = {
 	found: boolean;
 };
 
-function plan(options: SkillOptions): Planned[] {
+/** An agent whose folder variable cannot be used: the reason. */
+type Unusable = { agent: AgentSpec; problem: string };
+
+function plan(options: SkillOptions): Array<Planned | Unusable> {
 	const chosen = options.agents;
 	return AGENTS.filter(
 		(agent) => chosen === undefined || chosen.includes(agent.id),
 	).map((agent) => {
-		const home = agentHome(agent, options.home, options.env);
+		let home: string;
+		try {
+			home = agentHome(agent, options.home, options.env);
+		} catch (error) {
+			return { agent, problem: (error as Error).message };
+		}
 		const skills = path.join(home, "skills");
 		return {
 			agent,
@@ -226,6 +244,14 @@ function plan(options: SkillOptions): Planned[] {
 			found: isDirectory(home),
 		};
 	});
+}
+
+function isUnusable(entry: Planned | Unusable): entry is Unusable {
+	return "problem" in entry;
+}
+
+function usable(entries: Array<Planned | Unusable>): Planned[] {
+	return entries.filter((entry): entry is Planned => !isUnusable(entry));
 }
 
 function shellQuote(file: string): string {
@@ -288,6 +314,12 @@ export function installSkill(options: SkillOptions): SkillResult {
 	let acted = 0;
 	const would = options.dryRun === true ? "would " : "";
 	for (const entry of planned) {
+		if (isUnusable(entry)) {
+			acted++;
+			ok = false;
+			lines.push(`${entry.agent.label}: skipped: ${entry.problem}`);
+			continue;
+		}
 		const { agent, home, skills, target } = entry;
 		if (!entry.found && !explicit) {
 			lines.push(`${agent.label}: not found (${home} does not exist)`);
@@ -340,14 +372,21 @@ export function installSkill(options: SkillOptions): SkillResult {
 			`No coding agent found. Pass --agent ${AGENT_IDS.join(",")} to install anyway.`,
 		);
 	}
-	lines.push(...oldSkillHints(planned));
+	lines.push(...oldSkillHints(usable(planned)));
 	return { lines, ok };
 }
 
 export function uninstallSkill(options: SkillOptions): SkillResult {
 	const planned = plan(options);
 	const lines: string[] = [];
-	for (const { agent, home, target, found } of planned) {
+	let ok = true;
+	for (const entry of planned) {
+		if (isUnusable(entry)) {
+			ok = false;
+			lines.push(`${entry.agent.label}: skipped: ${entry.problem}`);
+			continue;
+		}
+		const { agent, home, target, found } = entry;
 		if (!found) {
 			lines.push(`${agent.label}: not found (${home} does not exist)`);
 			continue;
@@ -368,14 +407,19 @@ export function uninstallSkill(options: SkillOptions): SkillResult {
 		removeEntry(target);
 		lines.push(`${agent.label}: removed ${target}`);
 	}
-	lines.push(...oldSkillHints(planned));
-	return { lines, ok: true };
+	lines.push(...oldSkillHints(usable(planned)));
+	return { lines, ok };
 }
 
 /** One `- Agent: state` row per agent, plus a row per old pi-review copy. */
 export function skillStatus(options: SkillOptions): string[] {
 	const rows: string[] = [];
-	for (const { agent, home, skills, target, found } of plan(options)) {
+	for (const entry of plan(options)) {
+		if (isUnusable(entry)) {
+			rows.push(`- ${entry.agent.label}: ${entry.problem}`);
+			continue;
+		}
+		const { agent, home, skills, target, found } = entry;
 		const label = `- ${agent.label}:`;
 		if (!found) {
 			rows.push(`${label} not found (${home} does not exist)`);

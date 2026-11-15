@@ -90,6 +90,41 @@ describe("agent homes", () => {
 	});
 });
 
+describe("a relative folder override (R-5)", () => {
+	it("is refused by name, never resolved against the working folder", () => {
+		const codex = AGENTS.find((agent) => agent.id === "codex");
+		expect(() =>
+			agentHome(codex as (typeof AGENTS)[number], "/home/u", {
+				CODEX_HOME: "rel/codex",
+			}),
+		).toThrow(
+			'CODEX_HOME is a relative path ("rel/codex"); set it to an absolute path',
+		);
+	});
+
+	it("skips that agent in install, uninstall and diagnose, and creates nothing", () => {
+		const home = tempDir("rp-home-");
+		const source = fakePackage();
+		mkdirSync(path.join(home, ".claude"));
+		const env = { CODEX_HOME: "rel/codex" };
+		const installed = installSkill(options(home, source, { env }));
+		expect(installed.ok).toBe(false);
+		expect(installed.lines.join("\n")).toContain(
+			'Codex: skipped: CODEX_HOME is a relative path ("rel/codex"); set it to an absolute path',
+		);
+		expect(readlinkSync(target(path.join(home, ".claude", "skills")))).toBe(
+			source,
+		);
+		expect(existsSync(path.join(process.cwd(), "rel"))).toBe(false);
+		expect(uninstallSkill(options(home, source, { env })).lines).toContain(
+			'Codex: skipped: CODEX_HOME is a relative path ("rel/codex"); set it to an absolute path',
+		);
+		expect(skillStatus(options(home, source, { env }))).toContain(
+			'- Codex: CODEX_HOME is a relative path ("rel/codex"); set it to an absolute path',
+		);
+	});
+});
+
 describe("skill install", () => {
 	it("links the skill into each agent whose home exists, and creates nothing for the others", () => {
 		const home = tempDir("rp-home-");
