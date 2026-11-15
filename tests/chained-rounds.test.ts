@@ -26,7 +26,10 @@ import { runVerify } from "../src/run/run-verify.js";
 import type { StampedFinding } from "../src/run/types.js";
 import { loadVerifyChain } from "../src/run/verify-chain.js";
 import type { SeatSpec } from "../src/seat/sdk-session.js";
-import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
+import {
+	findCloseoutPr,
+	type PostCloseoutInput,
+} from "../src/tool/closeout-post.js";
 import type { RoundGhRunner } from "../src/tool/round-post.js";
 import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
@@ -195,6 +198,10 @@ function deps(): ActionDependencies {
 		recordKey: () => TEST_RECORD_KEY,
 		checkRecordKey: () => undefined,
 		runGh,
+		// The PR lookup comment makes before its final check, through the
+		// same gh script.
+		findCloseoutPr: (input: Parameters<typeof findCloseoutPr>[0]) =>
+			findCloseoutPr({ ...input, runGh: runGh as never }),
 		// The real verify, with each seat's answer scripted.
 		runVerify: (input, options) =>
 			runVerify(input, {
@@ -901,33 +908,37 @@ describe("the final check before the card (S-6)", () => {
 		expect(card.body).not.toContain("from the reviewed head to the final head");
 	});
 
-	it("comment names the final check as the latest verify when the post then fails", async () => {
-		await round1();
-		answers.push({ items: [] });
-		let refusal = "";
-		await commentAction(
-			{
-				repoDir: repo,
-				ownerApproved: true,
-				priorRunId: REVIEW,
-				dismissed: [],
-				lowAdvisory: [],
-			},
-			{
-				deps: {
-					...deps(),
-					postComment: () => {
-						throw new Error("comment refused: no open PR has this head");
+	it("comment finds the PR before the final check: with no PR to post to, no seat runs and no chain link is written (L-1)", async () => {
+		const v1 = await round1();
+		const noPr: RoundGhRunner = (args, options) =>
+			/commits\/[0-9a-f]+\/pulls/.test(args.join(" "))
+				? "[]"
+				: runGh(args, options);
+		await expect(
+			commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: REVIEW,
+					dismissed: [],
+					lowAdvisory: [],
+				},
+				{
+					deps: {
+						...deps(),
+						findCloseoutPr: (input: Parameters<typeof findCloseoutPr>[0]) =>
+							findCloseoutPr({ ...input, runGh: noPr as never }),
+						postComment: () => {
+							throw new Error("nothing is posted");
+						},
 					},
 				},
-			},
-		).catch((error: unknown) => {
-			refusal = String(error);
-		});
-		const final = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY).at(-1);
-		expect(refusal).toContain(
-			`comment refused: no open PR has this head; the final check is recorded: the latest verify is now "${final?.runId}"`,
-		);
+			),
+		).rejects.toThrow("comment refused: no open PR has this head");
+		expect(specs).toHaveLength(1);
+		expect(
+			loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY).map((row) => row.runId),
+		).toEqual([v1.runId]);
 	});
 
 	it("comment refuses before any seat runs what it would refuse anyway, and says why while a verify runs from the tip", async () => {
