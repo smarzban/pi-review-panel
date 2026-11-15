@@ -13,11 +13,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { loadRoleTable } from "../src/config/roles.js";
 import {
-	GROUPS_FILE,
-	GROUPS_MAC_FILE,
 	numberGroups,
 	planConsolidator,
-	readSignedGroups,
+	recordedGrouping,
 	runGroupingStep,
 } from "../src/run/grouping.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
@@ -25,11 +23,7 @@ import { RunReviewError, runReview } from "../src/run/run-review.js";
 import { RunCancelledError } from "../src/run/scheduler.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import type { runGroupingSeat } from "../src/seat/run-seat.js";
-import {
-	TEST_RECORD_KEY,
-	testGroupsMac,
-	testPlanMac,
-} from "./fixtures/record-key.js";
+import { TEST_RECORD_KEY } from "./fixtures/record-key.js";
 import {
 	createSdkSeatFake,
 	type FakeResponse,
@@ -145,8 +139,8 @@ function expectCancelledRecord(error: unknown): void {
 		"1.mac",
 	]);
 	expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(false);
-	expect(existsSync(path.join(recordPath, GROUPS_FILE))).toBe(false);
-	expect(existsSync(path.join(recordPath, GROUPS_MAC_FILE))).toBe(false);
+	expect(existsSync(path.join(recordPath, "groups.json"))).toBe(false);
+	expect(existsSync(path.join(recordPath, "groups.mac"))).toBe(false);
 	const execution = JSON.parse(
 		readFileSync(path.join(recordPath, "execution.json"), "utf8"),
 	) as { cancelled: boolean; grouping?: unknown };
@@ -253,59 +247,29 @@ describe("the grouping step", () => {
 		});
 		expect(result.grouping?.seat.rosterId).toBe("opus");
 
-		const bytes = readFileSync(
-			path.join(result.recordPath, GROUPS_FILE),
+		// The groups are recorded once, in execution.json under record.mac;
+		// no side file holds them (T501).
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.mac"))).toBe(false);
+		const findingsText = readFileSync(
+			path.join(result.recordPath, "findings.json"),
 			"utf8",
 		);
-		const runId = path.basename(result.recordPath);
-		expect(JSON.parse(bytes)).toEqual({
-			version: 1,
-			runId,
-			consolidator: {
-				rosterId: "opus",
-				provider: "anthropic",
-				model: "claude-opus-5",
-			},
+		const executionText = readFileSync(
+			path.join(result.recordPath, "execution.json"),
+			"utf8",
+		);
+		expect(recordedGrouping(executionText, findingsText)).toEqual({
+			kind: "grouped",
 			groups: [
 				{ id: "G-1", findingIds: ["F-1", "F-3"] },
 				{ id: "G-2", findingIds: ["F-4"] },
 				{ id: "G-3", findingIds: ["F-2"] },
 			],
 		});
-		const findingsText = readFileSync(
-			path.join(result.recordPath, "findings.json"),
-			"utf8",
-		);
-		const planMac = testPlanMac(
-			runId,
-			readFileSync(path.join(result.recordPath, "plan.json"), "utf8"),
-		);
-		expect(
-			readFileSync(path.join(result.recordPath, GROUPS_MAC_FILE), "utf8"),
-		).toBe(testGroupsMac(runId, planMac, findingsText, bytes));
-		expect(
-			readSignedGroups(
-				result.recordPath,
-				TEST_RECORD_KEY,
-				planMac,
-				findingsText,
-			)?.map((group) => group.id),
-		).toEqual(["G-1", "G-2", "G-3"]);
 		// The groups are checked against the signed findings bytes the caller
-		// passes, never findings.json read again from disk (review R-2).
-		writeFileSync(path.join(result.recordPath, "findings.json"), "[]");
-		expect(
-			readSignedGroups(
-				result.recordPath,
-				TEST_RECORD_KEY,
-				planMac,
-				findingsText,
-			)?.map((group) => group.id),
-		).toEqual(["G-1", "G-2", "G-3"]);
-		expect(
-			readSignedGroups(result.recordPath, TEST_RECORD_KEY, planMac, "[]"),
-		).toBeUndefined();
-		writeFileSync(path.join(result.recordPath, "findings.json"), findingsText);
+		// passes, never findings.json read from disk (review R-2).
+		expect(recordedGrouping(executionText, "[]").kind).toBe("none");
 
 		// findings.json stays the flat stamped list, untouched.
 		const findings = JSON.parse(
@@ -349,10 +313,8 @@ describe("the grouping step", () => {
 		const result = await run;
 		expect(fake.runs).toHaveLength(2);
 		expect(result.grouping).toBeUndefined();
-		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
-		expect(existsSync(path.join(result.recordPath, GROUPS_MAC_FILE))).toBe(
-			false,
-		);
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.mac"))).toBe(false);
 		const execution = JSON.parse(
 			readFileSync(path.join(result.recordPath, "execution.json"), "utf8"),
 		) as Record<string, unknown>;
@@ -369,7 +331,7 @@ describe("the grouping step", () => {
 		const result = await run;
 		expect(fake.runs).toHaveLength(2);
 		expect(result.grouping).toBeUndefined();
-		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
 	});
 
 	it("refuses an invalid submission and takes the seat's corrected one", async () => {
@@ -421,7 +383,7 @@ describe("the grouping step", () => {
 			reason:
 				"seat SDK session ended without submitting groups after no-submit retry",
 		});
-		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
 		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
 			true,
 		);
@@ -436,7 +398,7 @@ describe("the grouping step", () => {
 			kind: "lost",
 			class: "provider-error",
 		});
-		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
 		// report.md names the lost grouping above the flat list.
 		const report = readFileSync(
 			path.join(result.recordPath, "report.md"),
@@ -481,7 +443,7 @@ describe("the grouping step", () => {
 			reason: "the grouping session could not start",
 		});
 		expect(result.grouping?.lifecycle.aborted).toBe(false);
-		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
 		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
 			true,
 		);
@@ -540,7 +502,7 @@ describe("the grouping step", () => {
 			reason: "the seat produced an unusable grouping result",
 		});
 		expect(result.grouping?.lifecycle.durationMs).toBe(5);
-		expect(existsSync(path.join(result.recordPath, GROUPS_FILE))).toBe(false);
+		expect(existsSync(path.join(result.recordPath, "groups.json"))).toBe(false);
 		expect(existsSync(path.join(result.recordPath, COMPLETE_MARKER))).toBe(
 			true,
 		);

@@ -132,7 +132,7 @@ describe("owner configuration guide", () => {
 		expect(parsed.defaults.consolidator).toBe("claude");
 		const guide = readFileSync(GUIDE_PATH, "utf8");
 		expect(guide).toContain("`consolidator` (optional)");
-		expect(guide).toContain("`groups.json`");
+		expect(guide).toContain("`execution.json`, under `grouping`");
 	});
 
 	it("README says owner-default lenses run without a trigger", () => {

@@ -3,12 +3,7 @@ import path from "node:path";
 import type { SdkSessionFactory } from "../seat/run-seat.js";
 import { collectFindings } from "./collect.js";
 import { flagPersistence } from "./flag.js";
-import {
-	type GroupingFacts,
-	removeGroups,
-	runGroupingStep,
-	writeGroups,
-} from "./grouping.js";
+import { type GroupingFacts, runGroupingStep } from "./grouping.js";
 import {
 	acquireRunLock,
 	complete,
@@ -315,14 +310,13 @@ export async function executeReview(
 		});
 		stage = "collect";
 		const stamped = collectFindings(outcomes);
-		// The exact findings.json text, fixed now: the grouping is signed over
-		// it, and the same bytes are written below.
+		// The exact findings.json text, fixed now and written below.
 		const findingsText = renderFindingsJson(stamped);
 		stage = "flag";
 		const annotations = flagPersistence(stamped, config.priorRecordPaths ?? []);
 		stage = "group";
-		// A resumed record may hold groups made for other F-ids.
-		removeGroups(record.recordPath);
+		// The groups live only in execution.json, signed under record.mac:
+		// verify and comment take G-ids from there, never from another file.
 		let grouping: GroupingFacts | undefined;
 		if (config.consolidator !== undefined && stamped.length >= 2) {
 			grouping = await (options.runGroupingStep ?? runGroupingStep)(
@@ -353,16 +347,6 @@ export async function executeReview(
 				...(resumedSeats === undefined ? {} : { resumedSeats }),
 				grouping,
 			});
-			if (grouping.outcome.kind === "grouped") {
-				writeGroups(
-					record.recordPath,
-					grouping.seat,
-					grouping.outcome.groups,
-					seal === undefined
-						? undefined
-						: { key: seal.key, planMac: seal.planMac, findingsText },
-				);
-			}
 		}
 		stage = "release";
 		const release = releaseOnce();

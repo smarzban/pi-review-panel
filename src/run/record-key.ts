@@ -379,29 +379,6 @@ export function seatMac(
 }
 
 /**
- * The MAC of a review's `groups.json` bytes, bound to its run id, the plan's
- * MAC and the SHA-256 of the exact `findings.json` bytes it grouped: a
- * grouping made for an earlier list (one a resume has since regrouped) cannot
- * be put back. Its own domain tag keeps a groups MAC from ever matching a
- * plan, seat or record MAC.
- */
-export function groupsMac(
-	key: Buffer,
-	runId: string,
-	planMacHex: string,
-	findingsBytes: string,
-	groupsBytes: string,
-): string {
-	const findingsHash = createHash("sha256").update(findingsBytes).digest("hex");
-	return createHmac("sha256", key)
-		.update(
-			`pi-review-panel/groups/v2\0${runId}\0${planMacHex}\0${findingsHash}\0`,
-		)
-		.update(groupsBytes)
-		.digest("hex");
-}
-
-/**
  * The completion MAC of a record (`record.mac`), written last before
  * `COMPLETE`: bound to the run id, the record kind and the plan's MAC (empty
  * for a verify record, which has no plan), over each covered file's name and
