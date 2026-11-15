@@ -758,6 +758,26 @@ function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
 	];
 }
 
+/**
+ * True when the card would list nothing as open after this verify, by the
+ * card's own accounting: a high or medium no round kept is open, and a low
+ * no round listed cannot be accounted for.
+ */
+function nothingOpen(facts: VerifyRoundFacts): boolean {
+	try {
+		return (
+			accountCloseoutFindings({
+				findings: facts.review.findings,
+				state: stateAfter(facts),
+				dismissed: [],
+				lowAdvisory: [],
+			}).open.length === 0
+		);
+	} catch {
+		return false;
+	}
+}
+
 /** Where every id stands after this verify, from the review and the chain. */
 function stateAfter(facts: VerifyRoundFacts): ChainState {
 	return chainState(facts.review.findings, chainWithOwn(facts));
@@ -1233,7 +1253,7 @@ export async function postVerifyRound(
 	const blocker = closeoutBlocker(result);
 	if (facts.closeOut !== true) {
 		// Never automatic: say so only when it could have been asked for.
-		if (blocker === undefined && stateAfter(facts).open.length === 0) {
+		if (blocker === undefined && nothingOpen(facts)) {
 			lines.push(
 				notPosted(
 					"PR close-out",

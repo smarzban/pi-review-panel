@@ -227,8 +227,7 @@ the review's signed `execution.json` records: it must have grouped exactly the F
 are refused, and the message says why and asks for F-ids. An id that names neither a
 finding nor a group is refused as before, and so is a list that names one F-id twice, such as
 a G-id and one of its own members. Verify itself still checks F-ids (and regression ids such as
-`V1-R1`), so the verify comment and the close-out card list those. On a chained verify, every
-member of a G-id must still be open: name the open members when some were already judged.
+`V1-R1`), so the verify comment and the close-out card list those.
 
 ## Interrupted runs and `resume`
 

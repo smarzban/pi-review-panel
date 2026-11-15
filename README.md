@@ -33,12 +33,14 @@ What you get instead:
 - **No verdict.** No risk score. No “patch is correct.” Severity is an opinion
   you may drop or promote.
 - **Verify the keep list.** After you fix, a new HEAD is checked against the
-  ids you kept — not a second full discovery circus.
+  ids you kept — not a second full discovery circus. Each later verify chains
+  from the last one and checks only what is still open.
 - **Each round on the PR.** When the head is an open PR, the review and each
-  verify post a new comment there, and a verify where every seat voted and
-  resolved every kept id, with no regressions, also posts the close-out card: counts by severity,
-  each kept finding with the verify round that resolved it, the verify seats, dismissals with
-  reasons, leftover lows, and links to the review and verify comments. Never “fixed”, never
+  verify post a new comment there. The close-out card is posted once, at the end,
+  when asked (`verify --close-out` when nothing is left open, or `comment` when the
+  owner stops the rounds): counts by severity, each id with the verify round that
+  resolved it or listed as still open, the verify seats, dismissals with reasons,
+  leftover lows, and links to the review and verify comments. Never “fixed”, never
   “ready to merge.” Turn it off per run
   with `--no-pr-comment`, or set `defaults.prComment: "ownerApproved"` so every
   post needs the owner's yes.
@@ -145,6 +147,13 @@ close-out carry them:
 ```bash
 review-panel verify --prior-run-id <run-id> --head HEAD --kept-finding-ids F-1 \
   --dismissed '[{"id":"F-2","reason":"by design"}]' --low-advisory F-3
+```
+
+Later verifies chain from the latest verify and check only what is still open (see
+[Verify rounds chain](docs/configuration.md#verify-rounds-chain)):
+
+```bash
+review-panel verify --prior-run-id <latest verify run-id> --head HEAD [--close-out]
 ```
 
 Review and verify post their round to the open PR whose head is the run's head
