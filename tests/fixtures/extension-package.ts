@@ -7,7 +7,14 @@
  * clone from that local repository, so no test reaches the network.
  */
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
 
 const EXTENSION_FIXTURES = path.join(import.meta.dirname, "extension-provider");
@@ -38,19 +45,38 @@ export function writeExtensionPackage(
 		path.join(dir, "extensions", "index.ts"),
 	);
 	if (options.git) {
+		// Nothing of the developer's Git setup applies: no global or system
+		// config (signing, hooks, templates), a throwaway HOME, a fixed author.
+		const home = mkdtempSync(path.join(tmpdir(), "rp-fixture-git-home-"));
+		const env = {
+			PATH: process.env.PATH ?? "",
+			HOME: home,
+			GIT_CONFIG_GLOBAL: os.devNull,
+			GIT_CONFIG_NOSYSTEM: "1",
+			GIT_AUTHOR_NAME: "Fixture",
+			GIT_AUTHOR_EMAIL: "fixture@example.test",
+			GIT_COMMITTER_NAME: "Fixture",
+			GIT_COMMITTER_EMAIL: "fixture@example.test",
+		};
 		const git = (args: string[]) =>
-			execFileSync("git", args, { cwd: dir, stdio: "ignore" });
-		git(["init", "-q"]);
-		git(["add", "."]);
-		git([
-			"-c",
-			"user.email=fixture@example.test",
-			"-c",
-			"user.name=Fixture",
-			"commit",
-			"-qm",
-			"fixture",
-		]);
+			execFileSync(
+				"git",
+				[
+					"-c",
+					`core.hooksPath=${os.devNull}`,
+					"-c",
+					"commit.gpgsign=false",
+					...args,
+				],
+				{ cwd: dir, stdio: "ignore", env },
+			);
+		try {
+			git(["init", "-q", "--template="]);
+			git(["add", "."]);
+			git(["commit", "-qm", "fixture"]);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
 	}
 	return path.join(dir, "extensions", "index.ts");
 }
@@ -64,6 +90,7 @@ export function gitSourceEnv(repo: string): Record<string, string> {
 		GIT_CONFIG_COUNT: "1",
 		GIT_CONFIG_KEY_0: `url.${repo}.insteadOf`,
 		GIT_CONFIG_VALUE_0: FIXTURE_GIT_URL,
+		GIT_CONFIG_NOSYSTEM: "1",
 		npm_config_offline: "true",
 		npm_config_audit: "false",
 		npm_config_fund: "false",
