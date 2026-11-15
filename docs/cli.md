@@ -199,7 +199,9 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   `--json` prints the objects. Only the agent folder's own `settings.json` is read, never a
   `.pi/` folder in the working folder, so a repository cannot add a package to the list.
 - `extension remove <source>` takes the source as `extension list` prints it (a local folder is
-  recorded relative to the agent folder), or a local path from the working folder. It deletes a
+  recorded relative to the agent folder, and a source with a credential is printed redacted:
+  that form removes the one recorded source it matches), or a local path from the working
+  folder. It deletes a
   git clone or npm install, keeps a local folder, and exits 1 when nothing matches. Remove the
   path from every roster row too.
 

@@ -752,10 +752,26 @@ export async function removeExtension(input: {
 		input.signal,
 	);
 	// The source as `extension list` prints it is taken as is: a relative local
-	// source there is relative to the agent folder, not to the working folder.
-	const source = configured.some((entry) => entry.source === input.source)
-		? input.source
-		: absoluteSource(input.source, input.cwd, input.home);
+	// source there is relative to the agent folder, not to the working folder,
+	// and a source with a credential is printed redacted, so the printed form
+	// names the recorded source it matches when it matches exactly one.
+	let source: string;
+	const printedAs = configured.filter(
+		(entry) =>
+			entry.source !== input.source &&
+			redactSecrets(entry.source) === input.source,
+	);
+	if (configured.some((entry) => entry.source === input.source)) {
+		source = input.source;
+	} else if (printedAs.length === 1) {
+		source = (printedAs[0] as InstalledExtension).source;
+	} else if (printedAs.length > 1) {
+		throw new SetupError(
+			`${input.source} matches ${printedAs.length} installed sources that differ only in their credentials. Remove the one you mean from "packages" in ${path.join(input.agentDir.dir, "settings.json")}, and its folder under ${path.join(input.agentDir.dir, "git")}.`,
+		);
+	} else {
+		source = absoluteSource(input.source, input.cwd, input.home);
+	}
 	const removed = await untilAborted(
 		input.sdk.removeExtension({
 			agentDir: input.agentDir.dir,
