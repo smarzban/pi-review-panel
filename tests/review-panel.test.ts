@@ -24,7 +24,6 @@ import {
 import type { Config } from "../src/config/schema.js";
 import { loadRecordKey } from "../src/run/record-key.js";
 import { resumeRun } from "../src/run/resume.js";
-import { runAudit } from "../src/run/run-audit.js";
 import { type RunReviewResult, runReview } from "../src/run/run-review.js";
 import type { PlannedSeat, RunConfig } from "../src/run/types.js";
 import {
@@ -1386,62 +1385,6 @@ describe("the resume action", () => {
 			});
 	}
 
-	it("finishes an interrupted audit with the audit rendering", async () => {
-		await withRepository(async (repository) => {
-			const seats = threeSeats()
-				.slice(0, 2)
-				.map((seat, index) => ({
-					...seat,
-					lens: index === 0 ? "code-health" : "security",
-				}));
-			const controller = new AbortController();
-			const interrupted = createSdkSeatFake([
-				{ kind: "default" },
-				{ kind: "pending" },
-			]);
-			await expect(
-				runAudit(
-					{ repoDir: repository, seats },
-					{
-						abortSignal: controller.signal,
-						recordKey: TEST_RECORD_KEY,
-						sessionFactory: interrupted.factory,
-						onProgress: (event) => {
-							if (event.kind === "seat-finished") {
-								controller.abort();
-							}
-						},
-					},
-				),
-			).rejects.toThrow(/cancel/i);
-			const runId = readdirSync(
-				path.join(repository, ".review-panel", "runs"),
-			)[0] as string;
-			const sessions: string[] = [];
-			const updates: string[] = [];
-			const tool = toolWith({
-				loadConfig: () => rosterOf(seats),
-				resumeRun: countingResume(sessions),
-			});
-			const response = await tool.execute(
-				"call-1",
-				{ action: "resume", repository, priorRunId: runId },
-				undefined,
-				(view) => updates.push(renderReviewProgress(view)),
-				{},
-			);
-			const text = response.content[0]?.text ?? "";
-			expect(sessions).toEqual(["security"]);
-			expect(text).toContain(
-				`Resumed ${runId}: ran 1 of 2 planned seats again (seat-1/security); kept 1 as recorded.`,
-			);
-			expect(text).toContain("# Repository audit");
-			expect(text).toContain("2/2 voted");
-			expect(text).not.toContain("# Review panel");
-			expect(updates[0]).toMatch(/audit started/);
-		});
-	});
-
 	it("counts a seat it could not rebuild as lost coverage, not as kept", async () => {
 		await withRepository(async (repository) => {
 			const runId = await interruptedRecord(repository);
@@ -1663,7 +1606,7 @@ describe("the record key", () => {
 	);
 
 	it.skipIf(process.platform === "win32")(
-		"audit refuses, and runs no seat, when the record key is unusable",
+		"review refuses, and runs no seat, when the record key is a symlink",
 		async () => {
 			await withRepository((repository) =>
 				withConfigDir(async (configDir) => {
@@ -1671,29 +1614,29 @@ describe("the record key", () => {
 						path.join(configDir, "elsewhere"),
 						path.join(configDir, "record-key"),
 					);
-					let audited = 0;
+					let reviewed = 0;
 					const tool = ownerTool(configDir, {
 						loadConfig: () => ({
 							...roster,
 							defaults: { seats: ["seat-0", "seat-1"] },
 						}),
-						runAudit: async () => {
-							audited += 1;
-							throw new Error("runAudit must not be called");
+						runReview: async () => {
+							reviewed += 1;
+							throw new Error("runReview must not be called");
 						},
 					});
 					await expect(
 						tool.execute(
 							"call-1",
-							{ action: "audit", repository, passes: ["security"] },
+							{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 							undefined,
 							undefined,
 							{},
 						),
 					).rejects.toThrow(
-						/Audit refused: record key .*record-key is a symlink and is refused/,
+						/Review refused: record key .*record-key is a symlink and is refused/,
 					);
-					expect(audited).toBe(0);
+					expect(reviewed).toBe(0);
 				}),
 			);
 		},
@@ -1809,7 +1752,7 @@ describe("the record key", () => {
 	}
 
 	it.skipIf(process.platform === "win32")(
-		"review and audit run with a valid key in a group-writable (0775) folder",
+		"review runs with a valid key in a group-writable (0775) folder",
 		async () => {
 			await withRepository((repository) =>
 				withConfigDir(async (configDir) => {
@@ -1830,10 +1773,6 @@ describe("the record key", () => {
 								})),
 							} as unknown as RunReviewResult;
 						},
-						runAudit: async (_config, options) => {
-							given.push(options?.recordKey);
-							throw new Error("audit stub reached with the key");
-						},
 					});
 					await tool.execute(
 						"call-1",
@@ -1842,16 +1781,7 @@ describe("the record key", () => {
 						undefined,
 						{},
 					);
-					await expect(
-						tool.execute(
-							"call-1",
-							{ action: "audit", repository, passes: ["security"] },
-							undefined,
-							undefined,
-							{},
-						),
-					).rejects.toThrow(/audit stub reached with the key/);
-					expect(given).toHaveLength(2);
+					expect(given).toHaveLength(1);
 					for (const each of given) {
 						expect(each?.equals(key)).toBe(true);
 					}
@@ -1861,7 +1791,7 @@ describe("the record key", () => {
 	);
 
 	it.skipIf(process.platform === "win32")(
-		"review, audit and resume refuse a key folder other users can write",
+		"review and resume refuse a key folder other users can write",
 		async () => {
 			await withRepository((repository) =>
 				withConfigDir(async (configDir) => {
@@ -1879,16 +1809,12 @@ describe("the record key", () => {
 							runReview: async () => {
 								throw new Error("runReview must not be called");
 							},
-							runAudit: async () => {
-								throw new Error("runAudit must not be called");
-							},
 						});
 						for (const [args, refusal] of [
 							[
 								{ action: "review", repository, base: "HEAD~1", head: "HEAD" },
 								"Review",
 							],
-							[{ action: "audit", repository, passes: ["security"] }, "Audit"],
 							[
 								{ action: "resume", repository, priorRunId: "any-run" },
 								"Resume",

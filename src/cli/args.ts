@@ -5,6 +5,7 @@
  * `--provider` or `--model` flags: seats come only from the owner config.
  */
 
+import { AUDIT_REMOVED } from "../actions/call.js";
 import { AGENT_IDS, type AgentId, isAgentId } from "./skill.js";
 
 export class UsageError extends Error {}
@@ -54,7 +55,6 @@ export function withoutKeyLikeNames(
 export const ACTIONS = [
 	"diagnose",
 	"review",
-	"audit",
 	"verify",
 	"resume",
 	"comment",
@@ -132,11 +132,6 @@ const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 		lenses: LIST("lenses"),
 		"scoping-note": STRING("scopingNote"),
 		...ROUND_FLAGS,
-	},
-	audit: {
-		seats: LIST("seats"),
-		passes: LIST("passes"),
-		"scoping-note": STRING("scopingNote"),
 	},
 	verify: {
 		"prior-run-id": STRING("priorRunId"),
@@ -445,6 +440,9 @@ export function parseCommand(argv: readonly string[]): Command {
 	if (first === "--version" || first === "-v" || first === "version") {
 		return { kind: "version" };
 	}
+	if (first === "audit") {
+		throw new UsageError(AUDIT_REMOVED);
+	}
 	if ((ACTIONS as readonly string[]).includes(first)) {
 		return parseAction(first as ActionName, rest);
 	}
@@ -469,7 +467,6 @@ Actions:
   suggest                      Suggest lenses for base...head, each with its reason; runs no seat: --base <ref> --head <ref>
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]
-  audit                        Advisory whole-repository sweep of HEAD: [--seats a,b] [--passes p,q] [--scoping-note <text>]
   verify                       Check fixes against a prior run: --prior-run-id <run> --head <ref> --kept-finding-ids F-1,G-2 [--seats a,b] [--scoping-note <text>]
                                [--low-advisory F-3,F-4] [--dismissed <json> | --dismissed @<file> | --dismissed -]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]

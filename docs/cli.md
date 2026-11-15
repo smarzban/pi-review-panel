@@ -145,7 +145,6 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 | `review-panel diagnose` | `{"action":"diagnose"}` |
 | `review-panel suggest --base main --head HEAD` | `base`, `head` |
 | `review-panel review --base main --head HEAD [--seats a,b] [--lenses tests,security] [--scoping-note <text>] [--no-pr-comment] [--pr 22] [--owner-approved]` | `base`, `head`, `seats`, `lenses`, `scopingNote`, `prComment: false`, `pr`, `ownerApproved` |
-| `review-panel audit [--seats a,b] [--passes code-health,security] [--scoping-note <text>]` | `seats`, `passes`, `scopingNote` |
 | `review-panel verify --prior-run-id <run> --head HEAD --kept-finding-ids F-1,G-2 [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `prComment: false`, `pr`, `ownerApproved` |
 | `review-panel resume --prior-run-id <run>` | `priorRunId` |
 | `review-panel comment --prior-run-id <run> --owner-approved [--pr 22] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -]` | `priorRunId`, `ownerApproved`, `pr`, `verifyRunId`, `head`, `lowAdvisory`, `dismissed` |
@@ -179,14 +178,14 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 - An error about an unknown command, option or argument, a provider id, or an unknown
   argument name in a `call` object repeats it only when it is shaped like a name (letters, no
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
-  appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--passes`),
+  appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   and any value in a `call` object, such as `repository` or `priorRunId`.
 
 | Exit code | Meaning |
 |---|---|
 | 0 | The command completed. That includes a review with findings and a `diagnose` that says `needs setup`: read the report. |
 | 1 | A refusal or an operational failure, such as an unready panel, a missing commit, `comment` without `--owner-approved`, or Ctrl-C. |
-| 2 | A usage error: an unknown command or flag, or arguments an action would reject. |
+| 2 | A usage error: an unknown command or flag, or arguments an action would reject. `review-panel audit` and `{"action":"audit"}` exit 2 and say the repository audit was removed. |
 
 ## Development
 

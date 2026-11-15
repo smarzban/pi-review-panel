@@ -72,7 +72,6 @@ function harness(
 	const actions = {
 		diagnose: make("diagnose"),
 		review: make("review"),
-		audit: make("audit"),
 		verify: make("verify"),
 		resume: make("resume"),
 		comment: make("comment"),
@@ -157,16 +156,6 @@ describe("action commands map flags onto the actions' arguments", () => {
 			scopingNote: "only the parser",
 		});
 		expect(h.out()).toBe("review report\n");
-	});
-
-	it("audit: --seats, --passes, --scoping-note", async () => {
-		const h = harness();
-		await h.run(["audit", "--passes", "security", "--seats", "sol"]);
-		expect(h.calls.audit?.[0]?.input).toEqual({
-			repoDir: REPO,
-			seats: ["sol"],
-			passes: ["security"],
-		});
 	});
 
 	it("verify: --prior-run-id, --head, --kept-finding-ids (empty allowed)", async () => {
@@ -320,10 +309,10 @@ describe("action commands map flags onto the actions' arguments", () => {
 
 	it("passes the abort signal and sends progress to stderr, not stdout", async () => {
 		const h = harness();
-		await h.run(["audit"]);
-		expect(h.calls.audit?.[0]?.context.signal).toBe(h.controller.signal);
+		await h.run(["resume", "--prior-run-id", "r"]);
+		expect(h.calls.resume?.[0]?.context.signal).toBe(h.controller.signal);
 		expect(h.err()).toContain("review started");
-		expect(h.out()).toBe("audit report\n");
+		expect(h.out()).toBe("resume report\n");
 	});
 });
 
@@ -420,8 +409,11 @@ describe("call takes one argument object", () => {
 			lowAdvisory: ["F-3"],
 			dismissed: [{ id: "F-1", reason: "dup" }],
 		});
-		await h.run(["call", '{"action":"audit","seats":"sol"}']);
-		expect(h.calls.audit?.[0]?.input).toMatchObject({ seats: ["sol"] });
+		await h.run([
+			"call",
+			'{"action":"review","base":"a","head":"b","seats":"sol"}',
+		]);
+		expect(h.calls.review?.[0]?.input).toMatchObject({ seats: ["sol"] });
 	});
 
 	it("refuses --repo together with repository", async () => {
@@ -497,7 +489,19 @@ describe("exit codes never encode review content", () => {
 		expect(await h.run(["verify", "--prior-run-id", "r", "--head", "H"])).toBe(
 			EXIT_USAGE,
 		);
-		expect(await h.run(["audit", "--seats", ""])).toBe(EXIT_USAGE);
+		expect(
+			await h.run([
+				"verify",
+				"--prior-run-id",
+				"r",
+				"--head",
+				"H",
+				"--kept-finding-ids",
+				"F-1",
+				"--seats",
+				"",
+			]),
+		).toBe(EXIT_USAGE);
 		expect(await h.run(["diagnose", "extra"])).toBe(EXIT_USAGE);
 		expect(
 			await h.run([
@@ -515,15 +519,15 @@ describe("exit codes never encode review content", () => {
 	it("exits 1 when the action returned after Ctrl-C, still printing what it returned", async () => {
 		const h = harness();
 		h.controller.abort();
-		expect(await h.run(["audit"])).toBe(EXIT_FAILED);
-		expect(h.out()).toBe("audit report\n");
+		expect(await h.run(["resume", "--prior-run-id", "r"])).toBe(EXIT_FAILED);
+		expect(h.out()).toBe("resume report\n");
 		expect(h.err()).toContain("interrupted");
 	});
 
 	it("exits 1, not 0, when the run was aborted", async () => {
 		const h = harness({ throws: new Error("boom") });
 		h.controller.abort();
-		expect(await h.run(["audit"])).toBe(EXIT_FAILED);
+		expect(await h.run(["resume", "--prior-run-id", "r"])).toBe(EXIT_FAILED);
 		expect(h.err()).toBe("review-panel: aborted (boom)\n");
 	});
 
@@ -569,9 +573,9 @@ describe("exit codes never encode review content", () => {
 describe("output", () => {
 	it("--json prints the result object", async () => {
 		const h = harness();
-		await h.run(["audit", "--json"]);
+		await h.run(["resume", "--prior-run-id", "r", "--json"]);
 		expect(JSON.parse(h.out())).toEqual({
-			content: [{ type: "text", text: "audit report" }],
+			content: [{ type: "text", text: "resume report" }],
 		});
 	});
 
@@ -618,7 +622,6 @@ describe("output", () => {
 		for (const command of [
 			"diagnose",
 			"review",
-			"audit",
 			"verify",
 			"resume",
 			"comment",
@@ -638,7 +641,6 @@ describe("output", () => {
 describe("realActions", () => {
 	it("maps each action to its own production function", () => {
 		expect(Object.keys(realActions).sort()).toEqual([
-			"audit",
 			"comment",
 			"diagnose",
 			"resume",
@@ -648,7 +650,6 @@ describe("realActions", () => {
 		]);
 		expect(realActions.diagnose).toBe(actionsModule.diagnoseAction);
 		expect(realActions.review).toBe(actionsModule.reviewAction);
-		expect(realActions.audit).toBe(actionsModule.auditAction);
 		expect(realActions.verify).toBe(actionsModule.verifyAction);
 		expect(realActions.resume).toBe(actionsModule.resumeAction);
 		expect(realActions.comment).toBe(actionsModule.commentAction);
@@ -840,7 +841,6 @@ describe("suggest", () => {
 						}),
 						diagnose: never("diagnose") as never,
 						runReview: never("runReview") as never,
-						runAudit: never("runAudit") as never,
 						runVerify: never("runVerify") as never,
 						resumeRun: never("resumeRun") as never,
 						postComment: never("postComment") as never,

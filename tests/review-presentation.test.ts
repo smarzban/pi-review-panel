@@ -12,7 +12,6 @@ import {
 	MAX_PRESENTATION_BYTES,
 	progressFromReviewEvent,
 	progressFromVerifyEvent,
-	renderAuditResult,
 	renderReadiness,
 	renderReviewProgress,
 	renderReviewResult,
@@ -427,27 +426,6 @@ describe("seats line", () => {
 		);
 	});
 
-	it("puts the seats line under the audit summary, before areas and lost", () => {
-		const security: PlannedSeat = { ...terra, lens: "security" };
-		const glmSecurity: PlannedSeat = { ...glm, lens: "security" };
-		const text = renderAuditResult({
-			recordPath: "/tmp/audit-seats",
-			panel: [security, glmSecurity],
-			result: outcomesOf([security, glmSecurity], [glmSecurity]),
-		});
-		expect(text).toBe(
-			[
-				"# Repository audit",
-				"1/2 voted · 0 findings",
-				"Seats: security (terra, glm)",
-				"Lost: glm/security (provider-error)",
-				"Record: `/tmp/audit-seats`",
-				"",
-				"None submitted.",
-			].join("\n"),
-		);
-	});
-
 	it("lists the verify panel, failed seats included", () => {
 		const verifier: PlannedSeat = { ...terra, lens: "fix-verification" };
 		const glmVerifier: PlannedSeat = { ...glm, lens: "fix-verification" };
@@ -660,14 +638,6 @@ describe("no reply implies a pass", () => {
 				panel: [seat],
 				result: {
 					recordPath: "/tmp/r",
-					outcomes: [{ seat, outcome: { kind: "voted", findings: [] } }],
-				} as unknown as RunReviewResult,
-			}),
-			renderAuditResult({
-				recordPath: "/tmp/a",
-				panel: [seat],
-				result: {
-					recordPath: "/tmp/a",
 					outcomes: [{ seat, outcome: { kind: "voted", findings: [] } }],
 				} as unknown as RunReviewResult,
 			}),

@@ -19,7 +19,6 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadAuditPassTable } from "../src/config/audit-passes.js";
 import { loadLensTable, SHIPPED_LENSES } from "../src/config/lenses.js";
 import type { Config } from "../src/config/schema.js";
 import {
@@ -31,7 +30,6 @@ import {
 	SEATS_DIR,
 } from "../src/run/record.js";
 import { loadResumable, resumeRun } from "../src/run/resume.js";
-import { executeAudit, runAudit } from "../src/run/run-audit.js";
 import { executeReview, runReview } from "../src/run/run-review.js";
 import { scheduleSeats } from "../src/run/scheduler.js";
 import type { PlannedSeat } from "../src/run/types.js";
@@ -134,34 +132,6 @@ async function interruptedReview(
 				seats: threeSeats(),
 				...(scopingNote === undefined ? {} : { scopingNote }),
 			},
-			{
-				abortSignal: controller.signal,
-				recordKey: TEST_RECORD_KEY,
-				sessionFactory: fake.factory,
-				onProgress: (event) => {
-					if (event.kind === "seat-finished") {
-						controller.abort();
-					}
-				},
-			},
-		),
-	).rejects.toThrow(/cancel/i);
-	return onlyRecord(repo);
-}
-
-/** A two-seat audit (code-health, security) aborted after its first seat. */
-async function interruptedAudit(repo: string): Promise<string> {
-	const controller = new AbortController();
-	const fake = createSdkSeatFake([{ kind: "default" }, { kind: "pending" }]);
-	const seats = threeSeats()
-		.slice(0, 2)
-		.map((seat, index) => ({
-			...seat,
-			lens: index === 0 ? "code-health" : "security",
-		}));
-	await expect(
-		runAudit(
-			{ repoDir: repo, seats },
 			{
 				abortSignal: controller.signal,
 				recordKey: TEST_RECORD_KEY,
@@ -651,28 +621,6 @@ describe("resume enforces the panel caps", () => {
 			rmSync(repo, { recursive: true, force: true });
 		}
 	});
-
-	it("refuses an audit plan with a pass on more seats than the cap", async () => {
-		const repo = createHostRepo();
-		try {
-			const recordPath = await interruptedAudit(repo);
-			rewritePlan(recordPath, (plan) => {
-				plan.seats = [0, 1, 2, 3].map((index) => ({
-					rosterId: `roster-${index}`,
-					provider: "openai-codex",
-					model: `gpt-5.3-codex-${index}`,
-					lens: "security",
-				}));
-			});
-			expect(() =>
-				loadResumable(repo, path.basename(recordPath), TEST_RECORD_KEY),
-			).toThrow(
-				/Resume refused: run ".*" plans pass "security" on 4 seats; at most 3/,
-			);
-		} finally {
-			rmSync(repo, { recursive: true, force: true });
-		}
-	});
 });
 
 describe("resume takes no prompt text from the record", () => {
@@ -728,109 +676,66 @@ describe("resume takes no prompt text from the record", () => {
 			rmSync(repo, { recursive: true, force: true });
 		}
 	});
+});
 
-	it("gives a resumed audit seat exactly the package pass prompt", async () => {
+describe("resume passes the owner's seat budget", () => {
+	it("hands the owner config's seatBudgetMs to resumed review seats", async () => {
 		const repo = createHostRepo();
 		try {
-			const recordPath = await interruptedAudit(repo);
-			const counter = recordingFactory();
+			const recordPath = await interruptedReview(repo);
+			const budgets: Array<number | undefined> = [];
 			await resumeRun(loadResumable(repo, recordPath, TEST_RECORD_KEY), {
 				recordKey: TEST_RECORD_KEY,
-				config: ownerConfig(),
-				sessionFactory: counter.factory,
+				config: ownerConfig(987_654),
+				sessionFactory: createSdkSeatFake().factory,
+				scheduleSeats: (input, options) => {
+					budgets.push(options?.seatBudgetMs);
+					return scheduleSeats(input, options);
+				},
 			});
-			expect(counter.specs.map((spec) => spec.lens)).toEqual(["security"]);
-			expect(counter.specs[0]?.lensPrompt).toBe(
-				loadAuditPassTable().get("security"),
-			);
+			expect(budgets).toEqual([987_654]);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}
 	});
 });
 
-describe("resume passes the owner's seat budget", () => {
-	it.each(["review", "audit"] as const)(
-		"hands the owner config's seatBudgetMs to resumed %s seats",
-		async (kind) => {
-			const repo = createHostRepo();
-			try {
-				const recordPath =
-					kind === "review"
-						? await interruptedReview(repo)
-						: await interruptedAudit(repo);
-				const budgets: Array<number | undefined> = [];
-				await resumeRun(loadResumable(repo, recordPath, TEST_RECORD_KEY), {
-					recordKey: TEST_RECORD_KEY,
-					config: ownerConfig(987_654),
-					sessionFactory: createSdkSeatFake().factory,
-					scheduleSeats: (input, options) => {
-						budgets.push(options?.seatBudgetMs);
-						return scheduleSeats(input, options);
-					},
-				});
-				expect(budgets).toEqual([987_654]);
-			} finally {
-				rmSync(repo, { recursive: true, force: true });
-			}
-		},
-	);
-});
-
 describe("the run lock", () => {
-	it.each(["review", "audit"] as const)(
-		"%s refuses a record whose lock a live process holds",
-		async (kind) => {
-			const repo = createHostRepo();
-			const sleeper = liveForeignProcess();
-			try {
-				const recordPath =
-					kind === "review"
-						? await interruptedReview(repo)
-						: await interruptedAudit(repo);
-				const lockPath = path.join(recordPath, RUN_LOCK_FILE);
-				const lock = `${JSON.stringify({ pid: sleeper.pid })}\n`;
-				writeFileSync(lockPath, lock);
-				const counter = recordingFactory();
-				const plan = readJson(path.join(recordPath, PLAN_FILE)) as {
-					baseOid: string;
-					headOid: string;
-				};
-				const pending =
-					kind === "review"
-						? executeReview(
-								recordAt(recordPath),
-								{
-									repoDir: repo,
-									baseRef: "origin/main",
-									baseOid: plan.baseOid,
-									headOid: plan.headOid,
-									seats: threeSeats(),
-								},
-								{ sessionFactory: counter.factory },
-								{ settled: [undefined, undefined, undefined], lost: [] },
-							)
-						: executeAudit(
-								recordAt(recordPath),
-								{
-									repoDir: repo,
-									revision: plan.headOid,
-									seats: threeSeats().slice(0, 2),
-								},
-								{ sessionFactory: counter.factory },
-								{ settled: [undefined, undefined], lost: [] },
-							);
-				await expect(pending).rejects.toThrow(
-					new RegExp(`still in progress \\(pid ${sleeper.pid}\\)`),
-				);
-				expect(counter.specs).toEqual([]);
-				expect(readFileSync(lockPath, "utf8")).toBe(lock);
-			} finally {
-				sleeper.kill();
-				rmSync(repo, { recursive: true, force: true });
-			}
-		},
-	);
+	it("refuses a record whose lock a live process holds", async () => {
+		const repo = createHostRepo();
+		const sleeper = liveForeignProcess();
+		try {
+			const recordPath = await interruptedReview(repo);
+			const lockPath = path.join(recordPath, RUN_LOCK_FILE);
+			const lock = `${JSON.stringify({ pid: sleeper.pid })}\n`;
+			writeFileSync(lockPath, lock);
+			const counter = recordingFactory();
+			const plan = readJson(path.join(recordPath, PLAN_FILE)) as {
+				baseOid: string;
+				headOid: string;
+			};
+			const pending = executeReview(
+				recordAt(recordPath),
+				{
+					repoDir: repo,
+					baseRef: "origin/main",
+					baseOid: plan.baseOid,
+					headOid: plan.headOid,
+					seats: threeSeats(),
+				},
+				{ sessionFactory: counter.factory },
+				{ settled: [undefined, undefined, undefined], lost: [] },
+			);
+			await expect(pending).rejects.toThrow(
+				new RegExp(`still in progress \\(pid ${sleeper.pid}\\)`),
+			);
+			expect(counter.specs).toEqual([]);
+			expect(readFileSync(lockPath, "utf8")).toBe(lock);
+		} finally {
+			sleeper.kill();
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
 
 	it("takes the lock before reading the record: a run completed meanwhile is refused", async () => {
 		const repo = createHostRepo();

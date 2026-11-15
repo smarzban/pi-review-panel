@@ -5,7 +5,7 @@
 //   dist/prompts/     the package-owned prompts
 //
 // The core finds its prompts at `../../prompts` from its own module
-// (src/config/roles.ts, src/config/audit-passes.ts). Keeping the tree makes
+// (src/config/roles.ts). Keeping the tree makes
 // that path land on dist/prompts, inside the package's tarball. dist/ is never
 // committed: `npm pack` and `npm publish` build it (the `prepack` script).
 import { chmodSync, cpSync, readdirSync, rmSync } from "node:fs";

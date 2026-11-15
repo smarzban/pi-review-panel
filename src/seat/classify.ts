@@ -1,4 +1,3 @@
-import type { AuditRow } from "./audit-schema.js";
 import type { SubmissionChannel } from "./channel-file.js";
 import {
 	DEFAULT_SEAT_PROFILE,
@@ -36,13 +35,13 @@ export type SeatLifecycle = {
 	cost: number;
 };
 
-export type ChannelOutcome<P extends SeatProfile> = P extends { kind: "audit" }
-	? { kind: "audit"; rows: AuditRow[] }
-	: P extends { kind: "verification" }
-		? { kind: "verification"; result: VerificationResult }
-		: P extends { kind: "grouping" }
-			? { kind: "grouping"; groups: string[][] }
-			: { kind: "findings"; findings: Finding[] };
+export type ChannelOutcome<P extends SeatProfile> = P extends {
+	kind: "verification";
+}
+	? { kind: "verification"; result: VerificationResult }
+	: P extends { kind: "grouping" }
+		? { kind: "grouping"; groups: string[][] }
+		: { kind: "findings"; findings: Finding[] };
 
 export type SeatResult<P extends SeatProfile = FindingsProfile> = {
 	identity: SeatIdentity;
@@ -125,13 +124,11 @@ export function classifyOutcome<P extends SeatProfile = FindingsProfile>(
 			);
 		}
 		const subject =
-			profile.kind === "audit"
-				? "audit results"
-				: profile.kind === "verification"
-					? "verification results"
-					: profile.kind === "grouping"
-						? "groups"
-						: "findings";
+			profile.kind === "verification"
+				? "verification results"
+				: profile.kind === "grouping"
+					? "groups"
+					: "findings";
 		return failure(
 			input,
 			"no-submit",
@@ -139,15 +136,6 @@ export function classifyOutcome<P extends SeatProfile = FindingsProfile>(
 				? `seat SDK session ended without submitting ${subject} after no-submit retry`
 				: `seat SDK session ended without submitting ${subject}`,
 		);
-	}
-	if (profile.kind === "audit") {
-		return {
-			identity: { ...input.identity },
-			replay: input.replay,
-			lifecycle: input.lifecycle,
-			...(input.nudgeFired ? { recovered: true as const } : {}),
-			outcome: { kind: "audit", rows: value as AuditRow[] },
-		} as SeatResult<P>;
 	}
 	if (profile.kind === "verification") {
 		return {

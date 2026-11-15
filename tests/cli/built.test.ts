@@ -151,7 +151,6 @@ describe("the built bin", () => {
 		for (const command of [
 			"diagnose",
 			"review",
-			"audit",
 			"verify",
 			"resume",
 			"comment",
@@ -602,11 +601,7 @@ describe("the packed tarball", () => {
 		const lenses = await import(
 			pathToFileURL(path.join(dist, "src", "config", "lenses.js")).href
 		);
-		const passes = await import(
-			pathToFileURL(path.join(dist, "src", "config", "audit-passes.js")).href
-		);
 		expect(lenses.loadLensTable().size).toBeGreaterThan(0);
-		expect(passes.loadAuditPassTable().size).toBeGreaterThan(0);
 		expect(existsSync(path.join(dist, "prompts"))).toBe(true);
 		expect(existsSync(path.join(dist, "src", "tool", "review-panel.js"))).toBe(
 			false,

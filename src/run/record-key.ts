@@ -40,7 +40,7 @@ export function recordKeyPath(configPath: string): string {
 }
 
 export type LoadRecordKeyOptions = {
-	/** Create the key when it is missing. Only a first review or audit does. */
+	/** Create the key when it is missing. Only a first review does. */
 	create: boolean;
 	/** The reviewed repository; a key inside it is refused. */
 	repoDir: string;
@@ -83,8 +83,8 @@ export function loadRecordKey(
 	if (!present) {
 		if (!options.create) {
 			throw new RecordKeyError(
-				`there is no record key at ${keyPath}; the first review or audit run creates it, so no record here was signed by this owner's review-panel`,
-				"Start a new review or audit instead; it creates the key.",
+				`there is no record key at ${keyPath}; the first review run creates it, so no record here was signed by this owner's review-panel`,
+				"Start a new review instead; it creates the key.",
 			);
 		}
 		createKey(keyPath);
@@ -93,7 +93,7 @@ export function loadRecordKey(
 }
 
 /**
- * Checks the record key the way review and audit use it, without writing
+ * Checks the record key the way review uses it, without writing
  * anything: no key, no temp file. An existing key is opened read-only and
  * checked in full. A missing key must be creatable: its folder must let this
  * user write and search it (`access(2)`, which also sees a read-only mount
@@ -282,11 +282,11 @@ function readKey(keyPath: string): Buffer {
 		throw isCode(error, "ELOOP")
 			? new RecordKeyError(
 					`record key ${keyPath} is a symlink and is refused`,
-					`Replace the symlink with a regular file: copy the key's bytes in (cp -L), then chmod 600 ${keyPath}. Or delete it, and the next review or audit creates a new one (records signed with the old key can no longer be resumed).`,
+					`Replace the symlink with a regular file: copy the key's bytes in (cp -L), then chmod 600 ${keyPath}. Or delete it, and the next review creates a new one (records signed with the old key can no longer be resumed).`,
 				)
 			: new RecordKeyError(
 					`record key ${keyPath} cannot be read: ${messageOf(error)}`,
-					`Make it readable by you (chmod 600 ${keyPath}), or delete it so the next review or audit creates a new one.`,
+					`Make it readable by you (chmod 600 ${keyPath}), or delete it so the next review creates a new one.`,
 				);
 	}
 	try {
@@ -294,7 +294,7 @@ function readKey(keyPath: string): Buffer {
 		if (!stats.isFile()) {
 			throw new RecordKeyError(
 				`record key ${keyPath} is not a regular file and is refused`,
-				`Remove what is at ${keyPath}; the next review or audit creates the key.`,
+				`Remove what is at ${keyPath}; the next review creates the key.`,
 			);
 		}
 		const uid =
@@ -302,26 +302,26 @@ function readKey(keyPath: string): Buffer {
 		if (uid !== undefined && stats.uid !== uid) {
 			throw new RecordKeyError(
 				`record key ${keyPath} is not owned by you and is refused`,
-				`Delete it, and the next review or audit creates one you own; or chown it to your user if you know where it came from.`,
+				`Delete it, and the next review creates one you own; or chown it to your user if you know where it came from.`,
 			);
 		}
 		if (process.platform !== "win32" && (stats.mode & 0o077) !== 0) {
 			throw new RecordKeyError(
 				`record key ${keyPath} is readable by group or other users and is refused`,
-				`Run chmod 600 ${keyPath}. If others may have read it, delete it instead; the next review or audit creates a new one.`,
+				`Run chmod 600 ${keyPath}. If others may have read it, delete it instead; the next review creates a new one.`,
 			);
 		}
 		if (stats.size !== KEY_BYTES) {
 			throw new RecordKeyError(
 				`record key ${keyPath} is not ${KEY_BYTES} bytes and is refused`,
-				`Delete ${keyPath}; the next review or audit creates a new one (records signed with the old key can no longer be resumed).`,
+				`Delete ${keyPath}; the next review creates a new one (records signed with the old key can no longer be resumed).`,
 			);
 		}
 		const key = Buffer.alloc(KEY_BYTES);
 		if (readSync(fd, key, 0, KEY_BYTES, 0) !== KEY_BYTES) {
 			throw new RecordKeyError(
 				`record key ${keyPath} could not be read in full`,
-				`Delete ${keyPath}; the next review or audit creates a new one.`,
+				`Delete ${keyPath}; the next review creates a new one.`,
 			);
 		}
 		return key;

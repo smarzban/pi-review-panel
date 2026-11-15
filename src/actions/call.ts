@@ -6,12 +6,10 @@
 import {
 	type ActionContext,
 	type ActionResult,
-	auditAction,
 	coerceJsonValue,
 	coerceStringList,
 	commentAction,
 	diagnoseAction,
-	parseAuditArguments,
 	parseCommentArguments,
 	parseDiagnoseArguments,
 	parseResumeArguments,
@@ -28,7 +26,6 @@ import { resolveReviewRepository } from "./repository.js";
 export const ACTION_NAMES = [
 	"diagnose",
 	"review",
-	"audit",
 	"verify",
 	"resume",
 	"comment",
@@ -40,7 +37,6 @@ export type ActionName = (typeof ACTION_NAMES)[number];
 export type ActionFunctions = {
 	diagnose: typeof diagnoseAction;
 	review: typeof reviewAction;
-	audit: typeof auditAction;
 	verify: typeof verifyAction;
 	resume: typeof resumeAction;
 	comment: typeof commentAction;
@@ -50,7 +46,6 @@ export type ActionFunctions = {
 export const realActions: ActionFunctions = {
 	diagnose: diagnoseAction,
 	review: reviewAction,
-	audit: auditAction,
 	verify: verifyAction,
 	resume: resumeAction,
 	comment: commentAction,
@@ -64,12 +59,18 @@ export const ACTION_PARSERS: Record<
 > = {
 	diagnose: parseDiagnoseArguments,
 	review: parseReviewArguments,
-	audit: parseAuditArguments,
 	verify: parseVerifyArguments,
 	resume: parseResumeArguments,
 	comment: parseCommentArguments,
 	suggest: parseSuggestArguments,
 };
+
+/**
+ * What `audit`, as a command or a `call` action, gets instead of running: the
+ * repository audit was removed, so it is named, not refused as unknown.
+ */
+export const AUDIT_REMOVED =
+	"audit was removed from review-panel: repository audits moved out of this package. review-panel reviews a change (review --base <ref> --head <ref>)";
 
 export function isActionName(value: unknown): value is ActionName {
 	return (
@@ -87,13 +88,7 @@ export function coerceCallArguments(
 	args: Record<string, unknown>,
 ): Record<string, unknown> {
 	const next: Record<string, unknown> = { ...args };
-	for (const key of [
-		"seats",
-		"lenses",
-		"passes",
-		"keptFindingIds",
-		"lowAdvisory",
-	]) {
+	for (const key of ["seats", "lenses", "keptFindingIds", "lowAdvisory"]) {
 		if (Object.hasOwn(next, key)) {
 			next[key] = coerceStringList(next[key]);
 		}
@@ -137,6 +132,9 @@ export async function callAction(
 	options: CallOptions,
 ): Promise<ActionResult> {
 	const action = args.action;
+	if (action === "audit") {
+		throw new CallArgumentError(AUDIT_REMOVED);
+	}
 	if (!isActionName(action)) {
 		throw new CallArgumentError(
 			`"action" must be one of ${ACTION_NAMES.join(", ")}`,

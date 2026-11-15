@@ -15,7 +15,6 @@ import { describe, expect, it } from "vitest";
 import {
 	type ActionDependencies,
 	type ActionResult,
-	auditAction,
 	type CommentInput,
 	commentAction,
 	diagnoseAction,
@@ -30,7 +29,6 @@ import {
 import { loadConfig } from "../src/config/load.js";
 import type { Config } from "../src/config/schema.js";
 import { resumeRun } from "../src/run/resume.js";
-import type { RunAuditResult } from "../src/run/run-audit.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { PlannedSeat } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
@@ -417,30 +415,6 @@ describe("the actions without Pi", () => {
 		});
 	});
 
-	it("audit runs from plain inputs", async () => {
-		await withRepository(async (repo) => {
-			const result = await auditAction(
-				{ repoDir: repo, passes: ["security"] },
-				{
-					deps: deps({
-						runAudit: async (input) =>
-							voted(repo, "a-1", input.seats) as unknown as RunAuditResult,
-					}),
-				},
-			);
-			expect(textOf(result)).toBe(
-				[
-					"# Repository audit",
-					"2/2 voted · 0 findings",
-					"Seats: security (terra, claude)",
-					`Record: \`${path.join(repo, ".review-panel", "runs", "a-1")}\``,
-					"",
-					"None submitted.",
-				].join("\n"),
-			);
-		});
-	});
-
 	it("verify runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "run-1", [{ id: "F-1", severity: "high" }]);
@@ -608,14 +582,13 @@ describe("comment refuses without the owner's approval, whoever builds its input
 });
 
 type Case = {
-	action: "review" | "audit" | "verify" | "resume" | "comment";
+	action: "review" | "verify" | "resume" | "comment";
 	args: Record<string, unknown>;
 	message: string;
 };
 
 const ACTIONS = {
 	review: reviewAction,
-	audit: auditAction,
 	verify: verifyAction,
 	resume: resumeAction,
 	comment: commentAction,
@@ -641,18 +614,18 @@ const CASES: Case[] = [
 		message: "head must be a non-empty string",
 	},
 	{
-		action: "audit",
-		args: { seats: [] },
+		action: "review",
+		args: { base: "HEAD~1", head: "HEAD", seats: [] },
 		message: "seats must be a non-empty array of non-empty strings",
 	},
 	{
-		action: "audit",
-		args: { passes: [""] },
-		message: "passes must contain only non-empty strings",
+		action: "review",
+		args: { base: "HEAD~1", head: "HEAD", lenses: [""] },
+		message: "lenses must contain only non-empty strings",
 	},
 	{
-		action: "audit",
-		args: { scopingNote: " " },
+		action: "review",
+		args: { base: "HEAD~1", head: "HEAD", scopingNote: " " },
 		message: "scopingNote must be a non-empty string",
 	},
 	{
@@ -720,7 +693,6 @@ describe("each action refuses a bad input itself, as an argument object is refus
 		};
 		return deps({
 			runReview: never,
-			runAudit: never,
 			runVerify: never,
 			resumeRun: never,
 			postComment: never,
@@ -794,7 +766,6 @@ describe("each action resolves its own repository", () => {
 	type Call = (repoDir: string, d: ActionDependencies) => Promise<ActionResult>;
 	const calls: Array<[string, Call]> = [
 		["diagnose", (repoDir, d) => diagnoseAction({ repoDir }, { deps: d })],
-		["audit", (repoDir, d) => auditAction({ repoDir }, { deps: d })],
 		[
 			"review",
 			(repoDir, d) =>
@@ -862,9 +833,7 @@ describe("each action resolves its own repository", () => {
 		},
 	);
 
-	it.each(
-		calls.filter(([name]) => ["audit", "review", "resume"].includes(name)),
-	)(
+	it.each(calls.filter(([name]) => ["review", "resume"].includes(name)))(
 		"%s hands the record key the repository top level when given a subdirectory",
 		async (_name, call) => {
 			await withRepository(async (repo) => {
@@ -887,7 +856,7 @@ describe("each action resolves its own repository", () => {
 		},
 	);
 
-	it("review and audit record their run under the repository top level when given a subdirectory", async () => {
+	it("review records its run under the repository top level when given a subdirectory", async () => {
 		await withRepository(async (repo) => {
 			const sub = path.join(repo, "src");
 			mkdirSync(sub);
@@ -898,7 +867,6 @@ describe("each action resolves its own repository", () => {
 			};
 			const d = deps({
 				runReview: async (runConfig) => stop(runConfig.repoDir),
-				runAudit: async (input) => stop(input.repoDir),
 			});
 			await expect(
 				reviewAction(
@@ -906,10 +874,7 @@ describe("each action resolves its own repository", () => {
 					{ deps: d },
 				),
 			).rejects.toThrow("stop at the runner");
-			await expect(auditAction({ repoDir: sub }, { deps: d })).rejects.toThrow(
-				"stop at the runner",
-			);
-			expect(seen).toEqual([repo, repo]);
+			expect(seen).toEqual([repo]);
 		});
 	});
 
@@ -951,7 +916,6 @@ describe("suggest shows lenses and reasons before any seat runs", () => {
 		return deps({
 			diagnose: never("diagnose") as ActionDependencies["diagnose"],
 			runReview: never("runReview") as ActionDependencies["runReview"],
-			runAudit: never("runAudit") as ActionDependencies["runAudit"],
 			runVerify: never("runVerify") as ActionDependencies["runVerify"],
 			resumeRun: never("resumeRun") as ActionDependencies["resumeRun"],
 			postComment: never("postComment") as ActionDependencies["postComment"],

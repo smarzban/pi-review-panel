@@ -1,9 +1,7 @@
 import { performance } from "node:perf_hooks";
 import {
-	type AuditProfile,
 	DEFAULT_SEAT_PROFILE,
 	type FindingsProfile,
-	type FindingsSeatProfile,
 	type GroupingProfile,
 	type SeatProfile,
 	type VerificationProfile,
@@ -337,7 +335,7 @@ export async function runSeatForReplay(
 }
 
 /** Runs one findings reporter through an isolated embedded SDK session. */
-export async function runSeat<P extends FindingsSeatProfile = FindingsProfile>(
+export async function runSeat<P extends FindingsProfile = FindingsProfile>(
 	spec: SeatSpec<P>,
 	options: RunSeatOptions = {},
 ): Promise<SeatRunResult<P>> {
@@ -347,15 +345,15 @@ export async function runSeat<P extends FindingsSeatProfile = FindingsProfile>(
 	)) as SeatRunResult<P>;
 }
 
-/** Runs one claim-audit or fix-verification reviewer through the same SDK lifecycle. */
+/** Runs one fix-verification reviewer through the same SDK lifecycle. */
 export async function runAdvisorySeat(
-	spec: SeatSpec<AuditProfile | VerificationProfile>,
+	spec: SeatSpec<VerificationProfile>,
 	options: RunSeatOptions = {},
-): Promise<SeatRunResult<AuditProfile | VerificationProfile>> {
+): Promise<SeatRunResult<VerificationProfile>> {
 	return (await runSeatInternal(
 		spec as SeatSpec<SeatProfile>,
 		options,
-	)) as SeatRunResult<AuditProfile | VerificationProfile>;
+	)) as SeatRunResult<VerificationProfile>;
 }
 
 /** Runs the grouping seat through the same SDK lifecycle. */

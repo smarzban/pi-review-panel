@@ -8,7 +8,7 @@ export const SPECIALIST_SEAT_CAP = 2;
 
 /**
  * Selectable specialist extras. Holistic is implicit and is not in this list.
- * Claim-audit and fix-verification are check roles, never panel extras.
+ * Fix-verification is a check role, never a panel extra.
  */
 export const SHIPPED_LENSES = [
 	"correctness",

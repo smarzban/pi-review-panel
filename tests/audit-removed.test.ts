@@ -68,24 +68,19 @@ const AUDIT_RUN_ID = "2026-10-01T00-00-00-000Z-audit-0123456789abcdef";
  * `kind: "audit"` plan with base and head both the snapshot commit, and no
  * seat settled yet.
  */
-function interruptedAuditRecord(repo: string): string {
+function interruptedAuditRecord(
+	repo: string,
+	lenses: string[] = ["code-health", "security"],
+): string {
 	const head = git(repo, ["rev-parse", "HEAD"]);
 	const recordPath = path.join(repo, ".review-panel", "runs", AUDIT_RUN_ID);
 	mkdirSync(recordPath, { recursive: true });
-	const seats = [
-		{
-			rosterId: "terra",
-			lens: "code-health",
-			provider: "openai-codex",
-			model: "gpt-5.6-terra",
-		},
-		{
-			rosterId: "terra",
-			lens: "security",
-			provider: "openai-codex",
-			model: "gpt-5.6-terra",
-		},
-	];
+	const seats = lenses.map((lens, index) => ({
+		rosterId: `seat-${index}`,
+		lens,
+		provider: "openai-codex",
+		model: `gpt-5.6-${index}`,
+	}));
 	writeFileSync(
 		path.join(recordPath, "panel.json"),
 		`${JSON.stringify({ runId: AUDIT_RUN_ID, baseRef: "audit", seats }, null, 2)}\n`,
@@ -184,7 +179,11 @@ function cli() {
 		sdkVersion: async () => "1.5.2",
 		actions,
 		authSdk: {} as AuthSdk,
-		skillSource: { dir: "/nonexistent-skill", version: "9.9.9" },
+		skillSource: {
+			dir: "/nonexistent-skill",
+			version: "9.9.9",
+			platform: "darwin",
+		},
 	};
 	return {
 		run: (argv: string[]) => run(argv, io, runDeps),
@@ -243,6 +242,16 @@ describe("an audit record left in a repository", () => {
 			interruptedAuditRecord(repo);
 			expect(() => loadResumable(repo, AUDIT_RUN_ID, TEST_RECORD_KEY)).toThrow(
 				`Resume refused: run "${AUDIT_RUN_ID}" is an audit record; audit records can no longer be resumed, because audit was removed from review-panel.`,
+			);
+		});
+	});
+
+	it("is refused as an audit record, not by a review panel's seat caps", async () => {
+		await withRepo(async (repo) => {
+			// An audit ran one pass on up to three seats; a review lens on at most two.
+			interruptedAuditRecord(repo, ["security", "security", "security"]);
+			expect(() => loadResumable(repo, AUDIT_RUN_ID, TEST_RECORD_KEY)).toThrow(
+				/is an audit record; audit records can no longer be resumed/,
 			);
 		});
 	});
