@@ -92,6 +92,12 @@ export async function createSdkSeatSession(
 			extensionPaths: input.spec.extraExtensionPaths ?? [],
 			loaderOptions: {
 				systemPrompt: profile.systemPrompt,
+				// Pi reads a system prompt that names an existing file as that file,
+				// and appends `.pi/APPEND_SYSTEM.md` from the session folder (the
+				// snapshot of the reviewed commit) and from the agent folder. A seat's
+				// system prompt is the package's literal text and nothing else.
+				systemPromptOverride: () => profile.systemPrompt,
+				appendSystemPromptOverride: () => [],
 				extensionFactories: [
 					(pi: { on: (event: string, handler: unknown) => void }) =>
 						pi.on("tool_call", input.confinementGuard),
