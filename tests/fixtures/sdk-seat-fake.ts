@@ -1,9 +1,6 @@
 import { type RunReviewOptions, runReview } from "../../src/run/run-review.js";
 import type { RunConfig } from "../../src/run/types.js";
-import type {
-	AuditProfile,
-	VerificationProfile,
-} from "../../src/seat/channel-profile.js";
+import type { VerificationProfile } from "../../src/seat/channel-profile.js";
 import type {
 	SdkSessionFactory,
 	SeatRunResult,
@@ -25,7 +22,6 @@ export const SDK_FINDING = {
 type FakeResponse =
 	| { kind: "default" }
 	| { kind: "findings"; findings?: unknown[]; afterNudge?: boolean }
-	| { kind: "audit"; holds?: boolean; afterNudge?: boolean }
 	| {
 			kind: "verification";
 			disposition?: "resolved" | "still present" | "inconclusive";
@@ -87,15 +83,6 @@ function responseForProfile(
 	) {
 		return undefined;
 	}
-	if (profile === "audit") {
-		return {
-			rows: (input.spec.expectedIds ?? []).map((id) => ({
-				id,
-				holds: response.kind === "audit" ? (response.holds ?? true) : true,
-				rationale: "verified against the code",
-			})),
-		};
-	}
 	if (profile === "grouping") {
 		return {
 			groups: (input.spec.expectedIds ?? []).map((id) => ({
@@ -136,9 +123,7 @@ function responseForProfile(
 
 function waitsForNudge(response: FakeResponse): boolean {
 	return (
-		(response.kind === "findings" ||
-			response.kind === "audit" ||
-			response.kind === "verification") &&
+		(response.kind === "findings" || response.kind === "verification") &&
 		response.afterNudge === true
 	);
 }
@@ -267,8 +252,8 @@ export function createSdkSeatFake(
 export function createAdvisorySeatRunner(
 	responses: FakeResponse[] = [{ kind: "default" }],
 ): (
-	spec: SeatSpec<AuditProfile | VerificationProfile>,
-) => Promise<SeatRunResult<AuditProfile | VerificationProfile>> {
+	spec: SeatSpec<VerificationProfile>,
+) => Promise<SeatRunResult<VerificationProfile>> {
 	let nextResponse = 0;
 	return async (spec) => {
 		const response = responses[Math.min(nextResponse, responses.length - 1)];
@@ -304,53 +289,38 @@ export function createAdvisorySeatRunner(
 				},
 			};
 		}
-		if (spec.profile?.kind === "verification") {
-			return {
-				identity: {
-					provider: spec.provider,
-					model: spec.model,
-					lens: spec.lens,
-				},
-				replay,
-				lifecycle,
-				outcome: {
-					kind: "verification",
-					result: {
-						items: (spec.expectedIds ?? []).map((id) => {
-							const disposition =
-								response.kind === "verification"
-									? (response.disposition ?? "resolved")
-									: "resolved";
-							return {
-								id,
-								disposition,
-								...(disposition === "resolved"
-									? {
-											evidence: {
-												file: "src/example.ts",
-												explanation:
-													"The injected SDK session checked this repair.",
-											},
-										}
-									: {}),
-							};
-						}),
-						regressions: [],
-					},
-				},
-			};
-		}
 		return {
-			identity: { provider: spec.provider, model: spec.model, lens: spec.lens },
+			identity: {
+				provider: spec.provider,
+				model: spec.model,
+				lens: spec.lens,
+			},
 			replay,
 			lifecycle,
 			outcome: {
-				kind: "audit",
-				rows: (spec.expectedIds ?? []).map((id) => ({
-					id,
-					holds: response.kind === "audit" ? (response.holds ?? true) : true,
-					rationale: "verified against the code",
-				})),
+				kind: "verification",
+				result: {
+					items: (spec.expectedIds ?? []).map((id) => {
+						const disposition =
+							response.kind === "verification"
+								? (response.disposition ?? "resolved")
+								: "resolved";
+						return {
+							id,
+							disposition,
+							...(disposition === "resolved"
+								? {
+										evidence: {
+											file: "src/example.ts",
+											explanation:
+												"The injected SDK session checked this repair.",
+										},
+									}
+								: {}),
+						};
+					}),
+					regressions: [],
+				},
 			},
 		};
 	};

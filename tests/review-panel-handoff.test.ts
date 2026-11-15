@@ -13,7 +13,6 @@ import { describe, expect, it } from "vitest";
 import type { ActionDependencies } from "../src/actions/actions.js";
 import type { Config } from "../src/config/schema.js";
 import { resumeRun } from "../src/run/resume.js";
-import type { RunAuditResult } from "../src/run/run-audit.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import type { PlannedSeat } from "../src/run/types.js";
 import { renderReviewProgress } from "../src/tool/review-presentation.js";
@@ -166,21 +165,6 @@ describe("the abort signal reaches the runner", () => {
 		);
 	});
 
-	it("audit", async () => {
-		await withRepository((repo) =>
-			expectSignalHandedOff(
-				{ action: "audit", passes: ["security"] },
-				(capture) => ({
-					runAudit: async (input, options) => {
-						capture(options?.abortSignal);
-						return votedResult(repo, input.seats) as unknown as RunAuditResult;
-					},
-				}),
-				repo,
-			),
-		);
-	});
-
 	it("verify", async () => {
 		await withRepository((repo) => {
 			writeSignedReview(repo, "run-1");
@@ -233,34 +217,37 @@ describe("the abort signal reaches the runner", () => {
 });
 
 describe("seat progress reaches the caller, rendered as the CLI prints it", () => {
-	it("audit", async () => {
+	it("review", async () => {
 		await withRepository(async (repo) => {
 			const updates: string[] = [];
 			const tool = toolWith({
-				runAudit: async (input, options) => {
+				runReview: async (runConfig, options) => {
 					options?.onProgress?.({
 						kind: "seat-started",
-						seat: input.seats[0] as PlannedSeat,
+						seat: runConfig.seats[0] as PlannedSeat,
 						activeSeats: 1,
 						completedSeats: 0,
-						totalSeats: input.seats.length,
+						totalSeats: runConfig.seats.length,
 					});
-					return votedResult(repo, input.seats) as unknown as RunAuditResult;
+					return votedResult(
+						repo,
+						runConfig.seats,
+					) as unknown as RunReviewResult;
 				},
 			});
 			await tool.execute(
 				"call-1",
-				{ action: "audit", repository: repo, passes: ["security"] },
+				{ action: "review", repository: repo, base: "HEAD~1", head: "HEAD" },
 				undefined,
 				(view) => updates.push(renderReviewProgress(view)),
 				{},
 			);
 			expect(updates).toHaveLength(2);
 			expect(updates[0]).toMatch(
-				/^security: terra, claude\naudit started · \d+m?s · 2 seats$/,
+				/^holistic: terra, claude\nreview started · \d+m?s · 2 seats$/,
 			);
 			expect(updates[1]).toMatch(
-				/^security: terra, claude\naudit started · \d+m?s · terra\/security · 1 active, 0\/2 done$/,
+				/^holistic: terra, claude\nreview started · \d+m?s · terra\/holistic · 1 active, 0\/2 done$/,
 			);
 		});
 	});

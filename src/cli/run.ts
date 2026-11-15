@@ -8,6 +8,7 @@ import path from "node:path";
 import type { ActionContext, ActionResult } from "../actions/actions.js";
 import {
 	type ActionFunctions,
+	AUDIT_REMOVED,
 	CallArgumentError,
 	CallRepositoryError,
 	callAction,
@@ -290,6 +291,9 @@ async function execute(
 					: command.payload,
 			);
 			const action = args.action;
+			if (action === "audit") {
+				throw new UsageError(`call: ${AUDIT_REMOVED}`);
+			}
 			if (
 				typeof action !== "string" ||
 				!(ACTIONS as readonly string[]).includes(action)

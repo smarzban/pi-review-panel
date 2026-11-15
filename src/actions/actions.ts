@@ -14,27 +14,24 @@
  * Git is refused.
  *
  * `coerceCallArguments` (call.ts) first coerces what agents send as strings. A JSON array string
- * for `seats`, `lenses`, `passes`, `keptFindingIds` or `lowAdvisory`, JSON
+ * for `seats`, `lenses`, `keptFindingIds` or `lowAdvisory`, JSON
  * for `dismissed`, and `"true"` for `ownerApproved` are converted (a comma
  * list is not split; it stays one item). The actions convert the same
- * strings for `seats`, `lenses`, `passes`, `lowAdvisory` and `dismissed`, but
+ * strings for `seats`, `lenses`, `lowAdvisory` and `dismissed`, but
  * refuse a string `keptFindingIds` and `ownerApproved: "true"`. Pass real
  * arrays and `true`.
  *
  * No Pi host and no TypeBox are needed to import or call these. Running a
- * seat (review, audit, verify, resume) and diagnose's model check still load
+ * seat (review, verify, resume) and diagnose's model check still load
  * the Pi SDK (`@earendil-works/pi-coding-agent`) through a dynamic `import()`
  * in `src/seat/sdk-session.ts` and `src/config/readiness.ts`, so a front end
  * that runs those needs the SDK installed. Suggest, comment and the parsers
  * do not.
  */
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { env as processEnv } from "node:process";
 
-import { resolveAuditPanel } from "../config/audit-panel.js";
-import { loadAuditPassTable } from "../config/audit-passes.js";
 import { loadLensTable } from "../config/lenses.js";
 import {
 	type ConfigEnv,
@@ -74,12 +71,6 @@ import {
 	resumeRun,
 } from "../run/resume.js";
 import {
-	type RunAuditInput,
-	type RunAuditOptions,
-	type RunAuditResult,
-	runAudit,
-} from "../run/run-audit.js";
-import {
 	type RunReviewOptions,
 	type RunReviewResult,
 	resolveCommitOid,
@@ -92,7 +83,7 @@ import {
 	type RunVerifyResult,
 	runVerify,
 } from "../run/run-verify.js";
-import type { PlannedSeat, RunConfig, StampedFinding } from "../run/types.js";
+import type { PlannedSeat, RunConfig } from "../run/types.js";
 import {
 	accountCloseoutFindings,
 	assembleCloseoutComment,
@@ -118,11 +109,9 @@ import {
 	compactPanelRoster,
 	formatSuggestion,
 	formatSuggestionsUnavailable,
-	progressFromAuditEvent,
 	progressFromReviewEvent,
 	progressFromVerifyEvent,
 	type ReviewProgressView,
-	renderAuditResult,
 	renderReadiness,
 	renderReviewResult,
 	renderSuggestResult,
@@ -160,10 +149,6 @@ export type ActionDependencies = {
 		config: RunConfig,
 		options?: RunReviewOptions,
 	) => Promise<RunReviewResult>;
-	runAudit?: (
-		input: RunAuditInput,
-		options?: RunAuditOptions,
-	) => Promise<RunAuditResult>;
 	resolveCommitOid?: typeof resolveCommitOid;
 	suggestLenses?: typeof suggestLenses;
 	runVerify?: (
@@ -182,13 +167,12 @@ export type ActionDependencies = {
 	) => Promise<ResumeResult>;
 	/**
 	 * The owner's record key. By default it is read from `record-key` beside
-	 * the owner config, and created there by a first review or audit.
+	 * the owner config, and created there by a first review.
 	 */
 	recordKey?: (input: RecordKeyInput) => Buffer;
 	/**
 	 * The `diagnose` check of the record key, which never writes. By default it
-	 * checks `record-key` beside the owner config the way review and audit use
-	 * it.
+	 * checks `record-key` beside the owner config the way review uses it.
 	 */
 	checkRecordKey?: (
 		input: Omit<RecordKeyInput, "create">,
@@ -209,7 +193,7 @@ export type RecordKeyInput = {
 	repoDir: string;
 	env: ConfigEnv;
 	home: string;
-	/** Create the key when it is missing: review and audit do, resume never. */
+	/** Create the key when it is missing: review does, resume never. */
 	create: boolean;
 };
 
@@ -324,12 +308,6 @@ type RepositoryInput = { repoDir: string };
 /** Diagnose takes nothing beyond the repository. */
 export type DiagnoseInput = Record<never, never>;
 
-export type AuditInput = {
-	seats?: string[];
-	passes?: string[];
-	scopingNote?: string;
-};
-
 /**
  * What review and verify take about posting their round to the open PR:
  * `prComment: false` turns it off for this run, `pr` names the PR instead of
@@ -410,24 +388,6 @@ export function parseDiagnoseArguments(
 ): DiagnoseInput {
 	refuseUnknownArguments(args, "diagnose", []);
 	return {};
-}
-
-export function parseAuditArguments(args: Record<string, unknown>): AuditInput {
-	refuseUnknownArguments(args, "audit", ["seats", "passes", "scopingNote"]);
-	return validateAuditInput(args);
-}
-
-function validateAuditInput(
-	args: AuditInput | Record<string, unknown>,
-): AuditInput {
-	const seats = optionalStringArray(args.seats, "seats");
-	const passes = optionalStringArray(args.passes, "passes");
-	const scopingNote = optionalNonEmptyString(args.scopingNote, "scopingNote");
-	return {
-		...(seats === undefined ? {} : { seats }),
-		...(passes === undefined ? {} : { passes }),
-		...(scopingNote === undefined ? {} : { scopingNote }),
-	};
 }
 
 export function parseVerifyArguments(
@@ -661,7 +621,6 @@ function resolveDependencies(deps: ActionDependencies | undefined) {
 		load: deps?.loadConfig ?? loadConfig,
 		panelOf: deps?.resolvePanel ?? resolvePanel,
 		review: deps?.runReview ?? runReview,
-		audit: deps?.runAudit ?? runAudit,
 		oidOf: deps?.resolveCommitOid ?? resolveCommitOid,
 		suggest: deps?.suggestLenses ?? suggestLenses,
 		verify: deps?.runVerify ?? runVerify,
@@ -863,7 +822,7 @@ export async function diagnoseAction(
 		env: resolved.env,
 		home: resolved.home,
 	});
-	// Review and audit refuse to start without a usable record key,
+	// Review refuses to start without a usable record key,
 	// so diagnose checks it too, without creating it.
 	const keyProblem = resolved.checkKey({
 		repoDir,
@@ -892,56 +851,6 @@ export async function diagnoseAction(
 		: "";
 	const reserve = new TextEncoder().encode(warning).length;
 	return textResult(`${renderReadiness(shown, reserve)}${warning}`);
-}
-
-export async function auditAction(
-	input: RepositoryInput & AuditInput,
-	context: ActionContext = {},
-): Promise<ActionResult> {
-	const resolved = resolveDependencies(context.deps);
-	const { elapsed, emit } = progress(context);
-	const repoDir = canonicalizeRepository(input.repoDir);
-	const { seats, passes, scopingNote } = validateAuditInput(input);
-	await requireReady(resolved, repoDir);
-	const config = loadOwnerConfig(resolved, repoDir);
-	const panel = resolveAuditPanel({
-		config,
-		passTable: loadAuditPassTable(),
-		...(seats === undefined ? {} : { seats }),
-		...(passes === undefined ? {} : { passes }),
-	});
-	const revision = resolved.oidOf(repoDir, "HEAD");
-	const auditKey = ownerKey(resolved, repoDir, true, "Audit refused");
-	const roster = compactPanelRoster(panel);
-	emit({
-		phase: "audit",
-		event: "started",
-		elapsedMs: elapsed(),
-		total: panel.length,
-		completed: 0,
-		active: 0,
-		roster,
-	});
-	const result = await resolved.audit(
-		{
-			repoDir,
-			revision,
-			seats: panel,
-			...(scopingNote === undefined ? {} : { scopingNote }),
-			...(config.defaults.seatBudgetMs === undefined
-				? {}
-				: { seatBudgetMs: config.defaults.seatBudgetMs }),
-		},
-		{
-			...(context.signal === undefined ? {} : { abortSignal: context.signal }),
-			recordKey: auditKey,
-			onProgress: (event) =>
-				emit({ ...progressFromAuditEvent(event, elapsed()), roster }),
-		},
-	);
-	return textResult(
-		renderAuditResult({ recordPath: result.recordPath, panel, result }),
-	);
 }
 
 export async function verifyAction(
@@ -1175,10 +1084,6 @@ export async function resumeAction(
 		lensPrompt: "",
 	}));
 	const roster = compactPanelRoster(panel);
-	const progressOf =
-		run.plan.kind === "audit"
-			? progressFromAuditEvent
-			: progressFromReviewEvent;
 	const result = await resolved.resume(run, {
 		config,
 		recordKey: resumeKey,
@@ -1195,7 +1100,8 @@ export async function resumeAction(
 				active: 0,
 				roster,
 			}),
-		onProgress: (event) => emit({ ...progressOf(event, elapsed()), roster }),
+		onProgress: (event) =>
+			emit({ ...progressFromReviewEvent(event, elapsed()), roster }),
 	});
 	const resumed = result.resumedSeats;
 	const lost = result.lostSeats;
@@ -1211,25 +1117,19 @@ export async function resumeAction(
 		}.`,
 		...(result.scopingNoteDropped ? [SCOPING_NOTE_DROPPED] : []),
 	].join("\n");
-	let body: string;
-	if (run.plan.kind === "audit") {
-		body = renderAuditResult({ recordPath: result.recordPath, panel, result });
-	} else {
-		const suggestions = resolved.suggest(
-			repoDir,
-			run.plan.baseOid,
-			run.plan.headOid,
-		);
-		// The findings this resume stamped, never findings.json read back.
-		body = renderReviewResult({
-			recordPath: result.recordPath,
-			panel,
-			result,
-			suggestions,
-			// A review resume always returns them; an audit has none.
-			findings: "findings" in result ? result.findings : [],
-		});
-	}
+	const suggestions = resolved.suggest(
+		repoDir,
+		run.plan.baseOid,
+		run.plan.headOid,
+	);
+	// The findings this resume stamped, never findings.json read back.
+	const body = renderReviewResult({
+		recordPath: result.recordPath,
+		panel,
+		result,
+		suggestions,
+		findings: result.findings,
+	});
 	return textResult(`${headline}\n\n${body}`);
 }
 

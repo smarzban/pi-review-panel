@@ -2,11 +2,6 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 
 import {
-	MAX_AUDIT_SEATS,
-	MAX_AUDIT_SEATS_PER_PASS,
-} from "../config/audit-panel.js";
-import { loadAuditPassTable } from "../config/audit-passes.js";
-import {
 	HOLISTIC_LENS,
 	loadLensTable,
 	SPECIALIST_SEAT_CAP,
@@ -37,18 +32,13 @@ import {
 } from "./record.js";
 import { macMatches, planMac } from "./record-key.js";
 import {
-	executeAudit,
-	type RunAuditOptions,
-	type RunAuditResult,
-} from "./run-audit.js";
-import {
 	executeReview,
 	type RunReviewOptions,
 	type RunReviewResult,
 } from "./run-review.js";
 import type { PlannedSeat, RunPlan, SeatOutcomeFacts } from "./types.js";
 
-/** An interrupted review or audit record that `resume` can finish. */
+/** An interrupted review record that `resume` can finish. */
 export type ResumableRun = {
 	repoDir: string;
 	runId: string;
@@ -67,7 +57,7 @@ export type ResumableRun = {
 	missing: RunPlan["seats"];
 };
 
-export type ResumeResult = (RunReviewResult | RunAuditResult) & {
+export type ResumeResult = RunReviewResult & {
 	kind: RunPlan["kind"];
 	runId: string;
 	plan: RunPlan;
@@ -78,27 +68,25 @@ export type ResumeResult = (RunReviewResult | RunAuditResult) & {
 	scopingNoteDropped: boolean;
 };
 
-export type ResumeOptions = RunReviewOptions &
-	RunAuditOptions & {
-		/**
-		 * The owner's record key. Seat files are checked against it, and the
-		 * seats this resume runs are signed with it.
-		 */
-		recordKey: Buffer;
-		/**
-		 * The owner config. Seat models, extension paths and the seat budget come
-		 * from it, never from the record in the reviewed repository.
-		 */
-		config: Config;
-		/** Package prompt tables; injectable for tests only. */
-		lensTable?: Map<string, string>;
-		passTable?: Map<string, string>;
-		/**
-		 * Called once the run lock is held and the record re-read, with the
-		 * number of seats about to run, before any seat starts.
-		 */
-		onStart?: (start: { toRun: number }) => void;
-	};
+export type ResumeOptions = RunReviewOptions & {
+	/**
+	 * The owner's record key. Seat files are checked against it, and the
+	 * seats this resume runs are signed with it.
+	 */
+	recordKey: Buffer;
+	/**
+	 * The owner config. Seat models, extension paths and the seat budget come
+	 * from it, never from the record in the reviewed repository.
+	 */
+	config: Config;
+	/** Package prompt table; injectable for tests only. */
+	lensTable?: Map<string, string>;
+	/**
+	 * Called once the run lock is held and the record re-read, with the
+	 * number of seats about to run, before any seat starts.
+	 */
+	onStart?: (start: { toRun: number }) => void;
+};
 
 const VERIFY_RUN_SUFFIX = `-${sanitizeBaseRef("verify")}-${digestBaseRef("verify")}`;
 
@@ -121,7 +109,7 @@ function refuse(message: string): never {
 
 /**
  * Checks that a record can be resumed, before anything runs: it exists, is
- * not complete, is a review or audit with a resume plan signed by the owner's
+ * not complete, is a review with a resume plan signed by the owner's
  * record key, is not held by a live run, and its frozen commits still resolve
  * here.
  */
@@ -228,7 +216,7 @@ export async function resumeRun(
 	// was checked when the record was loaded, not what is in the folder now.
 	record.written.set(PLAN_FILE, run.planText);
 	const { plan } = run;
-	const { config, lensTable, passTable, onStart, ...runOptions } = options;
+	const { config, lensTable, onStart, ...runOptions } = options;
 	const seal: RecordSeal = {
 		key: options.recordKey,
 		runId: run.runId,
@@ -250,10 +238,7 @@ export async function resumeRun(
 			);
 		}
 		checkWritable(run.recordPath, plan);
-		const prompts =
-			plan.kind === "review"
-				? (lensTable ?? loadLensTable())
-				: (passTable ?? loadAuditPassTable());
+		const prompts = lensTable ?? loadLensTable();
 		const rows = new Map(config.roster.map((row) => [row.id, row]));
 		const recorded = readSettledOutcomes(run.recordPath, plan.seats, seal);
 		const settled: Array<SeatOutcomeFacts | undefined> = [];
@@ -279,7 +264,7 @@ export async function resumeRun(
 					: row.provider !== identity.provider || row.model !== identity.model
 						? `roster row "${identity.rosterId}" is now ${row.provider}/${row.model}, not ${identity.provider}/${identity.model}`
 						: prompt === undefined
-							? `"${identity.lens}" is not a ${plan.kind === "review" ? "lens" : "audit pass"} this package ships`
+							? `"${identity.lens}" is not a lens this package ships`
 							: undefined;
 			// Every planned seat must still be the owner's: a settled seat whose
 			// row is gone or changed is lost coverage too, never kept.
@@ -319,47 +304,32 @@ export async function resumeRun(
 			},
 		};
 		const seatBudgetMs = config.defaults.seatBudgetMs;
-		const consolidator =
-			plan.kind === "review" ? planConsolidator(config) : undefined;
-		const priorRecordPaths =
-			plan.kind === "review"
-				? discoverPriorRecords(run.repoDir).map((entry) => entry.path)
-				: [];
+		const consolidator = planConsolidator(config);
+		const priorRecordPaths = discoverPriorRecords(run.repoDir).map(
+			(entry) => entry.path,
+		);
 		onStart?.({
 			toRun: settled.filter((facts) => facts === undefined).length,
 		});
 		// From here the run owns the lock and releases it when it ends.
 		handedOver = true;
-		const result =
-			plan.kind === "review"
-				? await executeReview(
-						record,
-						{
-							repoDir: run.repoDir,
-							baseRef: plan.baseRef,
-							baseOid: plan.baseOid,
-							headOid: plan.headOid,
-							seats,
-							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
-							priorRecordPaths,
-							// The grouping step always runs again over the final list,
-							// so its groups match the F-ids this resume stamps.
-							...(consolidator === undefined ? {} : { consolidator }),
-						},
-						runOptions,
-						resume,
-					)
-				: await executeAudit(
-						record,
-						{
-							repoDir: run.repoDir,
-							revision: plan.headOid,
-							seats,
-							...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
-						},
-						runOptions,
-						resume,
-					);
+		const result = await executeReview(
+			record,
+			{
+				repoDir: run.repoDir,
+				baseRef: plan.baseRef,
+				baseOid: plan.baseOid,
+				headOid: plan.headOid,
+				seats,
+				...(seatBudgetMs === undefined ? {} : { seatBudgetMs }),
+				priorRecordPaths,
+				// The grouping step always runs again over the final list,
+				// so its groups match the F-ids this resume stamps.
+				...(consolidator === undefined ? {} : { consolidator }),
+			},
+			runOptions,
+			resume,
+		);
 		return {
 			...result,
 			kind: plan.kind,
@@ -388,16 +358,14 @@ function checkWritable(recordPath: string, plan: RunPlan): void {
 
 /**
  * Refuses a plan the panel planner could never have made: more seats than a
- * panel may have, one lens or pass on more seats than its cap, or one seat
+ * panel may have, one lens on more seats than its cap, or one seat
  * identity twice. Settled and unrebuildable seats count too, so a planted
  * plan cannot spend past the owner's limits.
  */
 function checkPanelCaps(plan: RunPlan, runId: string): void {
-	const review = plan.kind === "review";
-	const maxSeats = review ? MAX_REVIEW_SEATS : MAX_AUDIT_SEATS;
-	if (plan.seats.length > maxSeats) {
+	if (plan.seats.length > MAX_REVIEW_SEATS) {
 		refuse(
-			`run "${runId}" plans ${plan.seats.length} seats; a${review ? " review panel" : "n audit"} has at most ${maxSeats}`,
+			`run "${runId}" plans ${plan.seats.length} seats; a review panel has at most ${MAX_REVIEW_SEATS}`,
 		);
 	}
 	const identities = new Set<string>();
@@ -411,14 +379,9 @@ function checkPanelCaps(plan: RunPlan, runId: string): void {
 		perLens.set(seat.lens, (perLens.get(seat.lens) ?? 0) + 1);
 	}
 	for (const [lens, count] of perLens) {
-		if (review && lens !== HOLISTIC_LENS && count > SPECIALIST_SEAT_CAP) {
+		if (lens !== HOLISTIC_LENS && count > SPECIALIST_SEAT_CAP) {
 			refuse(
 				`run "${runId}" plans lens "${lens}" on ${count} seats; at most ${SPECIALIST_SEAT_CAP}`,
-			);
-		}
-		if (!review && count > MAX_AUDIT_SEATS_PER_PASS) {
-			refuse(
-				`run "${runId}" plans pass "${lens}" on ${count} seats; at most ${MAX_AUDIT_SEATS_PER_PASS}`,
 			);
 		}
 	}
@@ -509,6 +472,16 @@ function readPlan(
 	} catch {
 		refuse(`run "${runId}" has an unreadable resume plan`);
 	}
+	// An older review-panel also wrote signed plans for repository audits.
+	if (
+		typeof parsed === "object" &&
+		parsed !== null &&
+		(parsed as { kind?: unknown }).kind === "audit"
+	) {
+		refuse(
+			`run "${runId}" is an audit record; audit records can no longer be resumed, because audit was removed from review-panel.`,
+		);
+	}
 	if (!isRunPlan(parsed)) {
 		refuse(`run "${runId}" has an invalid resume plan`);
 	}
@@ -522,7 +495,7 @@ function isRunPlan(value: unknown): value is RunPlan {
 	const plan = value as Partial<RunPlan>;
 	return (
 		plan.version === 1 &&
-		(plan.kind === "review" || plan.kind === "audit") &&
+		plan.kind === "review" &&
 		isLineText(plan.baseRef) &&
 		isOid(plan.baseOid) &&
 		isOid(plan.headOid) &&

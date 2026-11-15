@@ -89,23 +89,21 @@ describe("SDK result classification", () => {
 	});
 
 	it("names the role channel for no-submit and marks only nudge recovery", () => {
-		const audit = classifyOutcome(
-			input({ profile: SEAT_PROFILES.audit, nudgeFired: true }),
+		const grouping = classifyOutcome(
+			input({ profile: SEAT_PROFILES.grouping, nudgeFired: true }),
 		);
 		const verification = classifyOutcome(
 			input({ profile: SEAT_PROFILES.verification, nudgeFired: true }),
 		);
-		for (const outcome of [audit, verification]) {
+		for (const outcome of [grouping, verification]) {
 			expect(outcome.outcome).toMatchObject({
 				kind: "failure",
 				class: "no-submit",
 			});
 			expect(outcome).not.toHaveProperty("recovered");
 		}
-		if (audit.outcome.kind === "failure") {
-			expect(audit.outcome.reason).toContain(
-				"audit results after no-submit retry",
-			);
+		if (grouping.outcome.kind === "failure") {
+			expect(grouping.outcome.reason).toContain("groups after no-submit retry");
 		}
 		if (verification.outcome.kind === "failure") {
 			expect(verification.outcome.reason).toContain(
@@ -125,17 +123,15 @@ describe("SDK result classification", () => {
 	});
 
 	it("preserves the profile-specific trusted closure result and copies identity", () => {
-		const auditChannel = createSubmissionChannel<unknown>();
-		const auditRows = [
-			{ id: "run/finding", holds: true, rationale: "checked" },
-		];
-		auditChannel.submit(auditRows);
-		const audit = classifyOutcome(
-			input({ profile: SEAT_PROFILES.audit, channel: auditChannel }),
+		const groupingChannel = createSubmissionChannel<unknown>();
+		const groups = [["F-1", "F-2"], ["F-3"]];
+		groupingChannel.submit(groups);
+		const grouping = classifyOutcome(
+			input({ profile: SEAT_PROFILES.grouping, channel: groupingChannel }),
 		);
-		expect(audit.outcome).toEqual({ kind: "audit", rows: auditRows });
-		expect(audit.identity).toEqual(input().identity);
-		expect(audit.identity).not.toBe(input().identity);
+		expect(grouping.outcome).toEqual({ kind: "grouping", groups });
+		expect(grouping.identity).toEqual(input().identity);
+		expect(grouping.identity).not.toBe(input().identity);
 
 		const verificationChannel = createSubmissionChannel<unknown>();
 		const verificationResult = { items: [], regressions: [] };
@@ -150,5 +146,7 @@ describe("SDK result classification", () => {
 			kind: "verification",
 			result: verificationResult,
 		});
+		expect(verification.identity).toEqual(input().identity);
+		expect(verification.identity).not.toBe(input().identity);
 	});
 });

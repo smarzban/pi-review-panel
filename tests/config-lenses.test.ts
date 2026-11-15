@@ -132,22 +132,12 @@ describe("config lens registry", () => {
 			"dist/prompts/specification-conformance.md",
 			"dist/prompts/fix-verification.md",
 			"dist/prompts/grouping.md",
-			"dist/prompts/audit-code-health.md",
-			"dist/prompts/audit-docs.md",
-			"dist/prompts/audit-tests.md",
-			"dist/prompts/audit-security.md",
-			"dist/prompts/audit-over-engineering.md",
-			"dist/prompts/audit-observability.md",
-			"dist/prompts/audit-operability.md",
-			"dist/prompts/audit-ux.md",
 			"docs/configuration.md",
 			"docs/cli.md",
 			"dist/src/cli/main.js",
 			"dist/src/cli/run.js",
 			"dist/src/actions/call.js",
 			"dist/src/config/roles.js",
-			"dist/src/config/audit-passes.js",
-			"dist/src/config/audit-panel.js",
 			"dist/src/config/load.js",
 			"dist/src/config/schema.js",
 			"dist/src/config/lenses.js",
@@ -157,8 +147,6 @@ describe("config lens registry", () => {
 			"dist/src/tool/closeout-post.js",
 			"dist/src/tool/closeout-from-run.js",
 			"dist/src/run/run-review.js",
-			"dist/src/run/run-audit.js",
-			"dist/src/run/render-audit.js",
 			"dist/src/seat/seat-extension.js",
 			"skills/review-panel/SKILL.md",
 			"package.json",
@@ -169,6 +157,12 @@ describe("config lens registry", () => {
 			expect(shipped.has(file), `npm package contains ${file}`).toBe(true);
 		}
 		expect(shipped.has("dist/src/tool/review-panel.js")).toBe(false);
+		// The repository audit was removed: none of its prompts or modules ship.
+		expect(
+			[...shipped].filter((file) =>
+				/(^|\/)(audit-|run-audit|render-audit)/.test(file),
+			),
+		).toEqual([]);
 		// Internal process artifacts, specs, and tests never ship.
 		const internalPrefixes = [
 			".agent-sdlc/",

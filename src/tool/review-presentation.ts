@@ -77,7 +77,7 @@ function truncateUtf8(text: string, maxChars: number): string {
 }
 
 export type ReviewProgressView = {
-	phase: "diagnose" | "review" | "verify" | "audit";
+	phase: "diagnose" | "review" | "verify";
 	event: string;
 	elapsedMs: number;
 	seat?: string;
@@ -164,16 +164,6 @@ export function progressFromReviewEvent(
 		...(event.attempts === undefined ? {} : { attempts: event.attempts }),
 		...(event.tokens === undefined ? {} : { tokens: event.tokens }),
 		...(event.lastTool === undefined ? {} : { lastTool: event.lastTool }),
-	};
-}
-
-export function progressFromAuditEvent(
-	event: ReviewProgressEvent,
-	elapsedMs: number,
-): ReviewProgressView {
-	return {
-		...progressFromReviewEvent(event, elapsedMs),
-		phase: "audit",
 	};
 }
 
@@ -573,57 +563,6 @@ export function reviewLostLine(
 			return `${facts.seat.rosterId}/${facts.seat.lens} (${klass})`;
 		});
 	return `Lost: ${lost.join(", ")}`;
-}
-
-export function renderAuditResult(input: {
-	recordPath: string;
-	panel: PlannedSeat[];
-	result: Omit<RunReviewResult, "findings">;
-}): string {
-	const voted = input.result.outcomes.filter(
-		(facts) => facts.outcome.kind === "voted",
-	);
-	const failed = input.result.outcomes.filter(
-		(facts) => facts.outcome.kind === "failed",
-	);
-	const findings = voted.flatMap((facts) =>
-		facts.outcome.kind === "voted" ? facts.outcome.findings : [],
-	);
-	const areas = [
-		...new Set(
-			findings.map((finding) => inertLine(finding.file.split("/")[0] ?? ".")),
-		),
-	].sort();
-	const lines = [
-		"# Repository audit",
-		`${voted.length}/${input.result.outcomes.length} voted · ${findings.length} finding${findings.length === 1 ? "" : "s"}`,
-		renderSeatsLine(input.panel),
-		...(areas.length === 0 ? [] : [`Areas: ${areas.join(", ")}`]),
-	];
-	if (failed.length > 0) {
-		lines.push(
-			`Lost: ${failed
-				.map((facts) => {
-					const failure =
-						facts.outcome.kind === "failed" ? facts.outcome.class : "failed";
-					return `${facts.seat.rosterId}/${facts.seat.lens} (${failure})`;
-				})
-				.join(", ")}`,
-		);
-	}
-	lines.push(`Record: \`${input.recordPath}\``, "");
-	for (const finding of findings) {
-		lines.push(
-			`- [${finding.severity}] ${inertLine(finding.title)} (${inertLine(finding.file)}:${finding.line})`,
-		);
-	}
-	if (findings.length === 0) {
-		lines.push("None submitted.");
-	}
-	if (input.result.cleanupError !== undefined) {
-		lines.push("", input.result.cleanupError);
-	}
-	return fitPresentation(lines);
 }
 
 /** `panel` is the planned verify seats; it defaults to the outcomes' seats. */

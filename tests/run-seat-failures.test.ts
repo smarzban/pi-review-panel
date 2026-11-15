@@ -13,10 +13,11 @@ const spec = {
 	worktree: "/snapshot",
 };
 
-const auditSpec: SeatSpec<typeof SEAT_PROFILES.audit> = {
+const verificationSpec: SeatSpec<typeof SEAT_PROFILES.verification> = {
 	...spec,
-	profile: SEAT_PROFILES.audit,
+	profile: SEAT_PROFILES.verification,
 	expectedIds: ["run-1/finding-1"],
+	cycle: 1,
 };
 
 function silentSession() {
@@ -70,11 +71,11 @@ describe("SDK seat failures", () => {
 		expect(result.lifecycle.attempts).toBe(2);
 	});
 
-	it("propagates advisory cancellation into an active audit SDK session", async () => {
+	it("propagates advisory cancellation into an active verification SDK session", async () => {
 		const controller = new AbortController();
 		let aborted = false;
 		let disposed = false;
-		const result = await runAdvisorySeat(auditSpec, {
+		const result = await runAdvisorySeat(verificationSpec, {
 			abortSignal: controller.signal,
 			sessionFactory: async () => ({
 				session: {

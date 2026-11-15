@@ -83,14 +83,13 @@ logged in to in the agent folder the CLI uses: your Pi folder `~/.pi/agent` when
 otherwise `~/.pi-review-panel/agent`, where `review-panel auth login <provider>` signs in (see
 [the CLI guide](cli.md#logins-and-the-agent-folder)). The roster does not create or configure
 providers. pi-review-panel stores **no**
-credentials, endpoints, or provider definitions anywhere: the config file, the run record, and the
-audit `panel.json` carry none of that. A seat suppresses Pi's ambient extensions, skills, prompt
+credentials, endpoints, or provider definitions anywhere: the config file, the run record, and
+`panel.json` carry none of that. A seat suppresses Pi's ambient extensions, skills, prompt
 templates, and themes, and loads no context files, so the only extension files it loads are the
 exact absolute paths named in that roster row's `extraExtensionPaths`; beside them runs only the
 package's own in-process guard that confines tool paths to the seat's snapshot. If a seat needs a
 provider or authentication extension, name it there. Only the seat's role tools are active:
-read-only `read`, `grep`, `find`, and `ls`, `git_diff` in every role except a repository audit,
-and one submit tool. Results are reported only through that submit tool.
+read-only `read`, `grep`, `find`, `ls` and `git_diff`, and one submit tool. Results are reported only through that submit tool.
 
 A row's `provider` may come from one of its own `extraExtensionPaths`, for example `claude-code`
 from `pi-claude-code`. The seat loads that row's extensions first, then registers the providers they
@@ -103,7 +102,7 @@ the Claude Code CLI whether it is logged in). It still starts no reviewer sessio
 An extension that fails to load, or whose provider registration Pi rejects, gives a row that names
 it. A provider check that throws counts as not authenticated. Each row's check is bounded at 30
 seconds; a row that does not finish in that time gives a timed-out row naming its extensions, and
-`diagnose` moves on to the next row. Because `review` and `audit` run `diagnose` first, the bound
+`diagnose` moves on to the next row. Because `review` runs `diagnose` first, the bound
 also keeps one stuck extension from stalling them.
 
 ## Package-owned prompts
@@ -128,7 +127,7 @@ provider/model/lens identities and an empty or oversized panel refuse before rev
 
 Unknown fields refuse.
 
-## panel.json audit artifact
+## panel.json, the planned panel
 
 Immediately after the run is reserved, and before any snapshot pinning or seat scheduling, the run
 writes `.review-panel/runs/<run-id>/panel.json`: the machine-readable record of what was planned. It
@@ -183,7 +182,7 @@ and the close-out card list F-ids.
 
 ## Interrupted runs and `resume`
 
-A review or audit also writes `plan.json` before pinning: its kind, the frozen base and head
+A review also writes `plan.json` before pinning: its kind, the frozen base and head
 commits, the scoping note, and the planned seat rows (`rosterId`, `lens`, `provider`, `model`, as in
 `panel.json`). It holds no prompt text and no extension paths. Each seat's outcome is written to
 `seats/<planned index>.json` the moment that seat settles, by a temp file and a rename. A seat torn
@@ -199,7 +198,7 @@ with a key only the owner holds:
 - The key is `record-key`, 32 random bytes, in the folder of the owner config:
   `~/.pi-review-panel/record-key` by default, or beside `$PI_REVIEW_PANEL_CONFIG` when that is set.
   It never lives in the reviewed repository, and nothing secret is written to the record.
-- The first review or audit creates it, exclusively and with mode `0600`. Resume never creates it.
+- The first review creates it, exclusively and with mode `0600`. Resume never creates it.
 - It signs `plan.json` (`plan.mac`), each seat file (`seats/<n>.mac`), and every finished review
   and verify record (`record.mac`, written just before `COMPLETE`, which covers a review's
   grouping in `execution.json`). It also signs the posted markers of PR rounds (see
@@ -214,9 +213,9 @@ with a key only the owner holds:
   (Windows), and the mode checks are skipped on Windows.
 - `diagnose` checks the key the same way, and never creates it. With no key yet, it checks that the
   folder lets you write and search it (`access(2)`, which also sees a read-only mount and ACLs).
-  It cannot see, without writing, a filesystem that refuses hard links; the first review or audit
+  It cannot see, without writing, a filesystem that refuses hard links; the first review
   then refuses with "could not be created".
-- A review or audit writes `plan.mac`, an HMAC-SHA256 of the exact `plan.json` bytes bound to the
+- A review writes `plan.mac`, an HMAC-SHA256 of the exact `plan.json` bytes bound to the
   run id. Each seat file gets `seats/<planned index>.mac`, an HMAC of its exact bytes bound to the run
   id, the plan's MAC and the seat's index. So a signed file cannot be edited, moved to another index,
   or copied in from another run.
@@ -229,12 +228,12 @@ with a key only the owner holds:
   repository writer replaces while the seats run is not signed. These are the files `verify` and
   `comment` read; see [Verify and comment take only signed records](#verify-and-comment-take-only-signed-records).
 - Deleting the key makes every interrupted record unresumable and every finished record unusable by
-  `verify` and `comment`; a new one is created by the next review or audit. To keep using records
+  `verify` and `comment`; a new one is created by the next review. To keep using records
   across machines, copy the key with the config.
 
 ### When the record key is refused
 
-Review, audit, resume, verify and comment refuse to start without a usable key, and `diagnose`
+Review, resume, verify and comment refuse to start without a usable key, and `diagnose`
 reports the same cause as a `record key <path>` row. Resume, verify and comment also refuse when
 there is no key at all, since they never create one. Each cause and its fix:
 
@@ -244,10 +243,10 @@ there is no key at all, since they never create one. Each cause and its fix:
 | `could not be created` on a writable folder (for example `EPERM` from `link`) | The folder's filesystem refuses hard links (some FUSE or SMB mounts). Move the config to a local folder with `PI_REVIEW_PANEL_CONFIG`. |
 | `is refused: its folder … is writable by other users` | If you own the folder and it is not sticky, `chmod go-w <folder>`; the fix text says so only then. For a shared sticky folder such as `/tmp`, or one you do not own, never `chmod` it: point `PI_REVIEW_PANEL_CONFIG` at a `config.json` in a folder you own, mode `0700`. |
 | Warning only: `its folder … is writable by its group` | Nothing blocks. If anyone else is in that group, `chmod g-w <folder>` (or move the config, as above, when you do not own the folder). |
-| `is a symlink and is refused` (stow, chezmoi or a store link) | Replace the link with a regular file: `cp -L` the key's bytes into place, then `chmod 600` it. Or delete the link; the next review or audit creates a new key. |
+| `is a symlink and is refused` (stow, chezmoi or a store link) | Replace the link with a regular file: `cp -L` the key's bytes into place, then `chmod 600` it. Or delete the link; the next review creates a new key. |
 | `is readable by group or other users and is refused` (a key copied with a `0644` umask, or a `0444` store file) | `chmod 600 <key>`. If others may have read it, delete it instead. |
-| `is not owned by you and is refused` | Delete it, and the next review or audit creates one you own. `chown` it only if you know where it came from. |
-| `is not 32 bytes and is refused`, or `is not a regular file and is refused` | Delete what is at the key path; the next review or audit creates a new key. |
+| `is not owned by you and is refused` | Delete it, and the next review creates one you own. `chown` it only if you know where it came from. |
+| `is not 32 bytes and is refused`, or `is not a regular file and is refused` | Delete what is at the key path; the next review creates a new key. |
 | `is inside the reviewed repository` | Point `PI_REVIEW_PANEL_CONFIG` at a config outside the repository. |
 
 A new key cannot check records signed with the old one, so those interrupted runs can no longer be
@@ -257,7 +256,7 @@ new runs.
 ### Resuming
 
 `review-panel resume --prior-run-id <run-id>` finishes an interrupted record in place. It runs the
-same readiness check as review and audit first. It takes no seats, lenses, or commits: those come
+same readiness check as review first. It takes no seats, lenses, or commits: those come
 from `plan.json`. What resume trusts, and what it rebuilds:
 
 - **The plan must carry a valid signature.** A `plan.json` whose `plan.mac` does not match the
@@ -274,15 +273,17 @@ from `plan.json`. What resume trusts, and what it rebuilds:
   paths and replay input in `execution.json` are rebuilt from the owner config and the package.
 - **Every planned seat is checked against the owner config, settled or not.** The roster row with
   that `rosterId` must still exist and name the same `provider` and `model`. `extraExtensionPaths`
-  and the seat budget come from the config. The prompt comes from the package's own lens or
-  audit-pass table. A seat that fails this check does not run and is not kept, even if it had
+  and the seat budget come from the config. The prompt comes from the package's own lens
+  table. A seat that fails this check does not run and is not kept, even if it had
   settled; it is reported as lost coverage.
 - **The scoping note is not passed on.** The scoping note in `plan.json` does not reach the re-run
   seats, since resume takes no prompt text from the record. The report and the tool's reply say so
   when the record had one.
-- **The panel caps still apply.** A plan with more seats than a review panel (16) or an audit (24)
-  may have, a review lens other than `holistic` on more than 2 seats, an audit pass on more than 3,
-  or one seat twice, is refused.
+- **The panel caps still apply.** A plan with more seats than a review panel (16) may have, a
+  review lens other than `holistic` on more than 2 seats, or one seat twice, is refused.
+- **An audit record is refused.** Earlier versions also wrote signed plans for a repository audit.
+  Audit was removed, so resume refuses such a record ("audit records can no longer be resumed")
+  before any seat runs.
 - **Resume never follows a symlink, and never waits on a FIFO.** Record files are opened without
   following a symlink and without blocking, and anything but a regular file is not read. Each output
   is written to a new temp file that is renamed over the old name, so a planted symlink is replaced,
@@ -377,8 +378,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   6/6 voted · 8 findings · 1m 58s · $1.1017
   **Seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus)
 
-  - **F-1 [high]** Sanitize the audit Areas line (`src/tool/review-presentation.ts:511`) — sol/holistic
-    **Evidence:** renderAuditResult splits finding.file on "/" …
+  - **F-1 [high]** Escape the Seats line (`src/tool/review-presentation.ts:511`) — sol/holistic
+    **Evidence:** renderSeatsLine joins roster ids without escaping …
   ```
 - Each verify posts `## Review panel · verify N`. N starts one past the earlier verifies of the
   same review whose comment reached the PR: complete verify records signed with the owner's record
@@ -478,7 +479,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   dismissed with a reason), the reply says why.
 - An explicit `pr` must be an open pull request whose head is the run's head. Otherwise nothing is
   posted and the reply says why, such as `PR comment: not posted (PR #7 is not open)`.
-- Every post is a new comment. Nothing edits or deletes an earlier one. Audit and resume never post.
+- Every post is a new comment. Nothing edits or deletes an earlier one. Resume never posts.
 - `prComment: false` (CLI `--no-pr-comment`) turns posting off for one run.
 - No open PR, more than one, `gh` missing, signed out or failing: nothing is posted, and the reply
   ends with one line saying why, such as `PR comment: not posted (no open PR has this head)`. A

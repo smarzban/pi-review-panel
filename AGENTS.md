@@ -15,7 +15,7 @@ frozen one-line pointer and says so in-file.
 ## Project overview
 
 **pi-review-panel** runs multi-model code review as one command, `review-panel`, published from the
-npm package `pi-review-panel` (`diagnose` / `suggest` / `review` / `audit` / `verify` / `resume` /
+npm package `pi-review-panel` (`diagnose` / `suggest` / `review` / `verify` / `resume` /
 `comment`, plus `call '<json>'`, `auth` and `skill`). The package ships one agent-neutral skill,
 `skills/review-panel`, which every coding agent (Claude Code, Codex, Grok, Pi) uses to run the
 command. A run fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned
@@ -26,8 +26,9 @@ Seat identity is owner authority: an outside-repository roster config
 (`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
 rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
 Runs record under `<repo>/.review-panel/runs/`, each seat as it settles. `resume` finishes an
-interrupted review or audit record, running only its unsettled seats at the recorded head. Review
-and audit sign `plan.json` and each seat file with `record-key` beside the owner config (never in
+interrupted review record, running only its unsettled seats at the recorded head, and refuses an
+audit record left by an older version (the repository audit was removed). Review
+signs `plan.json` and each seat file with `record-key` beside the owner config (never in
 the repository); resume refuses an unsigned plan and re-runs an unsigned seat. A finished review
 (first run or resume) and a finished verify also write `record.mac` just before `COMPLETE`: an
 HMAC bound to the run id (the folder name), the kind and the plan's MAC, over the exact bytes the
@@ -63,12 +64,10 @@ hint, never a delete. Pi's folder comes from the environment as launched, becaus
 `PI_CODING_AGENT_DIR` for the SDK before any command runs. The `pi` manifest lists only `skills`,
 so `pi install` still loads the skill, but the npm install is the supported path. A `call` object
 may omit `repository`, or pass `/`, to use the current folder's Git top-level; `--repo` or an
-explicit real path wins. `audit` is a periodic whole-repository advisory sweep against one pinned `HEAD`
-snapshot (no base/head range). Default passes are code-health, over-engineering, tests, and security
-across the first two owner-default seats. It does not write `AUDIT.md`, repair, run CI, or post a
-GitHub comment. Review and verify post each round to the one open PR whose head is the
-run's head, by default, as a new comment (`## Review panel · review`, `## Review panel · verify N`);
-a verify where every verify seat voted, each marked every kept id resolved, and none reported a
+explicit real path wins. `audit` (command or `call` action) is refused with a message that the
+repository audit was removed, not as an unknown command. Review and verify post each round to the
+one open PR whose head is the run's head, by default, as a new comment (`## Review panel · review`,
+`## Review panel · verify N`); a verify where every verify seat voted, each marked every kept id resolved, and none reported a
 regression also posts the close-out card on its own (`## Review panel · close-out`, once per
 review). The card is presentation, not a verdict: the agents judge and the owner merges.
 `--no-pr-comment` (`prComment: false` in a `call` object) turns posting off for a run, and owner config
@@ -116,11 +115,10 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   the grouping the review's signed `execution.json` records (the one its reply showed), and only
   when it grouped every F-id once; no grouping step or a lost grouping refuses G-ids. Verify itself
   sees F-ids. Resume always runs the grouping step again and rewrites `execution.json`.
-  Audit never groups.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR by default, always as a new comment that is
-  never edited or deleted; audit and resume never post. The automatic close-out posts only after
+  never edited or deleted; resume never posts. The automatic close-out posts only after
   a verify with no lost seat, every voting seat marking every kept id resolved, and no
   regressions. An explicit `pr` must be open with the run's head as its head.
   Every posted body (review, verify, the automatic close-out and the manual `comment` card) goes

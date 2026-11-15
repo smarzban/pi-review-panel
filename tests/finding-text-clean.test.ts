@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { renderReport } from "../src/run/render.js";
-import { renderAuditReport } from "../src/run/render-audit.js";
 import type { RunReviewResult } from "../src/run/run-review.js";
 import {
 	buildVerifyFindingData,
@@ -9,7 +8,6 @@ import {
 } from "../src/run/run-verify.js";
 import type { PlannedSeat, StampedFinding } from "../src/run/types.js";
 import {
-	renderAuditResult,
 	renderReviewResult,
 	renderVerifyResult,
 } from "../src/tool/review-presentation.js";
@@ -83,36 +81,6 @@ describe("seat-authored finding text is cleaned", () => {
 		expect(text).toContain(
 			`- F-1 [high] ${cleanTitle} (${cleanFile}:3) — terra/holistic\n  ${cleanEvidence}`,
 		);
-		expect(text).not.toMatch(/[‮​﻿]|\u{E0041}/u);
-	});
-
-	it("in the audit reply's Areas line", () => {
-		const planted: StampedFinding = {
-			...hostile,
-			finding: { ...hostile.finding, file: `bad${RLO}\n# planted/a.ts` },
-		};
-		const text = renderAuditResult({
-			recordPath: "/tmp/audit-2",
-			panel: [seat],
-			result: {
-				recordPath: "/tmp/audit-2",
-				outcomes: [
-					{ ...voted, outcome: { kind: "voted", findings: [planted.finding] } },
-				],
-			} as never,
-		});
-		expect(text).toContain(`Areas: bad${R} # planted\n`);
-		expect(text).not.toMatch(/^# planted/m);
-		expect(text).not.toMatch(/[\u202E\u200B\uFEFF]|\u{E0041}/u);
-	});
-
-	it("in the audit reply", () => {
-		const text = renderAuditResult({
-			recordPath: "/tmp/audit-1",
-			panel: [seat],
-			result: { recordPath: "/tmp/audit-1", outcomes: [voted] } as never,
-		});
-		expect(text).toContain(`- [high] ${cleanTitle} (${cleanFile}:3)`);
 		expect(text).not.toMatch(/[‮​﻿]|\u{E0041}/u);
 	});
 
@@ -198,20 +166,6 @@ describe("seat-authored finding text is cleaned", () => {
 		);
 		expect(report).not.toMatch(/^#+ F-9/m);
 		expect(report).not.toMatch(/[\u202E\u200B\uFEFF]|\u{E0041}/u);
-	});
-
-	it("in the audit report.md", () => {
-		const report = renderAuditReport({
-			runId: "audit-1",
-			snapshotOid: "a".repeat(40),
-			stamped: [hostile],
-			outcomes: [voted],
-		});
-		expect(report).toContain(`### F-1 [high] ${cleanTitle}\n`);
-		expect(report).toContain(`- Location: ${cleanFile}:3\n`);
-		expect(report).toContain(`- Evidence: ${cleanEvidence}\n`);
-		expect(report).not.toMatch(/^#+ F-9/m);
-		expect(report).not.toMatch(/[‮​﻿]|\u{E0041}/u);
 	});
 
 	it("cuts long text by code point, never inside a surrogate pair", () => {

@@ -4,8 +4,7 @@ One model reviewing your PR is an opinion.
 
 A **panel** is several exact models, on one pinned snapshot, that can report
 findings only through a structured channel, and a tool that is **forbidden**
-from saying the change is good. It reviews a committed change or runs an
-advisory whole-repository audit.
+from saying the change is good. It reviews a committed change.
 
 Most AI reviewers try to be the judge. They score the diff. They invent
 agreement. They print “ready to merge.” That is why you stopped trusting them.
@@ -24,8 +23,8 @@ What you get instead:
 
 - **Several models, not one.** You pin exact `provider/model` seats. A dead
   seat is lost coverage, never a silent empty pass.
-- **One snapshot.** Review seats see the same committed `base…head`; audit
-  seats see one committed `HEAD` tree. Uncommitted work is invisible on purpose.
+- **One snapshot.** Review seats see the same committed `base…head`.
+  Uncommitted work is invisible on purpose.
 - **Findings, not vibes.** A finding exists only if a seat submitted it. The
   tool never parses a paragraph into a bug.
 - **Lenses when the change earns them.** Holistic always runs. Security, tests,
@@ -75,8 +74,7 @@ In any of those agents, ask:
 /review-panel Review this change.
 ```
 
-or, for a periodic repository sweep, `/review-panel Audit this repository.` The agent
-runs the command, reads the report, and judges each finding.
+The agent runs the command, reads the report, and judges each finding.
 
 **Upgrading from 0.3.0 (Pi tool):** the `review_panel` Pi tool is gone. Run
 `pi remove npm:pi-review-panel`, then the two commands above.
@@ -128,16 +126,6 @@ comment take G-ids as well as F-ids (see
 [Grouped findings](docs/configuration.md#grouped-findings)).
 
 ```bash
-review-panel audit
-```
-
-An audit pins the whole `HEAD` tree. Its baseline passes are code health,
-over-engineering, tests, and security across two owner-default seats. Pass
-`--passes` for a situational sweep such as docs, observability, or operability. It reports an advisory
-backlog only: counts, file areas, lost seats, and a record path. The tool does
-not write `AUDIT.md` or post an audit comment.
-
-```bash
 review-panel verify --prior-run-id <run-id> --head HEAD --kept-finding-ids F-1
 ```
 
@@ -161,7 +149,7 @@ review-panel comment --prior-run-id <run-id> --owner-approved --pr 29
 review-panel resume --prior-run-id <run-id>
 ```
 
-A review or audit that was killed keeps every seat that had finished. `resume`
+A review that was killed keeps every seat that had finished. `resume`
 runs only the missing seats against the same head commit and writes the report.
 
 Holistic seats always run. Optional `--lenses` add extras. Optional `--scoping-note`
@@ -174,6 +162,6 @@ or dispositions, and lost seats. The tool computes no merge decision.
 
 Unreleased: one `review-panel` command and one skill, published from the
 `pi-review-panel` npm package (0.3.0 on npm is still the Pi tool). Diagnose,
-suggest, review, audit, verify, resume, and comment are the public path. The
+suggest, review, verify, resume, and comment are the public path. The
 package ships a built `dist/` (built at pack time, never committed) and depends
 on the Pi SDK it runs seats with.

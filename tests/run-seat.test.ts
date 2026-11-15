@@ -3,7 +3,6 @@ import process from "node:process";
 import { describe, expect, it } from "vitest";
 
 import {
-	type AuditProfile,
 	SEAT_PROFILES,
 	type VerificationProfile,
 } from "../src/seat/channel-profile.js";
@@ -22,12 +21,6 @@ const spec = {
 	lensPrompt: "Review the change.",
 	baseRef: "base",
 	worktree: "/snapshot",
-};
-
-const auditSpec: SeatSpec<AuditProfile> = {
-	...spec,
-	profile: SEAT_PROFILES.audit,
-	expectedIds: ["run-1/finding-1"],
 };
 
 const verificationSpec: SeatSpec<VerificationProfile> = {
@@ -331,28 +324,6 @@ describe("SDK deadline and teardown", () => {
 });
 
 describe("SDK advisory seats", () => {
-	it("submits a complete audit through the audit role tool", async () => {
-		const fake = createSdkSeatFake([{ kind: "audit", holds: false }]);
-		const result = await runAdvisorySeat(auditSpec, {
-			sessionFactory: fake.factory,
-		});
-
-		expect(result.outcome).toMatchObject({
-			kind: "audit",
-			rows: [
-				{
-					id: "run-1/finding-1",
-					holds: false,
-					rationale: "verified against the code",
-				},
-			],
-		});
-		expect(fake.runs[0].input.tools.map((tool) => tool.name)).toEqual([
-			"git_diff",
-			"submit_audit",
-		]);
-	});
-
 	it("submits a complete verification through the verification role tool", async () => {
 		const fake = createSdkSeatFake([{ kind: "verification" }]);
 		const result = await runAdvisorySeat(verificationSpec, {
@@ -377,24 +348,7 @@ describe("SDK advisory seats", () => {
 		]);
 	});
 
-	it("does not publish invalid audit or verification rows", async () => {
-		const invalidAudit = await runAdvisorySeat(auditSpec, {
-			sessionFactory: async (input) => {
-				const tool = submissionTool(input.tools);
-				return successfulSession(async () => {
-					await expect(submit(tool, { rows: [] })).rejects.toThrow();
-					await submit(tool, {
-						rows: [
-							{
-								id: "run-1/finding-1",
-								holds: true,
-								rationale: "checked",
-							},
-						],
-					});
-				});
-			},
-		});
+	it("does not publish invalid verification rows", async () => {
 		const invalidVerification = await runAdvisorySeat(verificationSpec, {
 			sessionFactory: async (input) => {
 				const tool = submissionTool(input.tools);
@@ -423,10 +377,6 @@ describe("SDK advisory seats", () => {
 			},
 		});
 
-		expect(invalidAudit.outcome).toMatchObject({
-			kind: "audit",
-			rows: [{ id: "run-1/finding-1", holds: true }],
-		});
 		expect(invalidVerification.outcome).toMatchObject({
 			kind: "verification",
 			result: {

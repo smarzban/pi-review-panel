@@ -4,11 +4,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-	createSubmitAuditTool,
-	type SubmitAuditTool,
-} from "./audit-channel.js";
-import type { AuditRow } from "./audit-schema.js";
-import {
 	createSubmissionChannel,
 	type SubmissionChannel,
 	type ToolResult,
@@ -543,7 +538,6 @@ export function createSubmitFindingsTool({
 export type SeatTool =
 	| GitDiffTool
 	| SubmitFindingsTool
-	| SubmitAuditTool
 	| SubmitVerificationTool
 	| SubmitGroupsTool;
 
@@ -551,7 +545,6 @@ export type SeatToolset = {
 	tools: SeatTool[];
 	channel:
 		| SubmissionChannel<Finding[]>
-		| SubmissionChannel<AuditRow[]>
 		| SubmissionChannel<VerificationResult>
 		| SubmissionChannel<string[][]>;
 };
@@ -573,10 +566,6 @@ export function createSeatTools({
 	cycle?: number;
 }): SeatToolset {
 	const readOnly = createGitDiffTool({ worktree });
-	if (profile.kind === "audit") {
-		const { tool, channel } = createSubmitAuditTool({ expectedIds });
-		return { tools: [readOnly, tool], channel };
-	}
 	if (profile.kind === "verification") {
 		if (cycle === undefined) {
 			throw new Error("verification seats require a positive cycle");
@@ -592,8 +581,5 @@ export function createSeatTools({
 		return { tools: [readOnly, tool], channel };
 	}
 	const { tool, channel } = createSubmitFindingsTool({});
-	if (profile.kind === "repo-audit") {
-		return { tools: [tool], channel };
-	}
 	return { tools: [readOnly, tool], channel };
 }

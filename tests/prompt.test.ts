@@ -56,13 +56,17 @@ describe("assembleSeatPrompt", () => {
 	});
 
 	it("uses the profile's channel instruction and defaults to the findings instruction", () => {
-		const lensPrompt = "You audit a discard ledger.";
+		const lensPrompt = "You group submitted findings.";
 		const baseRef = "origin/main";
 
 		expect(
-			assembleSeatPrompt({ lensPrompt, baseRef, profile: SEAT_PROFILES.audit }),
+			assembleSeatPrompt({
+				lensPrompt,
+				baseRef,
+				profile: SEAT_PROFILES.grouping,
+			}),
 		).toBe(
-			`${lensPrompt}\n\nBase ref: ${baseRef}\n\n${SEAT_PROFILES.audit.outputChannelInstruction}`,
+			`${lensPrompt}\n\nBase ref: ${baseRef}\n\n${SEAT_PROFILES.grouping.outputChannelInstruction}`,
 		);
 		expect(
 			assembleSeatPrompt({

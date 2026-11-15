@@ -103,7 +103,7 @@ export type ReservedRecord = {
 };
 
 /**
- * The durable planned-panel record (AC-25): the audit input, persisted
+ * The durable planned-panel record (AC-25): the review input, persisted
  * immediately after reservation and before any pinning or scheduling. Key
  * order is exactly `runId`, `baseRef`, optional `scopingNote`, `seats`;
  * each seat row is exactly `rosterId`, `lens`, `provider`, `model`.
@@ -135,15 +135,15 @@ export type PanelRecordInput = {
 };
 
 /**
- * The durable resume plan of a review or audit record: what `resume` needs to
+ * The durable resume plan of a review record: what `resume` needs to
  * finish it against the same snapshot with the same seats.
  */
 export type RunPlan = {
 	version: 1;
-	kind: "review" | "audit";
+	kind: "review";
 	runId: string;
 	baseRef: string;
-	/** Frozen base commit; for an audit, the snapshot commit. */
+	/** Frozen base commit. */
 	baseOid: string;
 	/** Frozen head commit the snapshot pins. */
 	headOid: string;

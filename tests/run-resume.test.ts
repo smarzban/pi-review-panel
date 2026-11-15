@@ -18,7 +18,6 @@ import {
 	SEATS_DIR,
 } from "../src/run/record.js";
 import { loadResumable, resumeRun } from "../src/run/resume.js";
-import { runAudit } from "../src/run/run-audit.js";
 import { runReview } from "../src/run/run-review.js";
 import { runVerify } from "../src/run/run-verify.js";
 import type { PlannedSeat } from "../src/run/types.js";
@@ -385,56 +384,6 @@ describe("resume", () => {
 				"security",
 				"tests",
 			]);
-		} finally {
-			rmSync(repo, { recursive: true, force: true });
-		}
-	});
-
-	it("resumes an interrupted audit record", async () => {
-		const repo = createHostRepo();
-		try {
-			const controller = new AbortController();
-			const fake = createSdkSeatFake([
-				{ kind: "default" },
-				{ kind: "pending" },
-			]);
-			const seats = threeSeats()
-				.slice(0, 2)
-				.map((seat, index) => ({
-					...seat,
-					lens: index === 0 ? "code-health" : "security",
-				}));
-			await expect(
-				runAudit(
-					{ repoDir: repo, seats },
-					{
-						abortSignal: controller.signal,
-						recordKey: TEST_RECORD_KEY,
-						sessionFactory: fake.factory,
-						onProgress: (event) => {
-							if (event.kind === "seat-finished") {
-								controller.abort();
-							}
-						},
-					},
-				),
-			).rejects.toThrow(/cancel/i);
-			const recordPath = onlyRecord(repo);
-			const loaded = loadResumable(repo, recordPath, TEST_RECORD_KEY);
-			expect(loaded.plan.kind).toBe("audit");
-			const counter = countingFactory();
-			const result = await resumeRun(loaded, {
-				recordKey: TEST_RECORD_KEY,
-				config: ownerConfig(),
-				sessionFactory: counter.factory,
-			});
-			expect(counter.lenses).toEqual(["security"]);
-			expect(result.kind).toBe("audit");
-			const report = readFileSync(path.join(recordPath, "report.md"), "utf8");
-			expect(report).toContain("# Repository audit");
-			expect(report).toContain("2 planned seats: 2 voted, 0 failed.");
-			expect(report).toContain("## Resumed run");
-			expect(existsSync(path.join(recordPath, COMPLETE_MARKER))).toBe(true);
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}
