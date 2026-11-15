@@ -92,11 +92,11 @@ function modelRows(provider: string) {
 	return [
 		{
 			prerequisite: `model ${provider}/${MODEL}`,
-			remediation: `Configure the exact Pi model "${provider}/${MODEL}".`,
+			remediation: `Configure the exact Pi model "${provider}/${MODEL}". Check both ids for a typo; a provider that an extension registers needs extraExtensionPaths on its roster row.`,
 		},
 		{
 			prerequisite: `authentication ${provider}`,
-			remediation: `Authenticate the Pi provider "${provider}" for the configured model.`,
+			remediation: `Authenticate the Pi provider "${provider}" for the configured model. For a provider with a login, run: review-panel auth login ${provider}`,
 		},
 	];
 }

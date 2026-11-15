@@ -15,8 +15,10 @@ import {
 import type { Config } from "./schema.js";
 
 /**
- * What to do about a config that cannot be loaded, naming the problem but
- * never echoing the file's content or path.
+ * What to do about a config that cannot be loaded. A file that is there is
+ * never echoed: its problem is named. A file that is missing or cannot be
+ * reached gets the loader's own message, which names the path and the cause,
+ * and for a missing file the example to start from.
  */
 function configRemediation(error: unknown): string {
 	if (error instanceof ConfigInvalidError) {
@@ -27,7 +29,18 @@ function configRemediation(error: unknown): string {
 			? "Fix the owner config: it is not valid JSON."
 			: "Move the owner config outside the reviewed repository; a config inside it is refused.";
 	}
-	return "Create the outside-repository config shown in the configuration guide.";
+	return error instanceof Error
+		? error.message
+		: "Create the outside-repository config shown in the configuration guide.";
+}
+
+/** A failed check's cause on one line, short enough for a remediation row. */
+function causeSuffix(cause: string | undefined): string {
+	if (cause === undefined) {
+		return "";
+	}
+	const line = cause.replace(/\s+/g, " ").trim().slice(0, 200);
+	return line === "" ? "" : ` The check failed: ${line}`;
 }
 
 /** One concrete setup prerequisite that prevents model work. */
@@ -49,6 +62,8 @@ export type ReadinessReport = {
 export type ModelInspection = {
 	model: boolean;
 	auth: boolean;
+	/** Why the provider's login check failed, when it gave a reason. */
+	authError?: string;
 	extensionFailures?: ExtensionFailure[];
 };
 
@@ -101,6 +116,9 @@ async function inspectConfiguredModel(
 	return {
 		model: runtime.model !== undefined,
 		auth: runtime.authenticated,
+		...(runtime.authError === undefined
+			? {}
+			: { authError: runtime.authError }),
 		extensionFailures: runtime.extensionFailures,
 	};
 }
@@ -204,6 +222,7 @@ export async function diagnoseReadiness(
 		}
 		seenKeys.add(key);
 		let inspection: ModelInspection | undefined;
+		let thrown: string | undefined;
 		try {
 			inspection = await withinBound(
 				inspect(roster.provider, roster.model, extensions, input),
@@ -216,8 +235,9 @@ export async function diagnoseReadiness(
 			}
 			// A missing runtime, credential store, or auth inspection is a setup
 			// failure, not a tool failure. The pair receives its concrete
-			// model/auth remediation below.
+			// model/auth remediation below, with the cause.
 			inspection = undefined;
+			thrown = error instanceof Error ? error.message : String(error);
 		}
 		for (const failure of inspection?.extensionFailures ?? []) {
 			push({
@@ -228,13 +248,13 @@ export async function diagnoseReadiness(
 		if (inspection?.model !== true) {
 			push({
 				prerequisite: `model ${roster.provider}/${roster.model}`,
-				remediation: `Configure the exact Pi model "${roster.provider}/${roster.model}".`,
+				remediation: `Configure the exact Pi model "${roster.provider}/${roster.model}". Check both ids for a typo; a provider that an extension registers needs extraExtensionPaths on its roster row.${causeSuffix(thrown)}`,
 			});
 		}
 		if (inspection?.auth !== true) {
 			push({
 				prerequisite: `authentication ${roster.provider}`,
-				remediation: `Authenticate the Pi provider "${roster.provider}" for the configured model.`,
+				remediation: `Authenticate the Pi provider "${roster.provider}" for the configured model. For a provider with a login, run: review-panel auth login ${roster.provider}${causeSuffix(thrown ?? inspection?.authError)}`,
 			});
 		}
 	}

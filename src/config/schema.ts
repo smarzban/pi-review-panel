@@ -301,6 +301,7 @@ export function validateConfig(document: unknown): ConfigResult {
 		}
 	}
 
+	const rosterValid = errors.length === 0;
 	if (!Object.hasOwn(document, "defaults")) {
 		errors.push({ row: -1, field: "defaults", message: "is required" });
 	} else if (!isObject(document.defaults)) {
@@ -309,6 +310,19 @@ export function validateConfig(document: unknown): ConfigResult {
 		const defaults = document.defaults;
 		rejectUnknownFields(defaults, defaultsFields, -1, errors);
 		validateStringList(defaults, "seats", errors);
+		// Only against a roster that is itself valid: a broken roster already
+		// has its own error, and every seat would repeat it.
+		if (rosterValid && Array.isArray(defaults.seats)) {
+			defaults.seats.forEach((id, index) => {
+				if (isNonEmptyString(id) && !seenIds.has(id)) {
+					errors.push({
+						row: -1,
+						field: `defaults.seats[${index}]`,
+						message: "must name a roster id",
+					});
+				}
+			});
+		}
 		if (Object.hasOwn(defaults, "lenses")) {
 			validateStringList(defaults, "lenses", errors);
 		}
