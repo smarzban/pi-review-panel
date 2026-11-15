@@ -1,5 +1,3 @@
-import { rmSync } from "node:fs";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { loadRoleTable } from "../config/roles.js";
@@ -14,18 +12,10 @@ import {
 import type { Finding } from "../seat/schema.js";
 import type { SeatSpec } from "../seat/sdk-session.js";
 import { inertLine } from "./inert-text.js";
-import { readRegularFile, writeRecordFile } from "./record.js";
-import { groupsMac, macMatches } from "./record-key.js";
 import type { PlannedSeat, StampedFinding } from "./types.js";
 
 /** The grouping seat's role, and the lens it shows under in the Seats line. */
 export const GROUPING_LENS = "grouping";
-
-/** The review's signed grouping, beside `findings.json`. */
-export const GROUPS_FILE = "groups.json";
-
-/** The owner's MAC of the exact `groups.json` bytes. */
-export const GROUPS_MAC_FILE = "groups.mac";
 
 /** One group: its id and its member F-ids, in id order. Nothing else. */
 export type FindingGroup = { id: string; findingIds: string[] };
@@ -295,129 +285,83 @@ export async function runGroupingStep(
 	}
 }
 
-/**
- * Writes `groups.json` and, with the owner's record key, `groups.mac`.
- * The file holds ids only: titles, severities and seats always come from
- * `findings.json`, so the record cannot carry a reworded or re-rated finding.
- */
-export function writeGroups(
-	recordPath: string,
-	seat: PlannedSeat,
-	groups: readonly FindingGroup[],
-	/**
-	 * Signs the grouping: the owner's key and plan MAC, and the exact
-	 * `findings.json` bytes the run writes for the list it grouped.
-	 */
-	seal?: { key: Buffer; planMac: string; findingsText: string },
-): void {
-	const runId = path.basename(recordPath);
-	const bytes = `${JSON.stringify(
-		{
-			version: 1,
-			runId,
-			consolidator: {
-				rosterId: seat.rosterId,
-				provider: seat.provider,
-				model: seat.model,
-			},
-			groups,
-		},
-		null,
-		2,
-	)}\n`;
-	writeRecordFile(path.join(recordPath, GROUPS_FILE), bytes);
-	if (seal !== undefined) {
-		writeRecordFile(
-			path.join(recordPath, GROUPS_MAC_FILE),
-			groupsMac(seal.key, runId, seal.planMac, seal.findingsText, bytes),
-		);
-	}
-}
+/** The review's grouping as its signed `execution.json` records it. */
+export type RecordedGrouping =
+	| { kind: "grouped"; groups: FindingGroup[] }
+	/** Why there are no groups to take G-ids from. */
+	| { kind: "none"; why: string };
 
 /**
- * Takes a stale grouping out of a record before the grouping step decides
- * again, so a resumed run never shows groups made for other F-ids. The
- * MAC goes first: a crash in between leaves an unsigned file, never a
- * signed stale one.
+ * The grouping a finished review recorded in `execution.json`, the one its
+ * reply and PR comment showed. `executionText` and `findingsText` are the
+ * record's exact bytes as the caller authenticated them under `record.mac`;
+ * no file is read here. Groups are taken only when the grouping step
+ * grouped, the groups are numbered `G-1`, `G-2`, … in order, and they place
+ * every F-id of `findingsText` in exactly one group. No grouping step, a lost
+ * grouping, or anything else gives `none` with the reason.
  */
-export function removeGroups(recordPath: string): void {
-	for (const name of [GROUPS_MAC_FILE, GROUPS_FILE]) {
-		// Unlinks a planted symlink itself, never its target.
-		rmSync(path.join(recordPath, name), { force: true });
-	}
-}
-
-/**
- * The record's grouping, only when `groups.mac` is the owner's MAC of the
- * exact `groups.json` bytes for this run, this plan and these findings bytes, and the groups place every F-id of
- * `findingsText` in exactly one group. `findingsText` is the record's
- * `findings.json` bytes as the caller already authenticated them; the file
- * is never read again here. Anything else is undefined: the
- * record lives in the reviewed repository, so an unsigned or forged grouping
- * is never taken as the owner's.
- */
-export function readSignedGroups(
-	recordPath: string,
-	key: Buffer,
-	/** The record's plan MAC, as the caller checked it. */
-	planMacHex: string,
+export function recordedGrouping(
+	executionText: string,
 	findingsText: string,
-): FindingGroup[] | undefined {
-	const runId = path.basename(recordPath);
-	const bytes = readRegularFile(path.join(recordPath, GROUPS_FILE));
-	if (bytes === undefined) {
-		return undefined;
+): RecordedGrouping {
+	const invalid = {
+		kind: "none",
+		why: "its recorded grouping does not group every finding once",
+	} as const;
+	let execution: unknown;
+	let findings: unknown;
+	try {
+		execution = JSON.parse(executionText);
+		findings = JSON.parse(findingsText);
+	} catch {
+		return invalid;
+	}
+	if (!isRecord(execution) || !Array.isArray(findings)) {
+		return invalid;
+	}
+	const grouping = execution.grouping;
+	if (grouping === undefined) {
+		return { kind: "none", why: "no grouping step ran" };
+	}
+	if (!isRecord(grouping) || !isRecord(grouping.outcome)) {
+		return invalid;
+	}
+	if (grouping.outcome.kind === "lost") {
+		return { kind: "none", why: "its grouping was lost" };
 	}
 	if (
-		!macMatches(
-			groupsMac(key, runId, planMacHex, findingsText, bytes),
-			readRegularFile(path.join(recordPath, GROUPS_MAC_FILE)),
-		)
+		grouping.outcome.kind !== "grouped" ||
+		!Array.isArray(grouping.outcome.groups)
 	) {
-		return undefined;
+		return invalid;
 	}
-	try {
-		const parsed: unknown = JSON.parse(bytes);
-		const findings: unknown = JSON.parse(findingsText);
+	const ids = new Set(
+		findings.flatMap((row) =>
+			isRecord(row) && typeof row.id === "string" ? [row.id] : [],
+		),
+	);
+	const placed = new Set<string>();
+	const groups: FindingGroup[] = [];
+	for (const [index, group] of grouping.outcome.groups.entries()) {
 		if (
-			!isRecord(parsed) ||
-			parsed.version !== 1 ||
-			parsed.runId !== runId ||
-			!Array.isArray(parsed.groups) ||
-			!Array.isArray(findings)
+			!isRecord(group) ||
+			group.id !== `G-${index + 1}` ||
+			!Array.isArray(group.findingIds) ||
+			group.findingIds.length === 0
 		) {
-			return undefined;
+			return invalid;
 		}
-		const ids = new Set(
-			findings.flatMap((row) =>
-				isRecord(row) && typeof row.id === "string" ? [row.id] : [],
-			),
-		);
-		const placed = new Set<string>();
-		const groups: FindingGroup[] = [];
-		for (const [index, group] of parsed.groups.entries()) {
-			if (
-				!isRecord(group) ||
-				group.id !== `G-${index + 1}` ||
-				!Array.isArray(group.findingIds) ||
-				group.findingIds.length === 0
-			) {
-				return undefined;
+		const members: string[] = [];
+		for (const id of group.findingIds) {
+			if (typeof id !== "string" || !ids.has(id) || placed.has(id)) {
+				return invalid;
 			}
-			const members: string[] = [];
-			for (const id of group.findingIds) {
-				if (typeof id !== "string" || !ids.has(id) || placed.has(id)) {
-					return undefined;
-				}
-				placed.add(id);
-				members.push(id);
-			}
-			groups.push({ id: group.id, findingIds: members });
+			placed.add(id);
+			members.push(id);
 		}
-		return placed.size === ids.size ? groups : undefined;
-	} catch {
-		return undefined;
+		groups.push({ id: group.id, findingIds: members });
 	}
+	return placed.size === ids.size ? { kind: "grouped", groups } : invalid;
 }
 
 /** True for an id shaped like a group id, `G-<n>`. */

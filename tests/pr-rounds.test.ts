@@ -40,9 +40,11 @@ import {
 	ROUND_POSTED_MARKER,
 } from "../src/tool/round-post.js";
 import {
-	signGroups,
 	signReviewRecord,
+	signVerifyRecord,
 	TEST_RECORD_KEY,
+	testPostedMac,
+	writeSignedMarker,
 } from "./fixtures/record-key.js";
 import {
 	createSdkReviewRunner,
@@ -315,12 +317,21 @@ function writeReviewRecord(repo: string, runId: string, rows: Row[]): void {
 	signReviewRecord(recordPath);
 }
 
-/** A complete earlier verify record for `priorRunId`. */
+/**
+ * A complete earlier verify record for `priorRunId`, signed with the test
+ * key unless `signed` is false (a record planted in the repository). Its
+ * `round.posted` is signed unless `markerSigned` is false.
+ */
 function writeVerifyRecord(
 	repo: string,
 	runId: string,
 	priorRunId: string,
-	options: { posted?: boolean; kind?: string } = {},
+	options: {
+		posted?: boolean;
+		kind?: string;
+		signed?: boolean;
+		markerSigned?: boolean;
+	} = {},
 ): void {
 	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
@@ -334,10 +345,17 @@ function writeVerifyRecord(
 	);
 	if (options.posted !== false) {
 		// An earlier verify whose comment reached the PR.
-		writeFileSync(
-			path.join(recordPath, ROUND_POSTED_MARKER),
-			JSON.stringify({ pr: 12 }),
-		);
+		if (options.markerSigned === false || options.signed === false) {
+			writeFileSync(
+				path.join(recordPath, ROUND_POSTED_MARKER),
+				JSON.stringify({ verifyRunId: runId, pr: 12 }),
+			);
+		} else {
+			writeSignedMarker(recordPath, ROUND_POSTED_MARKER, runId, { pr: 12 });
+		}
+	}
+	if (options.signed !== false) {
+		signVerifyRecord(recordPath);
 	}
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
 }
@@ -789,19 +807,26 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			];
 			writeReviewRecord(repo, REVIEW_ID, rows);
 			const recordPath = path.join(repo, ".review-panel", "runs", REVIEW_ID);
+			// The grouping the review recorded, signed in execution.json.
 			writeFileSync(
-				path.join(recordPath, "groups.json"),
-				`${JSON.stringify({
-					version: 1,
-					runId: REVIEW_ID,
-					groups: [
-						{ id: "G-1", findingIds: ["F-1"] },
-						{ id: "G-2", findingIds: ["F-2", "F-3"] },
-						{ id: "G-3", findingIds: ["F-4", "F-5"] },
-					],
-				})}\n`,
+				path.join(recordPath, "execution.json"),
+				JSON.stringify({
+					cancelled: false,
+					lostCoverage: [],
+					outcomes: [],
+					grouping: {
+						outcome: {
+							kind: "grouped",
+							groups: [
+								{ id: "G-1", findingIds: ["F-1"] },
+								{ id: "G-2", findingIds: ["F-2", "F-3"] },
+								{ id: "G-3", findingIds: ["F-4", "F-5"] },
+							],
+						},
+					},
+				}),
 			);
-			signGroups(recordPath);
+			signReviewRecord(recordPath);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyAction(
 				{
@@ -2137,20 +2162,15 @@ describe("fix round 1: one close-out per review, even across concurrent verifies
 		});
 	});
 
-	it("a claim already in the review record stops the close-out", async () => {
+	it("a signed closeout.posted already in the review record stops the close-out", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
 			const { CLOSEOUT_POSTED_MARKER } = await import(
 				"../src/tool/round-post.js"
 			);
-			writeFileSync(
-				path.join(
-					repo,
-					".review-panel",
-					"runs",
-					REVIEW_ID,
-					CLOSEOUT_POSTED_MARKER,
-				),
+			writeSignedMarker(
+				path.join(repo, ".review-panel", "runs", REVIEW_ID),
+				CLOSEOUT_POSTED_MARKER,
 				"v-0",
 			);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
@@ -2861,7 +2881,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 	it("closeout.posted: already posted, and the PR is not asked", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
-			writeClaim(repo, CLOSEOUT_POSTED_MARKER, "{}");
+			writeSignedMarker(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER, "v-0");
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
@@ -2924,7 +2944,12 @@ describe("fix round 3: round markers and claims through the verify action", () =
 						"utf8",
 					),
 				),
-			).toEqual({ pr: 12, round: 1 });
+			).toMatchObject({
+				verifyRunId: "v-1",
+				pr: 12,
+				round: 1,
+				mac: testPostedMac("v-1", ROUND_POSTED_MARKER, "v-1"),
+			});
 			expect(
 				existsSync(path.join(reviewRecordDir(repo), "round-1.posted")),
 			).toBe(true);
@@ -3624,6 +3649,166 @@ describe("T498: readable PR comments", () => {
 			expect(textOf(result).split("\n").at(-1)).toMatch(
 				/^PR close-out: posted to #12/,
 			);
+		});
+	});
+});
+
+describe("T502: the round number and the close-out read only signed records and markers", () => {
+	const clean: SeatVote[] = [{ rosterId: "terra", items: [resolved("F-1")] }];
+
+	async function headingAfter(
+		plant: (repo: string) => void,
+	): Promise<string[]> {
+		let headings: string[] = [];
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			plant(repo);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, gh, "v-9");
+			headings = posts(gh.calls).map(
+				(call) => bodyOf(call).split("\n")[0] ?? "",
+			);
+		});
+		return headings;
+	}
+
+	it("a planted unsigned verify record with round.posted does not change N", async () => {
+		expect(
+			await headingAfter((repo) =>
+				writeVerifyRecord(repo, "v-1", REVIEW_ID, { signed: false }),
+			),
+		).toEqual(["## Review panel · verify 1"]);
+	});
+
+	it("a signed verify record with a planted unsigned round.posted does not change N", async () => {
+		expect(
+			await headingAfter((repo) =>
+				writeVerifyRecord(repo, "v-1", REVIEW_ID, { markerSigned: false }),
+			),
+		).toEqual(["## Review panel · verify 1"]);
+	});
+
+	it("a genuine round.posted copied into another signed verify record does not count there", async () => {
+		expect(
+			await headingAfter((repo) => {
+				writeVerifyRecord(repo, "v-1", "another-review");
+				writeVerifyRecord(repo, "v-2", REVIEW_ID, { posted: false });
+				const runs = path.join(repo, ".review-panel", "runs");
+				writeFileSync(
+					path.join(runs, "v-2", ROUND_POSTED_MARKER),
+					readFileSync(path.join(runs, "v-1", ROUND_POSTED_MARKER)),
+				);
+			}),
+		).toEqual(["## Review panel · verify 1"]);
+	});
+
+	it("counts a genuine signed, posted verify of this review (control for the edited-meta case)", async () => {
+		expect(
+			await headingAfter((repo) => writeVerifyRecord(repo, "v-1", REVIEW_ID)),
+		).toEqual(["## Review panel · verify 2"]);
+	});
+
+	it("a genuine signed verify of another review, its meta.json edited to name this review, does not change N", async () => {
+		// The record keeps its own signed round.posted, so only the record
+		// signature over meta.json can refuse it.
+		expect(
+			await headingAfter((repo) => {
+				writeVerifyRecord(repo, "v-1", "another-review");
+				writeFileSync(
+					path.join(repo, ".review-panel", "runs", "v-1", "meta.json"),
+					JSON.stringify({
+						runId: "v-1",
+						kind: "verify",
+						priorRunId: REVIEW_ID,
+					}),
+				);
+			}),
+		).toEqual(["## Review panel · verify 1"]);
+	});
+
+	it("a planted round-1.posted in the review record neither skips verify 1 nor stays, and the next verify is verify 2", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const marker = path.join(reviewRecordDir(repo), "round-1.posted");
+			writeFileSync(marker, JSON.stringify({ verifyRunId: "v-0" }));
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, gh, "v-1");
+			// The planted marker was replaced by the verify that posted round 1.
+			expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({
+				verifyRunId: "v-1",
+				mac: testPostedMac(REVIEW_ID, "round-1.posted", "v-1"),
+			});
+			await verifyOnce(repo, gh, "v-2");
+			expect(
+				posts(gh.calls).map((call) => bodyOf(call).split("\n")[0]),
+			).toEqual(["## Review panel · verify 1", "## Review panel · verify 2"]);
+		});
+	});
+
+	it("a planted closeout.posted does not stop a legitimate close-out, and is replaced by a signed one", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const marker = path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER);
+			writeFileSync(marker, "{}");
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			expect(textOf(result).split("\n").at(-1)).toMatch(
+				/^PR close-out: posted to #12/,
+			);
+			expect(JSON.parse(readFileSync(marker, "utf8"))).toMatchObject({
+				verifyRunId: "v-1",
+				mac: testPostedMac(REVIEW_ID, CLOSEOUT_POSTED_MARKER, "v-1"),
+			});
+			// The signed marker now stops a later verify.
+			const again = await verifyOnce(repo, gh, "v-2", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
+			expect(textOf(again).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (this review's close-out is already posted)",
+			);
+		});
+	});
+
+	it("a planted closeout.posted with the card already on the PR posts no second card", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			writeFileSync(
+				path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER),
+				"{}",
+			);
+			const gh = fakeGh({
+				pulls: [openPr(12, head)],
+				comments: [
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+					},
+				],
+			});
+			const result = await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(0);
+			expect(textOf(result).split("\n").at(-1)).toBe(
+				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			);
+		});
+	});
+
+	it("a closeout.posted signed for another review does not stop this one", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS_R2);
+			const marker = path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER);
+			writeFileSync(
+				marker,
+				`${JSON.stringify({
+					verifyRunId: "v-0",
+					postedAt: 1,
+					mac: testPostedMac("another-review", CLOSEOUT_POSTED_MARKER, "v-0"),
+				})}\n`,
+			);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyOnce(repo, gh, "v-1", clean);
+			expect(closeoutPosts(gh.calls)).toHaveLength(1);
 		});
 	});
 });

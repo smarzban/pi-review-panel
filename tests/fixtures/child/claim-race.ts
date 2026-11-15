@@ -10,6 +10,7 @@ import {
 	settleCloseout,
 	settleRound,
 } from "../../../src/tool/round-claim.js";
+import { TEST_RECORD_KEY } from "../record-key.js";
 
 /**
  * One verify, as its own process, racing others over one review record for
@@ -102,6 +103,7 @@ async function main(): Promise<unknown> {
 		const got: unknown[] = [];
 		for (let index = 1; index <= (spec.rounds ?? 1); index += 1) {
 			const claim = await claimRound(spec.dir, 1, spec.id, {
+				key: TEST_RECORD_KEY,
 				deadline: Date.now() + 20_000,
 				reserveMs: 0,
 				pollMs: 2,
@@ -127,6 +129,7 @@ async function main(): Promise<unknown> {
 		return got;
 	}
 	const claim = await claimCloseout(spec.dir, spec.id, cardOnPr, {
+		key: TEST_RECORD_KEY,
 		beforeCreate,
 	});
 	if (claim.kind !== "taken") {

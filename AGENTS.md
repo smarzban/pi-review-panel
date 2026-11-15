@@ -35,9 +35,10 @@ review) `plan.mac` check out with the owner's key, which they never create, the 
 an unsigned, foreign, copied or pre-signing record is refused with "run a new review", before any
 seat runs or post. They use only the bytes they authenticated (the close-out card and G-ids too).
 Review and resume reply and post the findings the run stamped, never `findings.json` read back.
-`groups.mac` binds the run id, the plan's MAC and the exact `findings.json` bytes it grouped.
-Verify reads those trees and writes only its posting claims and markers into the review's record
-(`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
+A review's groups live only in its signed `execution.json` (`grouping`); there is no
+`groups.json` or `groups.mac` any more, and one left in an older record is never read.
+Verify reads those trees and writes only its posting claims and signed markers into the review's
+record (`round-<N>.claim`, `round-<N>.posted`, `closeout.claim-<g>`, `closeout.posted`). The output is a
 presentation-only report: severity-ordered, seat-attributed, with seat failures tallied as lost
 coverage. **The tool never judges.** There is no verdict, no agreement arithmetic, and no
 review-derived semantic stop signal: agents judge, and the human is the merge gate.
@@ -81,15 +82,16 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
 - Grouping (`src/run/grouping.ts`) only groups. With `defaults.consolidator` set and two or more
   findings, one grouping seat runs after every reviewer settles, on the same snapshot with the
   read-only tools and `submit_groups`, which refuses any submission that does not place every F-id
-  in exactly one group. It never drops, rewrites or re-rates a finding: `groups.json` holds ids
+  in exactly one group. It never drops, rewrites or re-rates a finding: the groups hold ids
   only, every member keeps its F-id, seat, stated severity and evidence, and a group shows the
   highest severity a seat stated. Groups are numbered `G-1`, … by that severity, then the lowest
   member F-id; size never ranks and is never shown as agreement. A failed, invalid or timed-out
   grouping keeps the flat list and adds `Lost: grouping (<roster id>, <class>)`. The grouping seat
   is not a reviewer: it is never in `outcomes`, a vote count or lost reviewer coverage. G-ids in
-  `keptFindingIds`, `dismissed` and `lowAdvisory` expand to F-ids before any seat runs, only from a
-  `groups.json` with a valid `groups.mac` that groups every F-id once; verify itself sees F-ids.
-  Resume always runs the grouping step again, and a run removes any earlier `groups.json` first.
+  `keptFindingIds`, `dismissed` and `lowAdvisory` expand to F-ids before any seat runs, only from
+  the grouping the review's signed `execution.json` records (the one its reply showed), and only
+  when it grouped every F-id once; no grouping step or a lost grouping refuses G-ids. Verify itself
+  sees F-ids. Resume always runs the grouping step again and rewrites `execution.json`.
   Audit never groups.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
@@ -134,7 +136,17 @@ deleted tests that leave a contract unproven. The example config makes `tests` a
   reports as failed after GitHub accepted it gives its number back; that repeat is set aside). The
   close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
   to the PR's comments, then to the next generation; only a generation's creator posts, and a
-  posted card writes `closeout.posted` (`wx`), which stops every later verify. The close-out posts
+  posted card writes `closeout.posted` (`wx`), which stops every later verify. Every posted marker
+  (`round-<N>.posted`, `closeout.posted`, a verify's own `round.posted`) holds a MAC from the
+  owner's record key over the record's run id, the marker's file name and the verify that wrote
+  it; an unsigned or copied marker is no marker, and the verify that posts replaces it. `verify N`
+  counts only complete verify records signed with that key (`record.mac`) whose signed meta names
+  the review and that hold a signed `round.posted`. Claims are not signed: a planted stale-looking
+  `round-<N>.claim` is skipped and bumps `verify N`, a planted live-looking claim can stop an
+  automatic post, as can five planted stale-looking close-out claims (`comment` still works; never
+  forge one or post a second card), deleting genuine markers can repeat a `verify N`, and markers
+  written before signing count as none, so a PR reviewed before this change can see its `verify N`
+  numbering start again; these are documented limits. The close-out posts
   at most once per review, with two exceptions set aside: a crash between GitHub accepting the
   card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
   whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a

@@ -23,11 +23,7 @@ import type { Config } from "../src/config/schema.js";
 import type { RunVerifyInput } from "../src/run/run-verify.js";
 import type { RunConfig } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
-import {
-	signGroups,
-	signReviewRecord,
-	TEST_RECORD_KEY,
-} from "./fixtures/record-key.js";
+import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -96,12 +92,13 @@ const SEVERITIES = {
 
 /**
  * A complete review record with four findings and, unless `groups` is
- * null, a groups.json: G-1 = F-1 + F-3, G-2 = F-4, G-3 = F-2.
+ * null, a grouping in its signed execution.json: G-1 = F-1 + F-3,
+ * G-2 = F-4, G-3 = F-2.
  */
 function writeReviewRecord(
 	repo: string,
 	runId: string,
-	options: { sign?: boolean; groups?: unknown } = {},
+	options: { legacy?: boolean; groups?: unknown } = {},
 ): string {
 	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
@@ -146,40 +143,47 @@ function writeReviewRecord(
 			})),
 		),
 	);
+	const groups = options.groups ?? [
+		{ id: "G-1", findingIds: ["F-1", "F-3"] },
+		{ id: "G-2", findingIds: ["F-4"] },
+		{ id: "G-3", findingIds: ["F-2"] },
+	];
+	// The groups are signed only inside execution.json, under record.mac.
+	// `legacy` puts them in a side groups.json instead, as earlier releases
+	// did, which nothing reads any more.
+	const recordsGroups = options.groups !== null && options.legacy !== true;
 	writeFileSync(
 		path.join(recordPath, "execution.json"),
-		JSON.stringify({ cancelled: false, lostCoverage: [], outcomes: [] }),
+		JSON.stringify({
+			cancelled: false,
+			lostCoverage: [],
+			outcomes: [],
+			...(recordsGroups
+				? {
+						grouping: {
+							seat: {
+								rosterId: "claude",
+								provider: "anthropic",
+								model: "claude-opus-5",
+								lens: "grouping",
+								lensPrompt: "",
+							},
+							lifecycle: {},
+							outcome: { kind: "grouped", groups },
+						},
+					}
+				: {}),
+		}),
 	);
-	if (options.groups !== null) {
+	if (options.legacy === true) {
 		writeFileSync(
 			path.join(recordPath, "groups.json"),
-			`${JSON.stringify(
-				{
-					version: 1,
-					runId,
-					consolidator: {
-						rosterId: "claude",
-						provider: "anthropic",
-						model: "claude-opus-5",
-					},
-					groups: options.groups ?? [
-						{ id: "G-1", findingIds: ["F-1", "F-3"] },
-						{ id: "G-2", findingIds: ["F-4"] },
-						{ id: "G-3", findingIds: ["F-2"] },
-					],
-				},
-				null,
-				2,
-			)}\n`,
+			JSON.stringify({ version: 1, runId, groups }),
 		);
+		writeFileSync(path.join(recordPath, "groups.mac"), "0".repeat(64));
 	}
 	writeFileSync(path.join(recordPath, "COMPLETE"), "");
-	// The review record itself is the owner's; `sign` is about the grouping,
-	// which is signed over the record's plan and findings.
 	signReviewRecord(recordPath);
-	if (options.groups !== null && options.sign !== false) {
-		signGroups(recordPath);
-	}
 	return recordPath;
 }
 
@@ -353,22 +357,12 @@ describe("verify takes G-ids as well as F-ids", () => {
 		});
 	});
 
-	it("refuses G-ids when the grouping record is unsigned, forged or missing, and asks for F-ids", async () => {
+	it("refuses G-ids when the signed execution.json records no grouping, even beside a groups.json, and asks for F-ids", async () => {
 		await withRepository(async (repo) => {
-			writeReviewRecord(repo, "unsigned", { sign: false });
-			const forged = writeReviewRecord(repo, "forged");
-			// Rewritten after signing: G-1 now claims a different set.
-			writeFileSync(
-				path.join(forged, "groups.json"),
-				JSON.stringify({
-					version: 1,
-					runId: "forged",
-					groups: [{ id: "G-1", findingIds: ["F-1", "F-2", "F-3", "F-4"] }],
-				}),
-			);
+			writeReviewRecord(repo, "legacy", { legacy: true });
 			writeReviewRecord(repo, "ungrouped", { groups: null });
 			const capture = verifyCapture(repo);
-			for (const priorRunId of ["unsigned", "forged", "ungrouped"]) {
+			for (const priorRunId of ["legacy", "ungrouped"]) {
 				await expect(
 					verifyAction(
 						{
@@ -581,7 +575,7 @@ describe("comment takes G-ids as well as F-ids", () => {
 	it("refuses an unknown G-id and an unsigned grouping before posting", async () => {
 		await withRepository(async (repo) => {
 			writeReviewRecord(repo, "review-1");
-			writeReviewRecord(repo, "unsigned", { sign: false });
+			writeReviewRecord(repo, "unsigned", { legacy: true });
 			const { bodies, postComment } = poster();
 			await expect(
 				commentAction(

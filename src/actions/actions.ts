@@ -50,7 +50,7 @@ import { suggestLenses } from "../run/changeset.js";
 import {
 	isGroupId,
 	planConsolidator,
-	readSignedGroups,
+	recordedGrouping,
 } from "../run/grouping.js";
 import { discoverPriorRecords } from "../run/prior-records.js";
 import {
@@ -762,18 +762,18 @@ type JudgedIds = {
 };
 
 /**
- * Expands every G-id to its member F-ids, from the review's signed
- * grouping. Calls with F-ids only are returned as they are. A G-id needs
- * `groups.json` with a valid `groups.mac` from the owner's record key that
- * places every F-id of `findings.json` exactly once; otherwise G-ids are
+ * Expands every G-id to its member F-ids, from the grouping the review
+ * recorded in its signed `execution.json` (the one its reply and PR comment
+ * showed). Calls with F-ids only are returned as they are. A G-id needs that
+ * grouping to have grouped, placing every F-id of `findings.json` exactly
+ * once; with no grouping step, a lost grouping or anything else, G-ids are
  * refused and the caller is asked for F-ids. A dismissed G-id gives its
  * reason to each member. An F-id named in one list both by itself and
  * through its group, or through two groups, is refused.
  */
 function expandGroupIds(
-	/** The review record, already loaded and checked as signed by `key`. */
+	/** The review record, already loaded and checked as the owner's. */
 	review: PriorRun,
-	key: Buffer,
 	ids: JudgedIds,
 	refusal: string,
 ): JudgedIds {
@@ -785,18 +785,13 @@ function expandGroupIds(
 	if (!named.some(isGroupId)) {
 		return ids;
 	}
-	const recordPath = review.recordPath;
-	const groups = readSignedGroups(
-		recordPath,
-		key,
-		review.planMac,
-		review.findingsText,
-	);
-	if (groups === undefined) {
+	const recorded = recordedGrouping(review.executionText, review.findingsText);
+	if (recorded.kind === "none") {
 		throw new Error(
-			`${refusal}: G-ids need the review's signed grouping (groups.json with a valid groups.mac from this owner's record key, grouping every finding once), and run "${path.basename(recordPath)}" has none; pass F-ids instead`,
+			`${refusal}: G-ids need the review's signed grouping (the one its execution.json records, grouping every finding once), and run "${review.runId}" has none (${recorded.why}); pass F-ids instead`,
 		);
 	}
+	const groups = recorded.groups;
 	const members = new Map(groups.map((group) => [group.id, group.findingIds]));
 	const expand = (id: string): string[] => {
 		if (!isGroupId(id)) {
@@ -958,7 +953,6 @@ export async function verifyAction(
 	// itself checks F-ids only.
 	const judged = expandGroupIds(
 		prior,
-		verifyKey,
 		{
 			kept: valid.keptFindingIds,
 			dismissed: valid.dismissed ?? [],
@@ -1032,6 +1026,7 @@ export async function verifyAction(
 			lowAdvisory,
 			...(reviewFindings === undefined ? {} : { reviewFindings }),
 			review: prior,
+			recordKey: verifyKey,
 		},
 	);
 	return textResult(withRoundLines(report, roundLines));
@@ -1070,7 +1065,6 @@ export async function commentAction(
 	const facts = loadCloseoutRun(repoDir, priorRunId, commentKey);
 	const { dismissed, lowAdvisory } = expandGroupIds(
 		facts.run,
-		commentKey,
 		{ kept: [], dismissed: valid.dismissed, lowAdvisory: valid.lowAdvisory },
 		"comment refused",
 	);

@@ -19,6 +19,7 @@ import {
 	claimRound,
 	closeoutClaimFile,
 	closeoutPostedFile,
+	isSignedMarker,
 	POST_RESERVE_MS,
 	ROUND_DEADLINE_MS,
 	releaseClaim,
@@ -27,6 +28,7 @@ import {
 	settleCloseout,
 	settleRound,
 } from "../src/tool/round-claim.js";
+import { TEST_RECORD_KEY, writeSignedMarker } from "./fixtures/record-key.js";
 
 /**
  * Fix round 3: every claim is a fresh exclusive create. No claim is ever
@@ -192,12 +194,13 @@ describe("claimRound", () => {
 	it("re-checks round-N.posted after its create, and moves on when it appeared", async () => {
 		const dir = record();
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 			beforeCreate: (round) => {
 				if (round === 1) {
 					// Another verify posts and settles verify 1 just now.
-					writeFileSync(roundPostedFile(dir, 1), "{}");
+					writeSignedMarker(dir, "round-1.posted", "v-1");
 				}
 			},
 		});
@@ -210,6 +213,7 @@ describe("claimRound", () => {
 		seed(roundClaimFile(dir, 1), staleByAge());
 		const before = readFileSync(roundClaimFile(dir, 1), "utf8");
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -233,6 +237,7 @@ describe("claimRound", () => {
 			claimedAt: Date.now(),
 		});
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -248,6 +253,7 @@ describe("claimRound", () => {
 			claimedAt: Date.now(),
 		});
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 150,
 			reserveMs: 0,
 			pollMs: 20,
@@ -265,6 +271,7 @@ describe("claimRound", () => {
 			claimedAt: Date.now(),
 		});
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 150,
 			reserveMs: 0,
 			pollMs: 20,
@@ -281,6 +288,7 @@ describe("claimRound", () => {
 			host: `not-${hostname()}`,
 		});
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -301,6 +309,7 @@ describe("claimRound", () => {
 			});
 		});
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 150,
 			reserveMs: 0,
 			pollMs: 20,
@@ -314,6 +323,7 @@ describe("claimRound", () => {
 		const dir = record();
 		seed(roundClaimFile(dir, 1), "");
 		const held = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 150,
 			reserveMs: 0,
 			pollMs: 20,
@@ -324,6 +334,7 @@ describe("claimRound", () => {
 		const old = (Date.now() - ROUND_DEADLINE_MS - 10_000) / 1000;
 		utimesSync(roundClaimFile(dir, 1), old, old);
 		const skipped = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -335,6 +346,7 @@ describe("claimRound", () => {
 		seed(roundClaimFile(dir, 1), liveHere());
 		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 60);
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 			pollMs: 20,
@@ -348,6 +360,7 @@ describe("claimRound", () => {
 		seed(roundClaimFile(dir, 1), liveHere());
 		const started = Date.now();
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + POST_RESERVE_MS + 200,
 			pollMs: 20,
 		});
@@ -364,6 +377,7 @@ describe("claimRound", () => {
 		// Freed after the 30 s mark, between two polls.
 		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 200);
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + POST_RESERVE_MS + 150,
 			pollMs: 100,
 		});
@@ -378,6 +392,7 @@ describe("claimRound", () => {
 		seed(roundClaimFile(dir, 1), liveHere());
 		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 300);
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + POST_RESERVE_MS + 5_000,
 			pollMs: 20,
 		});
@@ -387,6 +402,7 @@ describe("claimRound", () => {
 	it("a claim it can take right away is taken even inside the last 30 s", async () => {
 		const dir = record();
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 1_000,
 			pollMs: 20,
 		});
@@ -399,6 +415,7 @@ describe("claimRound", () => {
 		const controller = new AbortController();
 		setTimeout(() => controller.abort(), 40);
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 10_000,
 			reserveMs: 0,
 			pollMs: 20,
@@ -410,6 +427,7 @@ describe("claimRound", () => {
 	it("the claim records the verify, its pid, this host and when", async () => {
 		const dir = record();
 		await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -425,6 +443,7 @@ describe("claimRound", () => {
 	it("settling a posted round writes round-N.posted and removes the claim", async () => {
 		const dir = record();
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -441,6 +460,7 @@ describe("claimRound", () => {
 	it("settling a failed post removes the claim and writes nothing", async () => {
 		const dir = record();
 		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -456,6 +476,7 @@ describe("releaseClaim only removes this verify's own claim (L4)", () => {
 	it("leaves a claim another verify created at the same path", async () => {
 		const dir = record();
 		const claim = await claimRound(dir, 1, "v-1", {
+			key: TEST_RECORD_KEY,
 			deadline: Date.now() + 5_000,
 			reserveMs: 0,
 		});
@@ -479,16 +500,20 @@ describe("close-out generations", () => {
 
 	it("the first verify creates closeout.claim-1", async () => {
 		const dir = record();
-		const got = await claimCloseout(dir, "v-1", nothingOnPr);
+		const got = await claimCloseout(dir, "v-1", nothingOnPr, {
+			key: TEST_RECORD_KEY,
+		});
 		expect(got).toMatchObject({ kind: "taken" });
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);
 	});
 
 	it("closeout.posted means already posted, without asking the PR", async () => {
 		const dir = record();
-		seed(closeoutPostedFile(dir), "{}");
+		writeSignedMarker(dir, "closeout.posted", "v-0");
 		const onPr = vi.fn(nothingOnPr);
-		expect(await claimCloseout(dir, "v-1", onPr)).toEqual({
+		expect(
+			await claimCloseout(dir, "v-1", onPr, { key: TEST_RECORD_KEY }),
+		).toEqual({
 			kind: "posted",
 			onPr: false,
 		});
@@ -499,7 +524,9 @@ describe("close-out generations", () => {
 	it("a fresh claim means another verify is posting it", async () => {
 		const dir = record();
 		seed(closeoutClaimFile(dir, 1), liveHere());
-		expect(await claimCloseout(dir, "v-1", nothingOnPr)).toEqual({
+		expect(
+			await claimCloseout(dir, "v-1", nothingOnPr, { key: TEST_RECORD_KEY }),
+		).toEqual({
 			kind: "busy",
 		});
 	});
@@ -508,7 +535,9 @@ describe("close-out generations", () => {
 		const dir = record();
 		seed(closeoutClaimFile(dir, 1), staleByAge());
 		expect(
-			await claimCloseout(dir, "v-1", () => Promise.resolve(true)),
+			await claimCloseout(dir, "v-1", () => Promise.resolve(true), {
+				key: TEST_RECORD_KEY,
+			}),
 		).toEqual({ kind: "posted", onPr: true });
 		expect(existsSync(closeoutPostedFile(dir))).toBe(true);
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);
@@ -517,7 +546,9 @@ describe("close-out generations", () => {
 	it("a stale claim without the card moves to the next generation; the stale one stays", async () => {
 		const dir = record();
 		seed(closeoutClaimFile(dir, 1), staleByAge());
-		const got = await claimCloseout(dir, "v-1", nothingOnPr);
+		const got = await claimCloseout(dir, "v-1", nothingOnPr, {
+			key: TEST_RECORD_KEY,
+		});
 		expect(got).toMatchObject({ kind: "taken" });
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1", "closeout.claim-2"]);
 	});
@@ -525,7 +556,8 @@ describe("close-out generations", () => {
 	it("re-checks closeout.posted after its create, and stops when it appeared", async () => {
 		const dir = record();
 		const got = await claimCloseout(dir, "v-1", nothingOnPr, {
-			beforeCreate: () => writeFileSync(closeoutPostedFile(dir), "{}"),
+			key: TEST_RECORD_KEY,
+			beforeCreate: () => writeSignedMarker(dir, "closeout.posted", "v-0"),
 		});
 		expect(got).toEqual({ kind: "posted", onPr: false });
 		expect(claimsIn(dir)).toEqual([]);
@@ -536,14 +568,18 @@ describe("close-out generations", () => {
 		for (let g = 1; g <= CLOSEOUT_GENERATIONS; g += 1) {
 			seed(closeoutClaimFile(dir, g), staleByAge());
 		}
-		expect(await claimCloseout(dir, "v-1", nothingOnPr)).toEqual({
+		expect(
+			await claimCloseout(dir, "v-1", nothingOnPr, { key: TEST_RECORD_KEY }),
+		).toEqual({
 			kind: "exhausted",
 		});
 	});
 
 	it("settling a posted close-out writes closeout.posted and removes the claim", async () => {
 		const dir = record();
-		const got = await claimCloseout(dir, "v-1", nothingOnPr);
+		const got = await claimCloseout(dir, "v-1", nothingOnPr, {
+			key: TEST_RECORD_KEY,
+		});
 		if (got.kind !== "taken") {
 			throw new Error(got.kind);
 		}
@@ -556,13 +592,17 @@ describe("close-out generations", () => {
 
 	it("settling a failed close-out removes the claim, so the next verify takes generation 1 again", async () => {
 		const dir = record();
-		const got = await claimCloseout(dir, "v-1", nothingOnPr);
+		const got = await claimCloseout(dir, "v-1", nothingOnPr, {
+			key: TEST_RECORD_KEY,
+		});
 		if (got.kind !== "taken") {
 			throw new Error(got.kind);
 		}
 		settleCloseout(got.claim, false);
 		expect(readdirSync(dir)).toEqual([]);
-		expect(await claimCloseout(dir, "v-2", nothingOnPr)).toMatchObject({
+		expect(
+			await claimCloseout(dir, "v-2", nothingOnPr, { key: TEST_RECORD_KEY }),
+		).toMatchObject({
 			kind: "taken",
 		});
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);
@@ -640,4 +680,83 @@ describe("close-out across processes over a stale claim", () => {
 		expect(postLines(posts)).toEqual(["v-winner close-out"]);
 		expect(claimsIn(dir)).toEqual(["closeout.claim-1"]);
 	}, 30_000);
+});
+
+describe("posted markers are signed (T502)", () => {
+	const nothingOnPr = () => Promise.resolve(false);
+
+	it("an unsigned round-1.posted is no marker: verify 1 is claimed, and settling replaces it with a signed one", async () => {
+		const dir = record();
+		seed(roundPostedFile(dir, 1), { verifyRunId: "v-0", postedAt: 1 });
+		const claim = await claimRound(dir, 1, "v-2", {
+			key: TEST_RECORD_KEY,
+			deadline: Date.now() + 5_000,
+			reserveMs: 0,
+		});
+		if ("reason" in claim) {
+			throw new Error(claim.reason);
+		}
+		expect(claim.round).toBe(1);
+		settleRound(claim, true);
+		expect(isSignedMarker(roundPostedFile(dir, 1), TEST_RECORD_KEY)).toBe(true);
+		expect(claimsIn(dir)).toEqual([]);
+		expect(
+			await claimRound(dir, 1, "v-3", {
+				key: TEST_RECORD_KEY,
+				deadline: Date.now() + 5_000,
+				reserveMs: 0,
+			}),
+		).toMatchObject({ round: 2 });
+	});
+
+	it("a signed marker is bound to its round, its record and the key", async () => {
+		const dir = record();
+		writeSignedMarker(dir, "round-1.posted", "v-1");
+		expect(isSignedMarker(roundPostedFile(dir, 1), TEST_RECORD_KEY)).toBe(true);
+		// Copied to round 2: not a marker there.
+		writeFileSync(
+			roundPostedFile(dir, 2),
+			readFileSync(roundPostedFile(dir, 1)),
+		);
+		expect(isSignedMarker(roundPostedFile(dir, 2), TEST_RECORD_KEY)).toBe(
+			false,
+		);
+		// Copied to another review's record: not a marker there.
+		const other = record();
+		writeFileSync(
+			roundPostedFile(other, 1),
+			readFileSync(roundPostedFile(dir, 1)),
+		);
+		expect(isSignedMarker(roundPostedFile(other, 1), TEST_RECORD_KEY)).toBe(
+			false,
+		);
+		// Another owner's key: not a marker.
+		expect(isSignedMarker(roundPostedFile(dir, 1), Buffer.alloc(32, 9))).toBe(
+			false,
+		);
+		// Renamed to closeout.posted: not a marker.
+		writeFileSync(
+			closeoutPostedFile(dir),
+			readFileSync(roundPostedFile(dir, 1)),
+		);
+		expect(isSignedMarker(closeoutPostedFile(dir), TEST_RECORD_KEY)).toBe(
+			false,
+		);
+	});
+
+	it("an unsigned closeout.posted does not stop the close-out, and settling replaces it", async () => {
+		const dir = record();
+		seed(closeoutPostedFile(dir), "{}");
+		const got = await claimCloseout(dir, "v-1", nothingOnPr, {
+			key: TEST_RECORD_KEY,
+		});
+		if (got.kind !== "taken") {
+			throw new Error(got.kind);
+		}
+		settleCloseout(got.claim, true);
+		expect(isSignedMarker(closeoutPostedFile(dir), TEST_RECORD_KEY)).toBe(true);
+		expect(
+			await claimCloseout(dir, "v-2", nothingOnPr, { key: TEST_RECORD_KEY }),
+		).toEqual({ kind: "posted", onPr: false });
+	});
 });
