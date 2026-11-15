@@ -59,10 +59,20 @@ creates a folder for an agent you do not have, and never replaces a `review-pane
 that is not its own link without `--force`, which only works together with `--agent`. Details and options are in the
 [CLI guide](docs/cli.md#install).
 
+The command runs the seats itself with the bundled Pi SDK, so Pi is not needed. It reuses
+your Pi logins in `~/.pi/agent` when you have them; otherwise:
+
+```bash
+review-panel auth providers           # the providers, and how each logs in
+review-panel auth login <provider>    # sign in (or --api-key, reading the key from stdin)
+review-panel models                   # the exact provider and model ids, with a roster row to copy
+```
+
+A provider that a Pi extension registers, such as `claude-code`, needs
+`review-panel extension install <source>` first; it prints the path for the roster row.
 Create `~/.pi-review-panel/config.json` with the seats you want. Shape and location
-rules are in the [owner configuration guide](docs/configuration.md). The command runs
-the seats itself with the bundled Pi SDK, reusing your Pi logins in `~/.pi/agent` when
-you have them; otherwise sign in with `review-panel auth login <provider>`. Then:
+rules are in the [owner configuration guide](docs/configuration.md), which walks through
+[setting up without Pi](docs/configuration.md#setting-up-without-pi). Then:
 
 ```bash
 review-panel diagnose

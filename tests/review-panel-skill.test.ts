@@ -181,10 +181,10 @@ describe("review-panel skill", () => {
 		);
 	});
 
-	it("runs auth login or logout only when the owner asks", () => {
+	it("runs auth login or logout, or installs or removes an extension, only when the owner asks", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
 		expect(body).toContain(
-			"Never run `review-panel auth login` or `auth logout` unless the owner asks",
+			"Never run `review-panel auth login`, `auth logout`, `extension install` or `extension remove` unless the owner asks",
 		);
 	});
 

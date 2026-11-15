@@ -41,6 +41,19 @@ import {
 	status,
 } from "./auth.js";
 import {
+	installExtension,
+	listExtensions,
+	listModels,
+	listProviders,
+	redactSecrets,
+	removeExtension,
+	renderExtensions,
+	renderModels,
+	renderProviders,
+	SetupError,
+	type SetupSdk,
+} from "./setup.js";
+import {
 	installSkill,
 	type SkillOptions,
 	skillStatus,
@@ -75,6 +88,9 @@ export type RunDeps = {
 	sdkVersion(): Promise<string>;
 	actions: ActionFunctions;
 	authSdk: AuthSdk;
+	setupSdk: SetupSdk;
+	/** The bound on loading one extension group in `models` (default 30 s). */
+	extensionTimeoutMs?: number;
 	loadConfig?: typeof loadConfig;
 	/** This package's `skills/review-panel`, its version, and the platform. */
 	skillSource: { dir: string; version: string; platform: NodeJS.Platform };
@@ -385,6 +401,75 @@ async function execute(
 			);
 			return EXIT_OK;
 		}
+		case "auth-providers": {
+			const result = await listProviders({
+				agentDir: deps.agentDir,
+				sdk: deps.setupSdk,
+				signal: io.signal,
+			});
+			io.stdout(
+				command.json
+					? `${JSON.stringify(result, null, 2)}\n`
+					: `${renderProviders(result, deps.agentDir)}\n`,
+			);
+			return EXIT_OK;
+		}
+		case "models": {
+			const result = await listModels({
+				agentDir: deps.agentDir,
+				cwd: io.cwd,
+				...(command.provider === undefined
+					? {}
+					: { provider: command.provider }),
+				...(command.search === undefined ? {} : { search: command.search }),
+				all: command.all,
+				extensions: command.extensions,
+				sdk: deps.setupSdk,
+				signal: io.signal,
+				...(deps.extensionTimeoutMs === undefined
+					? {}
+					: { timeoutMs: deps.extensionTimeoutMs }),
+			});
+			io.stdout(
+				command.json
+					? `${JSON.stringify(result, null, 2)}\n`
+					: `${renderModels(result, deps.agentDir)}\n`,
+			);
+			return EXIT_OK;
+		}
+		case "extension-install":
+		case "extension-remove": {
+			const input = {
+				agentDir: deps.agentDir,
+				home: io.home,
+				cwd: io.cwd,
+				source: command.source,
+				sdk: deps.setupSdk,
+				progress: (line: string) => io.stderr(`${line}\n`),
+				signal: io.signal,
+			};
+			io.stdout(
+				`${
+					command.kind === "extension-install"
+						? await installExtension(input)
+						: await removeExtension(input)
+				}\n`,
+			);
+			return EXIT_OK;
+		}
+		case "extension-list": {
+			const result = await listExtensions({
+				agentDir: deps.agentDir,
+				sdk: deps.setupSdk,
+				signal: io.signal,
+			});
+			io.stdout(
+				command.json
+					? `${JSON.stringify(result, null, 2)}\n`
+					: `${renderExtensions(result, deps.agentDir)}\n`,
+			);
+			return EXIT_OK;
+		}
 	}
 }
 
@@ -403,14 +488,17 @@ export async function run(
 			return EXIT_USAGE;
 		}
 		if (io.signal.aborted) {
-			io.stderr(`review-panel: aborted (${message(error)})\n`);
+			io.stderr(`review-panel: aborted (${redactSecrets(message(error))})\n`);
 			return EXIT_FAILED;
 		}
 		const prefix =
-			error instanceof RefusalError || error instanceof AuthError
+			error instanceof RefusalError ||
+			error instanceof AuthError ||
+			error instanceof SetupError
 				? ""
 				: "failed: ";
-		io.stderr(`review-panel: ${prefix}${message(error)}\n`);
+		// A credential in an extension source never reaches the terminal.
+		io.stderr(`review-panel: ${prefix}${redactSecrets(message(error))}\n`);
 		return EXIT_FAILED;
 	}
 }

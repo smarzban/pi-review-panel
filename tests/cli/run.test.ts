@@ -27,6 +27,7 @@ import {
 	realActions,
 	run,
 } from "../../src/cli/run.js";
+import type { SetupSdk } from "../../src/cli/setup.js";
 
 const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
 /** The repository's own skill, as an installed package holds it. */
@@ -115,6 +116,7 @@ function harness(
 		sdkVersion: async () => "1.5.2",
 		actions,
 		authSdk: {} as AuthSdk,
+		setupSdk: {} as SetupSdk,
 		skillSource: { dir: SKILL_SOURCE, version: "9.9.9", platform: "darwin" },
 		...options.deps,
 	};

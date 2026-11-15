@@ -26,6 +26,54 @@ Save these exact bytes as your config file (the entry below names the file locat
 }
 ```
 
+## Setting up without Pi
+
+The `review-panel` command bundles the Pi SDK, so it needs no Pi install. From an empty home
+folder, the whole setup is:
+
+```sh
+npm install -g pi-review-panel
+review-panel skill install                        # the skill, for each coding agent you have
+review-panel auth providers                       # every provider, how it logs in, whether it is logged in
+review-panel auth login anthropic                 # an account sign-in (OAuth or a subscription)
+review-panel auth login baseten --api-key < key   # or an API key, read from stdin
+review-panel models                               # the models those logins give: exact provider and model ids
+```
+
+1. `auth providers` lists each provider with its login: `account` (a sign-in in a browser or
+   with a device code, including subscriptions), `API key`, or both, and whether it is logged
+   in now. A provider whose login is `none` is set up outside the command, with an environment
+   variable or `models.json` in the agent folder.
+2. `auth login <provider>` signs in (`--api-key` saves a key instead). Logins go to the agent
+   folder in use (see [the CLI guide](cli.md#logins-and-the-agent-folder)): without Pi that
+   is `~/.pi-review-panel/agent`.
+3. `models` lists every model the logins give, one row each with the `provider` and `model`
+   ids to copy, the context window, the output limit and whether it thinks. `models
+   <provider>` lists all of one provider's models, logged in or not; `--search <text>` narrows
+   the list; `--all` lists every model. It ends with a ready-to-copy roster row for the first
+   model. The list comes from the bundled SDK's own catalog and `models.json`, and asks no
+   provider for its models.
+4. A provider that a Pi extension registers, such as `claude-code`, needs that extension.
+   Install it into the agent folder:
+
+   ```sh
+   review-panel extension install git:github.com/earendil-works/pi-claude-code
+   ```
+
+   It uses the bundled SDK's own package manager (the code behind `pi install`), so the
+   package lands where Pi would put it (`<agent folder>/git/<host>/<path>`, or
+   `<agent folder>/npm/node_modules/<name>` for an `npm:` source) and is recorded in the agent folder's `settings.json`. It prints the
+   package's extension entry paths last; one of them goes in the roster row's
+   `extraExtensionPaths`. `review-panel extension list` prints them again, and `review-panel
+   models` then lists the extension's models with a roster row that already names the path.
+   Installing alone gives no seat the extension: a seat loads only the paths in its own row.
+   When the agent folder in use is Pi's own `~/.pi/agent`, Pi loads the package in every Pi
+   session too, as after `pi install`. Log in to the extension's provider the way the
+   extension documents (for `claude-code`, the Claude Code CLI's own login).
+5. Write the config (below), with one roster row per seat, then run `review-panel diagnose` in
+   a repository. It loads each row's extensions, checks each model and login, and says
+   `ready` or what to fix.
+
 ## Config file location
 
 - Default: `~/.pi-review-panel/config.json` under your home directory.
@@ -51,7 +99,8 @@ Save these exact bytes as your config file (the entry below names the file locat
   - `id`: a unique, non-empty name you use to select the seat.
   - `provider` and `model`: the exact Pi identifiers of the seat (see Pi identity below).
   - `extraExtensionPaths` (optional): absolute paths to extension files the seat loads, for example
-    a provider or authentication extension.
+    a provider or authentication extension. `review-panel extension install` and
+    `extension list` print them, and `review-panel models` prints a whole row that names them.
 - `defaults`: the run's default selections:
   - `seats`: roster ids, each must name a real roster row, no repeats.
   - `lenses`: package-owned lens names (see below), no repeats.

@@ -48,7 +48,7 @@ function findPackage(): { root: string; version: string } {
 const pkg = findPackage();
 
 const { realActions, run } = await import("./run.js");
-const { realAuthSdk, sdkVersion } = await import("./sdk.js");
+const { realAuthSdk, realSetupSdk, sdkVersion } = await import("./sdk.js");
 const { processTerminal, readAll } = await import("./terminal.js");
 
 const controller = new AbortController();
@@ -89,6 +89,7 @@ const code = await run(
 		sdkVersion,
 		actions: realActions,
 		authSdk: realAuthSdk,
+		setupSdk: realSetupSdk,
 		skillSource: {
 			dir: path.join(pkg.root, "skills", "review-panel"),
 			version: pkg.version,
@@ -98,6 +99,14 @@ const code = await run(
 );
 process.off("SIGINT", onInterrupt);
 process.exitCode = code;
+if (controller.signal.aborted) {
+	// After Ctrl-C nothing may finish quietly in the background, such as a git
+	// clone Pi's package manager started, which would then record its source:
+	// exit as soon as the output is written.
+	process.stdout.write("", () => {
+		process.stderr.write("", () => process.exit(code));
+	});
+}
 // The SDK can leave idle handles (keep-alive sockets, timers) open. Every
 // credential write was settled above; give anything else ample time, then
 // exit even if something still holds the loop.

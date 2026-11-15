@@ -8,7 +8,7 @@ code changes one of these behaviours, change the passage here in the same commit
 
 **pi-review-panel** runs multi-model code review as one command, `review-panel`, published from the
 npm package `pi-review-panel` (`diagnose` / `suggest` / `review` / `verify` / `resume` /
-`comment`, plus `call '<json>'`, `auth` and `skill`). The package ships one agent-neutral skill,
+`comment`, plus `call '<json>'`, `auth`, `models`, `extension` and `skill`). The package ships one agent-neutral skill,
 `skills/review-panel`, which every coding agent (Claude Code, Codex, Grok, Pi) uses to run the
 command. A run fans N reviewer *seats* — each an exact `provider/model` paired with a package-owned
 lens — over one pinned snapshot, as isolated Pi SDK sessions inside the `review-panel` process that
@@ -86,6 +86,43 @@ uses a supplied `verifyRunId` whenever one is given, and requires one only when 
 resolved. Remaining high/medium ids count as resolved only when a verify
 run whose `priorRunId` is this review marks them resolved. Every agent's skill runs the
 `review-panel` command directly; it never starts another agent session.
+
+Setup needs no Pi install. `auth providers` lists every provider of the bundled SDK's model
+runtime (built-ins and `models.json`) with its login kinds and `getProviderAuthStatus`, after one
+availability pass. `models` loads one isolated runtime per group, through the seat's own
+`createIsolatedServices` (no ambient resources, only the group's extension paths): the base
+group with no extension, then each extension entry of each package installed in the agent
+folder (one group per entry, so a roster row names only the entry that registered its
+provider), then each `--extension` file. An extension group lists only the providers it registered itself, each row
+carrying that group's paths as `extraExtensionPaths`; each group load is bounded at 30 s
+(`READINESS_ROW_TIMEOUT_MS`), and a failed or hung group is a `Problems:` line, never a failed
+command. Availability is `getAvailable(provider)` per provider: the SDK's static catalogs and the
+provider's own check, with `allowModelNetwork: false`, so no request lists models.
+`extension install | list | remove` drive the SDK's `DefaultPackageManager` (the code behind
+`pi install`) on the agent folder: its working folder is the agent folder and project settings
+are untrusted, and only `scope: "user"`, `origin: "package"` resources are listed, so nothing
+from the folder the command runs in (a reviewed repository's `.pi/`) is read, installed or
+loaded. Entry paths come from `resolve()` with every missing package skipped, never installed.
+The package manager runs `git` and `npm` with inherited stdio, so their output reaches stdout:
+`extension install` prints the entry paths last, and only `extension list` has `--json`. When
+the agent folder is `~/.pi/agent`, install and remove change Pi's own `packages`, and the
+output says so. Setup commands race the run's abort signal, so the first Ctrl-C ends them at
+once, and after an abort the bin exits as soon as its output is written (Pi's package manager
+gives no handle on its git or npm, so this is what stops it from recording a source after the
+stop; the install's message reads `settings.json` to say whether it already had); the per-group timer stays referenced while it waits (an extension that awaits a promise
+that never settles holds no handle, and an unreferenced timer would let Node end the process
+with the top-level await unsettled). Install and remove set `GIT_TERMINAL_PROMPT=0`. `extension
+install` refuses a source on what Pi's own package manager parses from it (`sourceProblem` over
+`DefaultPackageManager.parseSource`, the parse `pi install` runs), before the package manager
+runs, because Pi's generic Git parser keeps a scheme-less source's user info in the clone
+folder's host segment and a query in its path, stores the source in `settings.json`, and git
+prints the folder. Refused: a git source with user info other than the SSH user `git` (a password,
+any user name on `http(s)://`, any other SSH user, an `@` in the parsed host), a `%` in the
+host, any query on a git source (its ref included) or a ref that is not a plain name, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
+tag>]` only; Pi splits `npm:https://tok@host/x.tgz` into the name `https://tok` and a version,
+so the name is checked too), and a source with a scheme that Pi parses as a local path. Printed text goes through `redactSecrets` (source strings only) and,
+for a recorded source, `hideParts` with the credential parts of its parse; the package manager
+gets the source as given.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
@@ -202,3 +239,22 @@ Verified against the bundled 1.5.2 SDK.
 - A `pi` manifest that lists only `skills` is a complete resource manifest: Pi loads those skills
   and no extension (`dist/core/package-manager.js`, `hasManifestResourceFields` and
   `addManifestEntries`).
+- `DefaultPackageManager` installs a `git:` source into `<agentDir>/git/<host>/<path>` (then
+  `npm install` there when it has a `package.json`), an `npm:` source into
+  `<agentDir>/npm/node_modules/<name>`, and records a local folder (not copied) relative to the
+  agent folder in `settings.json` `packages`. A source given to it is resolved against its own
+  `cwd`, so `extension remove` passes a source exactly as `settings.json` records it, with the
+  agent folder as that `cwd`. `resolve(onMissing)` installs nothing when `onMissing` answers
+  `"skip"` for user-scope sources. `git` and `npm` run with `stdio: "inherit"`
+  (`takeOverStdout` is not exported).
+- `DefaultPackageManager.parseSource` (not exported; reached on a manager built over an
+  in-memory settings manager) trims after `git:`, falls back to a local path for anything its
+  npm and git parsers reject (uppercase `HTTPS://`, `git+https://`, `github:`, some `git:` forms),
+  splits a trailing `@ref` or `#ref` off `repo`, and for a scheme-less non-hosted source builds
+  `https://<rest>` with the user info and port in `host`.
+- An extension path given to the resource loader as a `git:` or `npm:` source is a temporary
+  package that is refreshed from the network on every load, so a roster row names the
+  installed entry file, never a source.
+- Pi's extension loader resolves an extension's `@earendil-works/pi-ai` import to the SDK's own
+  copy, so a `.ts` extension installed outside any checkout loads with the bundled SDK alone
+  (the installed-package smoke check proves it).

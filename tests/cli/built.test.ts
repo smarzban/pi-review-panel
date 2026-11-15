@@ -15,10 +15,18 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
+
+import {
+	FIXTURE_GIT_SOURCE,
+	gitSourceEnv,
+	writeExtensionPackage,
+} from "../fixtures/extension-package.js";
 
 const REPO = realpathSync(path.resolve(import.meta.dirname, "..", ".."));
 const BIN = path.join(REPO, "dist", "src", "cli", "main.js");
@@ -69,10 +77,10 @@ function writeConfig(home: string): string {
 function cli(
 	home: string,
 	args: string[],
-	options: { input?: string; env?: Record<string, string> } = {},
+	options: { input?: string; env?: Record<string, string>; cwd?: string } = {},
 ) {
 	const result = spawnSync(process.execPath, [BIN, ...args], {
-		cwd: REPO,
+		cwd: options.cwd ?? REPO,
 		input: options.input ?? "",
 		encoding: "utf8",
 		// Only what the CLI needs: no inherited API keys, agent folder or config.
@@ -96,13 +104,20 @@ function tempRepo(): string {
 function interrupted(
 	home: string,
 	args: string[],
-	options: { cwd?: string; env?: Record<string, string> } = {},
+	options: {
+		cwd?: string;
+		env?: Record<string, string>;
+		/** Press Ctrl-C only once stderr also holds this text. */
+		after?: string;
+	} = {},
 ): Promise<{
 	code: number | null;
 	signal: NodeJS.Signals | null;
 	stdout: string;
 	stderr: string;
 	ms: number;
+	/** When the bin itself exited; a child holding its stdio can close later. */
+	exitMs: number;
 }> {
 	const started = Date.now();
 	const child = spawn(
@@ -122,12 +137,20 @@ function interrupted(
 	});
 	child.stderr.on("data", (chunk) => {
 		stderr += chunk;
-		if (!sent && stderr.includes("<sigint-handler-ready>")) {
+		if (
+			!sent &&
+			stderr.includes("<sigint-handler-ready>") &&
+			(options.after === undefined || stderr.includes(options.after))
+		) {
 			sent = true;
 			child.kill("SIGINT");
 		}
 	});
 	const guard = setTimeout(() => child.kill("SIGKILL"), 45_000);
+	let exitMs = Number.NaN;
+	child.on("exit", () => {
+		exitMs = Date.now() - started;
+	});
 	return new Promise((resolve) => {
 		child.on("close", (code, signal) => {
 			clearTimeout(guard);
@@ -138,6 +161,7 @@ function interrupted(
 				stdout,
 				stderr: stderr.replaceAll("<sigint-handler-ready>\n", ""),
 				ms: Date.now() - started,
+				exitMs,
 			});
 		});
 	});
@@ -479,6 +503,468 @@ describe("a provider registered by an extension", () => {
 		expect(diagnose.stdout).not.toContain(
 			"authentication review-panel-fixture:",
 		);
+	});
+});
+
+describe("setting up without Pi, from an empty home", () => {
+	it("auth providers, auth login, models, extension install from a git source, then diagnose with the installed path", () => {
+		const home = tempHome();
+		const repo = tempRepo();
+		const source = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-src-")),
+		);
+		writeExtensionPackage(source, { git: true });
+		// The git: source clones from the local repository, and npm stays offline.
+		const env = gitSourceEnv(source);
+		const agent = path.join(home, ".pi-review-panel", "agent");
+
+		const providers = cli(home, ["auth", "providers"], { env });
+		expect(providers.code).toBe(0);
+		expect(providers.stdout).toContain(
+			`Agent folder: ${agent} (review-panel's own folder`,
+		);
+		expect(providers.stdout).toMatch(
+			/^anthropic\s+Anthropic\s+account or API key\s+not logged in$/m,
+		);
+
+		expect(
+			cli(home, ["auth", "login", "anthropic", "--api-key"], {
+				env,
+				input: "sk-ant-fake\n",
+			}).code,
+		).toBe(0);
+		const anthropic = cli(home, ["models", "anthropic"], { env });
+		expect(anthropic.code).toBe(0);
+		expect(anthropic.stdout).toMatch(/^anthropic\s+claude-\S+\s+\d/m);
+		expect(anthropic.stdout).toMatch(
+			/^ {2}\{"id":"[^"]+","provider":"anthropic","model":"[^"]+"\}$/m,
+		);
+
+		const install = cli(home, ["extension", "install", FIXTURE_GIT_SOURCE], {
+			env,
+		});
+		expect(install.code).toBe(0);
+		const clone = path.join(
+			agent,
+			"git",
+			"example.invalid",
+			"fixture",
+			"pi-ext",
+		);
+		const entry = path.join(clone, "extensions", "index.ts");
+		expect(install.stdout.trimEnd().split("\n").at(-1)).toBe(`  ${entry}`);
+		expect(install.stdout).not.toContain("Pi now loads");
+
+		const listed = cli(home, ["extension", "list", "--json"], { env });
+		expect(listed.code).toBe(0);
+		expect(JSON.parse(listed.stdout).extensions).toEqual([
+			{
+				source: FIXTURE_GIT_SOURCE,
+				installedPath: clone,
+				filtered: false,
+				entries: [entry],
+			},
+		]);
+
+		const models = cli(home, ["models", "review-panel-fixture"], { env });
+		expect(models.code).toBe(0);
+		expect(models.stdout).toMatch(
+			new RegExp(
+				`^review-panel-fixture\\s+fixture-model\\s+8K\\s+1K\\s+no\\s+no\\s+${FIXTURE_GIT_SOURCE}$`,
+				"m",
+			),
+		);
+		const row = JSON.parse(
+			models.stdout
+				.split("\n")
+				.find((line) => line.startsWith('  {"id"'))
+				?.trim() ?? "",
+		);
+		expect(row).toEqual({
+			id: "fixture-model",
+			provider: "review-panel-fixture",
+			model: "fixture-model",
+			extraExtensionPaths: [entry],
+		});
+
+		const config = path.join(home, ".pi-review-panel", "config.json");
+		writeFileSync(
+			config,
+			JSON.stringify({
+				roster: [
+					{ ...row, id: "fixture" },
+					{ id: "opus", provider: "anthropic", model: "claude-opus-4-5" },
+				],
+				defaults: { seats: ["fixture", "opus"] },
+			}),
+		);
+		const diagnose = cli(home, ["diagnose", "--repo", repo], { env });
+		expect(diagnose.code).toBe(0);
+		expect(diagnose.stdout).toContain("- Status: ready");
+		expect(diagnose.stdout).not.toContain("extension ");
+		expect(diagnose.stdout).not.toContain("model review-panel-fixture");
+		expect(diagnose.stdout).not.toContain(
+			"authentication review-panel-fixture",
+		);
+		expect(diagnose.stdout).not.toContain("authentication anthropic");
+		expect(existsSync(path.join(home, ".pi"))).toBe(false);
+
+		const removed = cli(home, ["extension", "remove", FIXTURE_GIT_SOURCE], {
+			env,
+		});
+		expect(removed.code).toBe(0);
+		expect(existsSync(clone)).toBe(false);
+		// About ten spawns of the bin, each loading the SDK, plus a git clone and an
+		// npm install: far more than one spawn's default bound (F-9).
+	}, 300_000);
+});
+
+describe("an installed extension that never finishes loading", () => {
+	function hangingSetup() {
+		const home = tempHome();
+		const source = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-hang-")),
+		);
+		writeExtensionPackage(source, { extension: "hanging-load-extension.ts" });
+		const env = { PI_CODING_AGENT_DIR: path.join(home, "agent") };
+		expect(cli(home, ["extension", "install", source], { env }).code).toBe(0);
+		return { home, env };
+	}
+
+	it("models waits out its 30 s bound, names it, and still lists the catalog (F-1)", () => {
+		const { home, env } = hangingSetup();
+		const models = cli(home, ["models", "--all", "--json"], { env });
+		expect(models.code).toBe(0);
+		const result = JSON.parse(models.stdout);
+		expect(
+			result.models.some(
+				(row: { provider: string }) => row.provider === "anthropic",
+			),
+		).toBe(true);
+		expect(result.problems).toHaveLength(1);
+		expect(result.problems[0]).toContain("did not finish loading within 30 s");
+	}, 120_000);
+
+	it("the first Ctrl-C ends models at once (R-4)", async () => {
+		const { home, env } = hangingSetup();
+		const result = await interrupted(home, ["models"], { env });
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("aborted");
+		expect(result.ms).toBeLessThan(20_000);
+	}, 120_000);
+});
+
+describe("credentials in an extension source (N-1, regression-1-1)", () => {
+	const SECRET = "tok-SECRET-5678";
+	// Scheme-less git: forms that Pi's own parser keeps the token in: in the
+	// clone URL and in the install path it computes.
+	const FORMS = [
+		`git:user:${SECRET}@example.invalid/fixture/pi-ext`,
+		`git:${SECRET}@example.invalid/fixture/pi-ext`,
+		`git:example.invalid/fixture/pi-ext?private_token=${SECRET}`,
+	];
+
+	/** Each form clones from the local fixture repository if it ever reaches git. */
+	function formEnv(repo: string): Record<string, string> {
+		const urls = [
+			`https://user:${SECRET}@example.invalid/fixture/pi-ext`,
+			`https://${SECRET}@example.invalid/fixture/pi-ext`,
+		];
+		return {
+			...gitSourceEnv(repo),
+			GIT_CONFIG_COUNT: String(urls.length + 1),
+			...Object.fromEntries(
+				urls.flatMap((url, index) => [
+					[`GIT_CONFIG_KEY_${index + 1}`, `url.${repo}.insteadOf`],
+					[`GIT_CONFIG_VALUE_${index + 1}`, url],
+				]),
+			),
+		};
+	}
+
+	it.each(FORMS)(
+		"install refuses %s: no clone, nothing in settings.json",
+		(source) => {
+			const home = tempHome();
+			const repo = realpathSync(
+				mkdtempSync(path.join(tmpdir(), "rp-ext-cred-")),
+			);
+			writeExtensionPackage(repo, { git: true });
+			const agent = path.join(home, "agent");
+			const result = cli(home, ["extension", "install", source], {
+				env: { ...formEnv(repo), PI_CODING_AGENT_DIR: agent },
+			});
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain("credential helper");
+			expect(result.stdout + result.stderr).not.toContain(SECRET);
+			expect(existsSync(path.join(agent, "git"))).toBe(false);
+			expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+		},
+		120_000,
+	);
+
+	it("install refuses the whitespace form git: user:token@host/o/r: no clone, nothing in settings.json (N2-1)", () => {
+		const home = tempHome();
+		const repo = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-space-")),
+		);
+		writeExtensionPackage(repo, { git: true });
+		const agent = path.join(home, "agent");
+		const result = cli(
+			home,
+			[
+				"extension",
+				"install",
+				`git: user:${SECRET}@example.invalid/fixture/pi-ext`,
+			],
+			{ env: { ...formEnv(repo), PI_CODING_AGENT_DIR: agent } },
+		);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("credential helper");
+		expect(result.stdout + result.stderr).not.toContain(SECRET);
+		expect(existsSync(path.join(agent, "git"))).toBe(false);
+		expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+	}, 120_000);
+
+	it("a branch ref with a slash installs (N2-2)", () => {
+		const home = tempHome();
+		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-ref-")));
+		writeExtensionPackage(repo, { git: true, branch: "release/1.0" });
+		const agent = path.join(home, "agent");
+		const result = cli(
+			home,
+			["extension", "install", `${FIXTURE_GIT_SOURCE}@release/1.0`],
+			{ env: { ...gitSourceEnv(repo), PI_CODING_AGENT_DIR: agent } },
+		);
+		expect(result.code).toBe(0);
+		expect(
+			existsSync(
+				path.join(
+					agent,
+					"git",
+					"example.invalid",
+					"fixture",
+					"pi-ext",
+					"extensions",
+					"index.ts",
+				),
+			),
+		).toBe(true);
+	}, 120_000);
+
+	it("a source Pi installed earlier with a token is listed redacted, and removed by the printed source", () => {
+		const home = tempHome();
+		const agent = path.join(home, "agent");
+		const source = FORMS[0] as string;
+		// The folder Pi's own parser computes for this source (host keeps the user info).
+		const clone = path.join(
+			agent,
+			"git",
+			`user:${SECRET}@example.invalid`,
+			"fixture",
+			"pi-ext",
+		);
+		const entry = writeExtensionPackage(clone);
+		writeFileSync(
+			path.join(agent, "settings.json"),
+			JSON.stringify({ packages: [source] }),
+		);
+		const env = { PI_CODING_AGENT_DIR: agent };
+
+		const listed = cli(home, ["extension", "list", "--json"], { env });
+		expect(listed.code).toBe(0);
+		expect(listed.stdout).not.toContain(SECRET);
+		const [extension] = JSON.parse(listed.stdout).extensions;
+		expect(extension.source).toBe("git:***@example.invalid/fixture/pi-ext");
+		expect(extension.entries).toEqual([
+			entry.replace(`user:${SECRET}@`, "***@"),
+		]);
+		const text = cli(home, ["extension", "list"], { env });
+		expect(text.stdout).not.toContain(SECRET);
+		const models = cli(home, ["models", "--all", "--json"], { env });
+		expect(models.code).toBe(0);
+		expect(models.stdout).not.toContain(SECRET);
+		expect(models.stdout).toContain("review-panel-fixture");
+
+		const removed = cli(home, ["extension", "remove", extension.source], {
+			env,
+		});
+		expect(removed.code).toBe(0);
+		expect(removed.stdout + removed.stderr).not.toContain(SECRET);
+		expect(existsSync(clone)).toBe(false);
+		expect(
+			JSON.parse(readFileSync(path.join(agent, "settings.json"), "utf8"))
+				.packages,
+		).toEqual([]);
+	}, 120_000);
+});
+
+describe("an install stopped by Ctrl-C (N-3)", () => {
+	it("exits at once and never records the source afterwards", async () => {
+		const home = tempHome();
+		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-slow-")));
+		writeExtensionPackage(repo, { git: true });
+		// A git that takes 4 s, so the clone is still running at Ctrl-C.
+		const bin = path.join(home, "slow-bin");
+		mkdirSync(bin);
+		const realGit = execFileSync("sh", ["-c", "command -v git"], {
+			encoding: "utf8",
+		}).trim();
+		writeFileSync(
+			path.join(bin, "git"),
+			`#!/bin/sh\nsleep 4\nexec "${realGit}" "$@"\n`,
+			{ mode: 0o755 },
+		);
+		const agent = path.join(home, "agent");
+		const result = await interrupted(
+			home,
+			["extension", "install", FIXTURE_GIT_SOURCE],
+			{
+				env: {
+					...gitSourceEnv(repo),
+					PI_CODING_AGENT_DIR: agent,
+					PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+				},
+				// Ctrl-C while the slowed git clone runs.
+				after: `Installing ${FIXTURE_GIT_SOURCE}...`,
+			},
+		);
+		expect(result.code).toBe(1);
+		// The bin exits at once; the slowed git it started holds the pipes longer.
+		expect(result.exitMs).toBeLessThan(3_000);
+		expect(result.stderr).toContain(`${FIXTURE_GIT_SOURCE} was not recorded`);
+		// Long after the slowed clone would have finished.
+		await new Promise((resolve) => setTimeout(resolve, 7_000));
+		const settings = path.join(agent, "settings.json");
+		const packages = existsSync(settings)
+			? (JSON.parse(readFileSync(settings, "utf8")).packages ?? [])
+			: [];
+		expect(packages).toEqual([]);
+	}, 60_000);
+});
+
+/** The bin, run without blocking this process (a test server must answer). */
+function cliAsync(
+	home: string,
+	args: string[],
+	options: { env?: Record<string, string> } = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+	const child = spawn(process.execPath, [BIN, ...args], {
+		cwd: REPO,
+		env: { PATH: process.env.PATH ?? "", HOME: home, ...options.env },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let stdout = "";
+	let stderr = "";
+	child.stdout.on("data", (chunk) => {
+		stdout += chunk;
+	});
+	child.stderr.on("data", (chunk) => {
+		stderr += chunk;
+	});
+	const guard = setTimeout(() => child.kill("SIGKILL"), 90_000);
+	return new Promise((resolve) => {
+		child.on("close", (code) => {
+			clearTimeout(guard);
+			resolve({ code, stdout, stderr });
+		});
+	});
+}
+
+describe("an npm: source that is a URL (N3-1)", () => {
+	it("is refused before npm runs: the server sees no request and settings.json is not written", async () => {
+		const TOKEN = "npm-TOKEN-9012";
+		const requests: string[] = [];
+		const server = createServer((request, response) => {
+			requests.push(`${request.method} ${request.url}`);
+			response.statusCode = 404;
+			response.end();
+		});
+		await new Promise<void>((resolve) =>
+			server.listen(0, "127.0.0.1", resolve),
+		);
+		const { port } = server.address() as AddressInfo;
+		try {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			const result = await cliAsync(
+				home,
+				["extension", "install", `npm:http://${TOKEN}@127.0.0.1:${port}/x.tgz`],
+				{
+					env: {
+						PI_CODING_AGENT_DIR: agent,
+						npm_config_update_notifier: "false",
+						npm_config_audit: "false",
+						npm_config_fund: "false",
+					},
+				},
+			);
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain(".npmrc");
+			expect(result.stdout + result.stderr).not.toContain(TOKEN);
+			expect(requests).toEqual([]);
+			expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+			expect(existsSync(path.join(agent, "npm"))).toBe(false);
+		} finally {
+			server.close();
+		}
+	}, 120_000);
+});
+
+describe("setup commands run from a hostile working folder", () => {
+	it("never list or load the folder's Pi project settings or extensions", () => {
+		const home = tempHome();
+		const hostile = tempRepo();
+		mkdirSync(path.join(hostile, ".pi", "extensions"), { recursive: true });
+		const evil = path.join(hostile, "evil");
+		writeExtensionPackage(evil);
+		writeFileSync(
+			path.join(hostile, ".pi", "settings.json"),
+			JSON.stringify({ packages: ["../evil"], extensions: ["./extensions"] }),
+		);
+		writeFileSync(
+			path.join(hostile, ".pi", "extensions", "x.ts"),
+			"export default function () { throw new Error('the hostile extension ran'); }",
+		);
+		const source = realpathSync(
+			mkdtempSync(path.join(tmpdir(), "rp-ext-local-")),
+		);
+		const entry = writeExtensionPackage(source);
+		const env = { PI_CODING_AGENT_DIR: path.join(home, "agent") };
+
+		const install = cli(home, ["extension", "install", source], {
+			env,
+			cwd: hostile,
+		});
+		expect(install.code).toBe(0);
+		const listed = cli(home, ["extension", "list", "--json"], {
+			env,
+			cwd: hostile,
+		});
+		expect(listed.code).toBe(0);
+		expect(
+			JSON.parse(listed.stdout).extensions.map(
+				(extension: { entries: string[] }) => extension.entries,
+			),
+		).toEqual([[entry]]);
+
+		const models = cli(home, ["models", "--all", "--json"], {
+			env,
+			cwd: hostile,
+		});
+		expect(models.code).toBe(0);
+		const result = JSON.parse(models.stdout);
+		expect(result.problems).toEqual([]);
+		const fromExtensions = result.models.filter(
+			(row: { extensionPaths: string[] }) => row.extensionPaths.length > 0,
+		);
+		expect(fromExtensions.length).toBeGreaterThan(0);
+		expect(
+			fromExtensions.every(
+				(row: { extensionPaths: string[] }) =>
+					JSON.stringify(row.extensionPaths) === JSON.stringify([entry]),
+			),
+		).toBe(true);
 	});
 });
 

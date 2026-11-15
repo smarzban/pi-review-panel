@@ -12,8 +12,8 @@ The owner merges.
 
 Run the command yourself, whether or not you wrote the change. It runs every reviewer model
 itself, so no other agent, session, pane or terminal is needed. Never name or override seats: they come only from the owner
-config. Never run `review-panel auth login` or `auth logout` unless the owner asks; a missing
-login is the owner's to fix.
+config. Never run `review-panel auth login`, `auth logout`, `extension install` or
+`extension remove` unless the owner asks; a missing login or extension is the owner's to fix.
 
 ## 1. Find the command
 
