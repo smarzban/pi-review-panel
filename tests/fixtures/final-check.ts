@@ -15,9 +15,11 @@ const CONFIG: Config = {
  */
 export function unrecordedFinalCheck(): Pick<
 	ActionDependencies,
-	"diagnose" | "loadConfig" | "runVerify"
+	"diagnose" | "loadConfig" | "runVerify" | "findCloseoutPr"
 > {
 	return {
+		// The PR comment looks up before the check: the one named, or #1.
+		findCloseoutPr: (input) => Number(input.pr ?? 1),
 		diagnose: async () => ({ ready: true, rows: [] }),
 		loadConfig: () => CONFIG,
 		runVerify: async (input) => {

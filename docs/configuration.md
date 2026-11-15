@@ -566,9 +566,10 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   owner approved a card with nothing open, so what it finds stops the card:
   `comment refused: the final check, verify N, reported V<N>-R1; verify a fix against the latest
   verify, "<run id>", or run comment again to post the card with it open`, or, after a lost
-  seat, `… lost its seat, so nothing was checked; run comment again to check again`. It runs
-  before `comment` looks up the PR, so a PR that cannot be posted to still costs that seat; the
-  refusal then names the final check as the latest verify. A verify running from the chain's
+  seat, `… lost its seat, so nothing was checked; run comment again to check again`. Before it
+  runs, `comment` makes every refusal that costs no seat, finding the PR it would post to (the
+  one `--pr` names, or the one open PR at the card's head) among them: with no PR to post to,
+  it refuses with no seat spent and no link written. A verify running from the chain's
   latest link refuses it, naming that verify. See
   [The close-out card](#the-close-out-card) for what it shows.
 - The close-out posts at most once per review, by these rules and with the exceptions below:

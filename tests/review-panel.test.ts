@@ -1154,6 +1154,7 @@ describe("the comment action", () => {
 			let body = "";
 			const tool = toolWith({
 				runVerify: unrecordedFinalCheck().runVerify,
+				findCloseoutPr: unrecordedFinalCheck().findCloseoutPr,
 				postComment: (input) => {
 					body = input.body;
 					return {

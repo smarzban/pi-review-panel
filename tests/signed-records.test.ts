@@ -451,6 +451,7 @@ describe("the owner's own records still work", () => {
 				{
 					deps: deps({
 						postComment,
+						findCloseoutPr: () => 1,
 						runVerify: (input, options) =>
 							runVerify(input, {
 								...options,

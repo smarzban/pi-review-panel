@@ -99,6 +99,7 @@ import {
 	loadCloseoutRun,
 } from "../tool/closeout-from-run.js";
 import {
+	findCloseoutPr,
 	type PostCloseoutInput,
 	type PostCloseoutResult,
 	postCloseoutComment,
@@ -154,6 +155,11 @@ export type ActionDependencies = {
 		options: RunVerifyOptions,
 	) => Promise<RunVerifyResult>;
 	postComment?: (input: PostCloseoutInput) => PostCloseoutResult;
+	/**
+	 * The PR `comment` would post to, found before it spends the final
+	 * check's seat. By default it runs the real `gh`.
+	 */
+	findCloseoutPr?: typeof findCloseoutPr;
 	/**
 	 * Runs `gh` for posting each review and verify round to the open PR. By
 	 * default it runs the real `gh`.
@@ -643,6 +649,7 @@ function resolveDependencies(deps: ActionDependencies | undefined) {
 		suggest: deps?.suggestLenses ?? suggestLenses,
 		verify: deps?.runVerify ?? runVerify,
 		postComment: deps?.postComment ?? postCloseoutComment,
+		findPr: deps?.findCloseoutPr ?? findCloseoutPr,
 		runGh: deps?.runGh ?? defaultRunGh,
 		resume: deps?.resumeRun ?? resumeRun,
 		keyOf: deps?.recordKey ?? ownerRecordKey,
@@ -1132,9 +1139,16 @@ export async function commentAction(
 	// Every refusal that costs no seat comes first.
 	let body = built();
 	let latest: string | undefined;
+	let pr = valid.pr;
 	if (tip !== undefined && finalCheckDue(state, links)) {
-		// The final check reports and never blocks the owner's card: what it
-		// finds is open on it, and a lost seat is named on `Lost:`.
+		// Every refusal that costs no seat comes before the final check: the
+		// PR the card would post to (open, at the head the check runs at)
+		// too. The check runs at the tip's head, so the card's head stays.
+		pr = resolved.findPr({
+			repository: repoDir,
+			headOid,
+			...(valid.pr === undefined ? {} : { pr: valid.pr }),
+		});
 		await requireReady(resolved, repoDir);
 		const config = loadOwnerConfig(resolved, repoDir);
 		try {
@@ -1185,22 +1199,9 @@ export async function commentAction(
 						rounds.map((row) => row.runId),
 					),
 				),
-			...(valid.pr === undefined ? {} : { pr: valid.pr }),
+			...(pr === undefined ? {} : { pr }),
 		});
-	let posted: ReturnType<typeof post>;
-	try {
-		posted = post();
-	} catch (error) {
-		if (latest === undefined) {
-			throw error;
-		}
-		// The final check ran and is a signed link: say so, so the next
-		// verify chains from it.
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(
-			`${message}; the final check is recorded: the latest verify is now "${latest}"`,
-		);
-	}
+	const posted = post();
 	const shown = posted.body ?? body;
 	return textResult(
 		[

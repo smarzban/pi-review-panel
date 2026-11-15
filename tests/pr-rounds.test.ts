@@ -34,6 +34,7 @@ import {
 	loadVerifyChain,
 } from "../src/run/verify-chain.js";
 import {
+	findCloseoutPr,
 	parseJsonPages,
 	postCloseoutComment,
 } from "../src/tool/closeout-post.js";
@@ -4007,6 +4008,14 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 						// chain as these tests wrote it.
 						runVerify: async (input) =>
 							finalCheckFound(repo, "unrecorded", REVIEW_ID, input),
+						findCloseoutPr: (input) =>
+							findCloseoutPr({
+								...input,
+								runGh: gh.runGh as (
+									args: readonly string[],
+									options?: { cwd?: string; input?: string },
+								) => string,
+							}),
 						postComment: (input) =>
 							postCloseoutComment({
 								...input,
@@ -4073,6 +4082,14 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 						// chain as these tests wrote it.
 						runVerify: async (input) =>
 							finalCheckFound(repo, "unrecorded", REVIEW_ID, input),
+						findCloseoutPr: (input) =>
+							findCloseoutPr({
+								...input,
+								runGh: gh.runGh as (
+									args: readonly string[],
+									options?: { cwd?: string; input?: string },
+								) => string,
+							}),
 						postComment: (input) =>
 							postCloseoutComment({
 								...input,

@@ -196,9 +196,9 @@ and the tip is not a final check that lost no seat), reloads the chain, and rebu
 With ids open before the check it only reports; with none open, a lost seat or anything open
 after it refuses the card (the owner approved a card with nothing open), naming the step that
 goes on: run `comment` again (it checks again after a lost seat, and posts the card with the ids
-open after a finding) or verify a fix from the final link. The check runs before `postComment`
-looks up the PR (one synchronous call), so a failed post after it names the final check as the
-latest verify. The card shows `**Final check:** verify N` when its last round is final (or that
+open after a finding) or verify a fix from the final link. Before the check, `findCloseoutPr`
+(the same lookup `postCloseoutComment` makes, a dependency so tests script it) finds the PR the
+card would post to; no PR refuses before any seat or link, and the card then posts to that PR. The card shows `**Final check:** verify N` when its last round is final (or that
 it lost its seat), and leaves that round out of the round count.
 
 ## Posted text
