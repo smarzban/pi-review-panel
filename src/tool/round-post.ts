@@ -758,6 +758,11 @@ export function renderVerifyRound(
 		...(facts.panel.length === 0
 			? []
 			: [boldLabel(ownLine(renderSeatsLine([...facts.panel])))]),
+		...(result.final === true
+			? [
+					"**Final check:** the whole change, from the reviewed head, for fixes that no longer hold or conflict",
+				]
+			: []),
 		...(failed.length === 0
 			? []
 			: [
