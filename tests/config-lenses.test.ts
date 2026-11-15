@@ -160,7 +160,7 @@ describe("config lens registry", () => {
 			"dist/src/run/run-audit.js",
 			"dist/src/run/render-audit.js",
 			"dist/src/seat/seat-extension.js",
-			"skills/review-panel-pi/SKILL.md",
+			"skills/review-panel/SKILL.md",
 			"package.json",
 			"README.md",
 			"LICENSE",
