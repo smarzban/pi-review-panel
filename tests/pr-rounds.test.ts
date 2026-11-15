@@ -4102,14 +4102,18 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		async function manual(
 			repo: string,
 			gh: ReturnType<typeof fakeGh>,
+			judgment: {
+				verifyRunId?: string;
+				dismissed?: Array<{ id: string; reason: string }>;
+			} = {},
 		): Promise<{ text: string; body: string }> {
 			const result = await commentAction(
 				{
 					repoDir: repo,
 					ownerApproved: true,
 					priorRunId: REVIEW_ID,
-					verifyRunId: "v-0",
-					dismissed: [],
+					verifyRunId: judgment.verifyRunId ?? "v-0",
+					dismissed: judgment.dismissed ?? [],
 					lowAdvisory: ["F-3"],
 					pr: 12,
 				},
@@ -4128,6 +4132,53 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			);
 			return { text: textOf(result), body: bodyOf(posts(gh.calls)[0]) };
 		}
+
+		const ALL_DISMISSED = [
+			{ id: "F-1", reason: "by design" },
+			{ id: "F-2", reason: "out of scope" },
+		];
+
+		it("uses a supplied verify even when nothing is left resolved: its head, its round and its seats (P-1, P-5, P-6)", async () => {
+			await withRepository(async (repo) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				// A regression-only verify, run with posting off.
+				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+					items: [],
+					headOid: VERIFY_HEAD,
+					posted: false,
+				});
+				const gh = fakeGh({ comments: [] });
+				const { body } = await manual(repo, gh, { dismissed: ALL_DISMISSED });
+				const lines = body.split("\n");
+				expect(lines[2]).toBe(
+					"**3 findings** (1 high, 1 medium, 1 low) · 1 verify round · 2 dismissed · 1 left as low/advisory",
+				);
+				expect(lines).toContain("**Verified by:** fix-verification (glm)");
+				expect(lines.find((line) => line.includes(" → "))).toMatch(
+					/ → `c0ffee1`$/,
+				);
+				expect(lines.at(-1)).toBe(
+					`<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+				);
+			});
+		});
+
+		it("refuses a supplied verify that is not the owner's, even when nothing is left resolved (P-1)", async () => {
+			await withRepository(async (repo) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+					items: [],
+					headOid: VERIFY_HEAD,
+					posted: false,
+					signed: false,
+				});
+				const gh = fakeGh({ comments: [] });
+				await expect(
+					manual(repo, gh, { dismissed: ALL_DISMISSED }),
+				).rejects.toThrow(/^comment refused: /);
+				expect(posts(gh.calls)).toHaveLength(0);
+			});
+		});
 
 		it("shows the named verify's signed head, its round number and links", async () => {
 			await withRepository(async (repo) => {

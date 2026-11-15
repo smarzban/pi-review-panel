@@ -1083,21 +1083,24 @@ export async function commentAction(
 		dismissed,
 		lowAdvisory,
 	});
-	let verified: SignedVerifyRound | undefined;
-	if (accounted.resolved.length > 0) {
-		if (valid.verifyRunId === undefined) {
-			throw new Error(
-				`comment refused: ${accounted.resolved.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
-			);
-		}
-		verified = assertFixedResolved(
-			repoDir,
-			valid.verifyRunId,
-			accounted.resolved.map((row) => row.id),
-			facts.run.runId,
-			commentKey,
+	if (accounted.resolved.length > 0 && valid.verifyRunId === undefined) {
+		throw new Error(
+			`comment refused: ${accounted.resolved.map((row) => row.id).join(", ")} still outstanding; pass verifyRunId after a clean verify or dismiss them`,
 		);
 	}
+	// A supplied verify is authenticated and used whenever it is given, even
+	// with nothing left resolved: the card shows its head, counts it as a
+	// round and names its seats, as its marker names it.
+	const verified: SignedVerifyRound | undefined =
+		valid.verifyRunId === undefined
+			? undefined
+			: assertFixedResolved(
+					repoDir,
+					valid.verifyRunId,
+					accounted.resolved.map((row) => row.id),
+					facts.run.runId,
+					commentKey,
+				);
 	// The rounds and the head come from signed records only: the posted
 	// rounds the review record names, and the verify checked above.
 	const rounds = cardRounds(
