@@ -137,23 +137,20 @@ describe("renderCloseoutComment", () => {
 			},
 		});
 
-		expect(text).toBe(
-			[
-				"## Review panel · close-out",
-				"",
-				"**4 findings** (4 medium) · **4 resolved** in 1 verify round",
-				"**Review seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus), correctness (sol, opus)",
-				"**Verified by:** fix-verification (sol)",
-				`\`origin/main\` (\`5852b7e\`) → \`baf4d30\` · [review](${PR_URL}#issuecomment-11) · [verify 1](${PR_URL}#issuecomment-12)`,
-				"",
-				"- **F-1 [medium]** title 1 · resolved in verify 1",
-				"- **F-2 [medium]** title 2 · resolved in verify 1",
-				"- **F-3 [medium]** title 3 · resolved in verify 1",
-				"- **F-4 [medium]** title 4 · resolved in verify 1",
-				"",
-				"<!-- review-panel review=r-1 verify=v-1 -->",
-			].join("\n"),
+		// Each line's rule has its own test below; these are what only the
+		// target card shows: the heading, the seats in planned order, the
+		// links on the range line, and the marker last.
+		const lines = text.split("\n");
+		expect(lines[0]).toBe("## Review panel · close-out");
+		expect(lines).toContain(
+			"**Review seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus), correctness (sol, opus)",
 		);
+		expect(lines).toContain("**Verified by:** fix-verification (sol)");
+		expect(lines.find((line) => line.includes(" → "))).toBe(
+			`\`origin/main\` (\`5852b7e\`) → \`baf4d30\` · [review](${PR_URL}#issuecomment-11) · [verify 1](${PR_URL}#issuecomment-12)`,
+		);
+		expect(lines.filter((line) => line.startsWith("- "))).toHaveLength(4);
+		expect(lines.at(-1)).toBe("<!-- review-panel review=r-1 verify=v-1 -->");
 	});
 
 	it("rule 1: shows the base ref only when it is not itself a commit id; the head is one short SHA", () => {
