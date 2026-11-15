@@ -19,6 +19,7 @@ import {
 	verifyAction,
 } from "../src/actions/actions.js";
 import { coerceCallArguments } from "../src/actions/call.js";
+import { parseCommand } from "../src/cli/args.js";
 import type { Config } from "../src/config/schema.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
 import { runVerify } from "../src/run/run-verify.js";
@@ -574,8 +575,16 @@ describe("--close-out", () => {
 		);
 		expect(closeouts()).toEqual([]);
 		expect(v3.reply).toContain(
-			"PR close-out: not posted (not asked for; nothing is open, so pass --close-out on a verify, or post it with comment once the owner says the rounds are done)",
+			`PR close-out: not posted (not asked for; nothing is open: once the owner says the rounds are done, post it with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`)`,
 		);
+		// The hinted step works as written (R-6).
+		const hinted = /`(review-panel comment [^`]+)`/u.exec(v3.reply)?.[1] ?? "";
+		const command = parseCommand(hinted.split(" ").slice(1));
+		expect(command.kind).toBe("action");
+		const args = (command as { args: Record<string, unknown> }).args;
+		const card = await stopWith(args);
+		expect(card.body).toMatch(/^## Review panel · close-out/u);
+		expect(card.body).toContain("resolved in verify 3");
 	});
 
 	it("is taken by the parser and by a call object", () => {
