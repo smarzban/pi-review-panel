@@ -161,7 +161,9 @@ describe("review-panel skill", () => {
 		expect(raw).not.toMatch(/--provider|--model/);
 		expect(raw).not.toContain("review_panel");
 		expect(raw).not.toContain('"action":');
-		expect(flat(raw)).toContain("Never start another agent session");
+		expect(flat(raw)).toContain(
+			"do not start Pi or any other agent to run the review for you",
+		);
 	});
 
 	it("runs auth login or logout only when the owner asks", () => {
@@ -179,10 +181,10 @@ describe("review-panel skill", () => {
 		expect(body).toContain("`Suggest:` block");
 	});
 
-	it("finds the command, or a checkout's build by an absolute path, or asks for the install", () => {
+	it("finds the command with --help, or asks for the install", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
-		expect(body).toContain("node <checkout>/dist/src/cli/main.js");
-		expect(body).toContain("absolute path");
+		expect(body).toContain("Run `review-panel --help`.");
+		expect(body).not.toContain("<checkout>");
 		expect(body).not.toMatch(/node (cli|dist)\//);
 		expect(body).not.toContain("cli/dist");
 		expect(body).toContain(
@@ -228,7 +230,7 @@ describe("review-panel skill", () => {
 
 	it("says runs take minutes: a long timeout or the background, wait, and resume (R-4)", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
-		expect(body).toContain("Review, audit, verify and resume run for minutes");
+		expect(body).toContain("Review, verify and resume run for minutes");
 		expect(body).toContain(
 			"Run them with a timeout of at least 30 minutes, or in the background, and wait for the command to exit",
 		);
@@ -288,19 +290,9 @@ describe("review-panel skill", () => {
 		expect(body).toContain("The tool never adds a lens by itself.");
 	});
 
-	it("keeps audit advisory, whole-tree, and separate from review close-out", () => {
-		const body = flat(splitFrontmatter(readSkill()).body);
-		expect(body).toContain("review-panel audit");
-		expect(body).toContain("whole pinned repository");
-		expect(body).toContain("code-health");
-		expect(body).toContain("over-engineering");
-		expect(body).toContain("submit_findings");
-		expect(body).not.toContain("submit_audit");
-		expect(body).toContain(
-			"does not write `AUDIT.md`, repair files, run CI, or post",
-		);
-		expect(body).toContain("Verify does not accept an audit run");
-		expect(body).toContain("`review-panel audit --passes tests`");
+	it("leaves repository audits out of the skill", () => {
+		const raw = readSkill();
+		expect(raw).not.toMatch(/audit/i);
 	});
 
 	it("verifies with the owner's verify seats and refuses unsigned records", () => {
@@ -308,6 +300,6 @@ describe("review-panel skill", () => {
 		expect(body).toContain("`defaults.verifySeats`");
 		expect(body).toContain("refuses when head matches the prior run");
 		expect(body).toContain("signed with the owner's record key");
-		expect(body).toContain("Audit and resume never post");
+		expect(body).toContain("Resume never posts");
 	});
 });

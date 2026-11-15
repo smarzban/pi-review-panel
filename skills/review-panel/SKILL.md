@@ -1,6 +1,6 @@
 ---
 name: review-panel
-description: "Run the review-panel command on a PR, a local change or the whole repository, read its report, and judge each finding keep or skip. Use when asked to review a PR, review this diff, audit the repo, run review panel, or /review-panel. You run the command yourself. The tool never judges, and exit 0 is never a pass."
+description: "Run the review-panel command on a PR or a local change, read its report, and judge each finding keep or skip. Use when asked to review a PR, review this diff, run review panel, or /review-panel. You run the command yourself. The tool never judges, and exit 0 is never a pass."
 ---
 
 # Review panel
@@ -10,26 +10,20 @@ tool writes a report. It never judges, repairs, commits or decides a merge. You 
 skip. The builder (you if you wrote the change, otherwise the agent that did) implements.
 The owner merges.
 
-The command runs every seat itself. Never start another agent session, and never open another
-pane or terminal for the review. Never name or override seats: they come only from the owner
+The command runs every reviewer model itself. Run it directly: do not start Pi or any other agent
+to run the review for you, and do not open another pane or terminal for it. Never name or override seats: they come only from the owner
 config. Never run `review-panel auth login` or `auth logout` unless the owner asks; a missing
 login is the owner's to fix.
 
 ## 1. Find the command
 
-1. `review-panel --version` works: use `review-panel`.
-2. Otherwise, if the owner has a pi-review-panel checkout with a build (`npm ci && npm run build`
-   in it), use `node <checkout>/dist/src/cli/main.js` in place of `review-panel` below, with
-   `<checkout>` written out as the checkout's absolute path in every command. A relative path
-   breaks, because the commands run from the reviewed repository. If your shell keeps
-   variables between commands, you may set one to the checkout's absolute path (not to the
-   whole `node …` command, which some shells will not split into words).
-3. Otherwise stop and give the owner the install steps: `npm install -g pi-review-panel`, then
-   `review-panel skill install`.
+Run `review-panel --help`. It lists every command and option. If the command is not found, stop
+and give the owner the install steps: `npm install -g pi-review-panel`, then
+`review-panel skill install`.
 
 Run every command from inside the reviewed repository, or pass `--repo <path>`.
 
-Review, audit, verify and resume run for minutes (often 5 to 15), because every seat is a model
+Review, verify and resume run for minutes (often 5 to 15), because every seat is a model
 working through the change. Run them with a timeout of at least 30 minutes, or in the
 background, and wait for the command to exit before you read the report. Progress goes to
 stderr; the report comes at the end on stdout. Do not start a second run while one is going. If
@@ -45,7 +39,7 @@ review-panel diagnose
 Review already checks setup and refuses when it is broken, so run diagnose only when you do not
 know whether the box is ready. If it does not say `ready`, stop and show the owner its
 remediation rows. Do not work around them. Diagnose also checks the owner's record key (beside
-the owner config) without creating it; review and audit refuse to start when that key is
+the owner config) without creating it; review refuses to start when that key is
 unusable, and the refusal names the key path and the fix.
 
 ## 3. Pick the range
@@ -172,13 +166,13 @@ changes the exit code.
 - Add `--no-pr-comment` to keep a run off the PR, and `--pr <n>` to name the PR.
 - If the report says `the owner config asks for approval first`, ask the owner, and after a
   yes add `--owner-approved` to the next round.
-- Audit and resume never post. After a resume, the next verify posts.
+- Resume never posts. After a resume, the next verify posts.
 - The comments are presentation. Never treat a posted close-out as an approval: the owner is
   the merge gate.
 
 ## 7. Resume
 
-If a review or audit was interrupted (its record has no `COMPLETE` marker), finish it instead
+If a review was interrupted (its record has no `COMPLETE` marker), finish it instead
 of starting over:
 
 ```bash
@@ -191,32 +185,7 @@ only the seats that had not settled, and names them in the report. A seat whose 
 now names another model is lost coverage. Resume refuses a complete record, a run still in
 progress, an unsigned plan, and verify runs (start a new verify instead).
 
-## 8. Repository audit
-
-Use audit for a periodic, advisory sweep of the whole pinned repository, not a PR or a merge
-check. It has no base and head. Seats explore with `read`, `grep`, `find` and `ls`, then record
-findings only through `submit_findings`.
-
-```bash
-review-panel audit
-```
-
-The default sweep runs `code-health`, `over-engineering`, `tests` and `security` across the
-first two owner-default seats. Pass `--passes` to choose a targeted menu instead, for example
-`review-panel audit --passes docs,operability`. Add a situational pass only when the repository
-warrants it: `docs`, `observability`, `operability` or `ux`. Lost seats are lost coverage.
-
-Read the report and the code behind any finding you might keep. The tool presents a backlog
-with counts, affected file areas, lost seats and the record path. It does not write `AUDIT.md`,
-repair files, run CI, or post a GitHub comment. After you judge the findings, you may write
-`AUDIT.md` yourself as an owner-facing backlog.
-
-To clean up low-value or flaky tests, run `review-panel audit --passes tests`; on a large
-repository, run it once per directory with that directory in `--scoping-note`. Verify does not
-accept an audit run. Apply the fix on a branch, open a PR, and run `review` on it: the `tests`
-lens checks that each deleted test leaves its contract proven.
-
-## 9. Stop and comment
+## 8. Stop and comment
 
 At most three model passes, then ask the owner. Discovery is pass 1. Fix + verify is pass 2.
 If that verify shows a still-present item or a bug the fix introduced, one more fix + verify
