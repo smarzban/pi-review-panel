@@ -159,6 +159,7 @@ describe("postCloseoutComment", () => {
 		expect(() =>
 			postCloseoutComment({
 				repository: "/repo",
+				headOid: HEAD,
 				body: "PR is ready for merge.",
 				runGh: () => {
 					throw new Error("gh must not run");

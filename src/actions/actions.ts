@@ -1038,6 +1038,7 @@ export async function commentAction(
 	const body = card();
 	const posted = resolved.postComment({
 		repository: repoDir,
+		headOid: verified?.headOid ?? facts.run.meta.headOid,
 		body,
 		render: (listing) =>
 			card(

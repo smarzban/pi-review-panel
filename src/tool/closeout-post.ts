@@ -17,6 +17,8 @@ export type CommentListing = {
 
 export type PostCloseoutInput = {
 	repository: string;
+	/** The head commit the card is about: the verify's, or else the review's. */
+	headOid: string;
 	/** The card as posted when there is no `render`. */
 	body: string;
 	/**
@@ -188,6 +190,90 @@ function parseCreated(raw: string): { id: number; url: string } {
 	};
 }
 
+type PullRow = { number?: unknown; state?: unknown; head?: { sha?: unknown } };
+
+function parsePulls(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		throw new Error("comment refused: gh gave no JSON for the pull request");
+	}
+}
+
+/**
+ * A named PR must be an open pull request at the card's head, as for a
+ * round (`checkNamedPr` in round-post.ts): the card is about that commit.
+ */
+function namedPr(
+	call: (args: readonly string[]) => string,
+	repo: string,
+	pr: number,
+	headOid: string,
+): number {
+	let raw: string;
+	try {
+		raw = call(["api", `repos/${repo}/pulls/${pr}`]);
+	} catch (error) {
+		const cause = error instanceof Error ? error.message : String(error);
+		if (/HTTP 404|Not Found/.test(cause)) {
+			throw new Error(`comment refused: #${pr} is not a pull request here`);
+		}
+		throw error;
+	}
+	const row = parsePulls(raw) as PullRow | null;
+	if (row?.state !== "open") {
+		throw new Error(`comment refused: PR #${pr} is not open`);
+	}
+	if (row.head?.sha !== headOid) {
+		throw new Error(
+			`comment refused: PR #${pr}'s head is not the head this card is about`,
+		);
+	}
+	return pr;
+}
+
+/** With no PR named: the one open pull request whose head is the card's head. */
+function openPrAtHead(
+	call: (args: readonly string[]) => string,
+	repo: string,
+	headOid: string,
+): number {
+	let raw: string;
+	try {
+		raw = call(["api", `repos/${repo}/commits/${headOid}/pulls`]);
+	} catch (error) {
+		const cause = error instanceof Error ? error.message : String(error);
+		if (/HTTP 422|No commit found/.test(cause)) {
+			throw new Error(
+				"comment refused: no open PR has this head; GitHub does not have this commit",
+			);
+		}
+		throw error;
+	}
+	const pulls = parsePulls(raw);
+	const open = (Array.isArray(pulls) ? (pulls as PullRow[]) : [])
+		.filter(
+			(row) =>
+				row !== null &&
+				typeof row === "object" &&
+				row.state === "open" &&
+				row.head?.sha === headOid &&
+				Number.isInteger(row.number),
+		)
+		.map((row) => row.number as number);
+	if (open.length === 0) {
+		throw new Error(
+			"comment refused: no open PR has this head; pass --pr to name one",
+		);
+	}
+	if (open.length > 1) {
+		throw new Error(
+			`comment refused: ${open.length} open PRs have this head: ${open.map((n) => `#${n}`).join(", ")}; pass --pr to choose one`,
+		);
+	}
+	return open[0] as number;
+}
+
 /** Find-or-update the one owner comment whose body has heading `## Review panel`. */
 export function postCloseoutComment(
 	input: PostCloseoutInput,
@@ -203,19 +289,16 @@ export function postCloseoutComment(
 	const call = (args: readonly string[], stdin?: string): string =>
 		runGh(args, stdin === undefined ? { cwd } : { cwd, input: stdin });
 
-	const pr =
-		input.pr === undefined
-			? parsePositiveInt(
-					call(["pr", "view", "--json", "number", "--jq", ".number"]),
-					"pr",
-				)
-			: parsePositiveInt(input.pr, "pr");
 	const repo = trimOutput(
 		call(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]),
 	);
-	if (!repo.includes("/")) {
+	if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
 		throw new Error("comment refused: could not resolve GitHub repository");
 	}
+	const pr =
+		input.pr === undefined
+			? openPrAtHead(call, repo, input.headOid)
+			: namedPr(call, repo, parsePositiveInt(input.pr, "pr"), input.headOid);
 	const author = trimOutput(call(["api", "user", "--jq", ".login"]));
 	if (author === "") {
 		throw new Error("comment refused: could not resolve the GitHub author");
