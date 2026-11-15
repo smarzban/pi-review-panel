@@ -34,11 +34,16 @@ personal skills folder of every coding agent it finds:
 - `--agent claude,codex,grok,pi` installs for only those agents, and creates a missing
   agent's skills folder.
 - `--dry-run` prints what it would do and changes nothing.
-- Upgrades replace two entries without `--force`: a link into another `pi-review-panel`
-  install (an earlier Node version or npm prefix, or the npx cache, even when that install is
-  gone), and the old host skill copied by hand from 0.3.0's README (a `review-panel` folder
-  holding only its `SKILL.md`). `skill uninstall` removes such a link too.
-- Any other `review-panel` entry (your own folder, or a link to somewhere else) is left alone
+- Upgrades replace two entries without `--force`:
+  - a link into another npm install of `pi-review-panel` (a path ending in
+    `node_modules/pi-review-panel/skills/review-panel`: an earlier Node version or npm prefix,
+    or the npx cache, even when that install is gone). `skill uninstall` removes such a link
+    too.
+  - an unedited hand copy of the old `host-skills/review-panel` skill from this repository
+    (never in a release): a `review-panel` folder holding only a `SKILL.md` that is byte for
+    byte one of the versions shipped there.
+- Any other `review-panel` entry (your own folder, an edited copy of the old skill, or a link
+  to somewhere else, such as your own checkout) is left alone
   and named; `--force` replaces it, and only together with `--agent`: `--force` alone is a
   usage error, so it can never delete a folder in an agent you did not name. Every hint names
   the agent, for example `review-panel skill install --agent claude --force`.
