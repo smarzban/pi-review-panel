@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import {
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
@@ -385,6 +386,50 @@ describe("three chained verify rounds on one PR", () => {
 		);
 	});
 
+	it("the first verify places every finding: a high or medium left out is refused before any seat runs, a low left out is advisory", async () => {
+		await expect(
+			verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: REVIEW,
+					head: commits[2] as string,
+					keptFindingIds: ["F-1"],
+					dismissed: [{ id: "F-3", reason: "by design" }],
+				},
+				{ deps: deps() },
+			),
+		).rejects.toThrow(
+			"Verify refused: the first verify places every finding: F-2, F-5 are not kept, dismissed or left as low/advisory",
+		);
+		expect(specs).toEqual([]);
+		const v1 = await verify(
+			{
+				priorRunId: REVIEW,
+				head: commits[2],
+				keptFindingIds: ["F-1", "F-2", "F-3", "F-5"],
+			},
+			{
+				items: [
+					{ id: "F-1", disposition: "resolved" },
+					{ id: "F-2", disposition: "resolved" },
+					{ id: "F-3", disposition: "resolved" },
+					{ id: "F-5", disposition: "resolved" },
+				],
+			},
+		);
+		expect(v1.body).toContain(
+			"### Low / advisory (not kept)\n- **F-4** — helper name is vague",
+		);
+		const verification = JSON.parse(
+			readFileSync(
+				path.join(repo, ".review-panel", "runs", v1.runId, "verification.json"),
+				"utf8",
+			),
+		) as { lowAdvisory: string[] };
+		expect(verification.lowAdvisory).toEqual(["F-4"]);
+		expect(v1.body).toContain("**Open after this round:** none");
+	});
+
 	it("the first verify of a review still needs its kept ids", async () => {
 		await expect(
 			verifyAction(
@@ -585,12 +630,38 @@ describe("comment when the owner stops the rounds", () => {
 		);
 	});
 
-	it("lists a finding no verify kept as open, not verified", async () => {
-		const { body } = await stop({ lowAdvisory: ["F-4"] });
-		expect(body).toContain(
-			"- **F-1 [high]** cache key misses the tenant · not verified",
+	it("with no verify, refuses a high or medium nobody placed, naming them", async () => {
+		await expect(
+			stop({ dismissed: [{ id: "F-1", reason: "by design" }] }),
+		).rejects.toThrow(
+			"comment refused: F-2, F-3, F-5 were never verified: verify them, or dismiss each with a reason",
 		);
-		expect(body).toContain("**4 open**");
+	});
+
+	it("the card's Open section and each verify's Open line name the same ids", async () => {
+		const openLine = (body: string) =>
+			/^\*\*Open after this round:\*\* (.*)$/mu.exec(body)?.[1] ?? "";
+		const openSection = (body: string) => {
+			const lines = body.split("\n");
+			const at = lines.indexOf("### Open (not resolved)");
+			if (at === -1) {
+				return "none";
+			}
+			const rows: string[] = [];
+			for (const line of lines.slice(at + 1)) {
+				const id = /^- \*\*([^ *]+)/u.exec(line)?.[1];
+				if (id === undefined) {
+					break;
+				}
+				rows.push(id);
+			}
+			return rows.sort().join(", ");
+		};
+		const sorted = (line: string) => line.split(", ").sort().join(", ");
+		const v1 = await round1();
+		expect(openSection((await stop()).body)).toBe(sorted(openLine(v1.body)));
+		const v2 = await round2(v1.runId);
+		expect(openSection((await stop()).body)).toBe(sorted(openLine(v2.body)));
 	});
 
 	it("takes the owner's judgment on top of the chain: an open id dismissed now is dismissed, not open", async () => {

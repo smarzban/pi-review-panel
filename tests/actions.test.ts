@@ -714,9 +714,9 @@ const CASES: Case[] = [
 	},
 	{
 		action: "comment",
-		args: { ...commentArgs, verifyRunId: "", lowAdvisory: ["F-1"] },
+		args: { ...commentArgs, verifyRunId: "" },
 		message:
-			"comment refused: F-1 is high; high/medium findings that are not kept must be dismissed with a reason, not listed as low/advisory",
+			"comment refused: F-1 was never verified: verify it, or dismiss it with a reason",
 	},
 ];
 

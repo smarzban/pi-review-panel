@@ -1108,41 +1108,36 @@ describe("the comment action", () => {
 		});
 	});
 
-	it("lists remaining high findings as open, not verified, without a verify run", async () => {
+	it("refuses remaining high findings without a verify run", async () => {
 		await withRepository(async (repository) => {
 			writeReviewRecord(repository, "review-1", {
 				findings: [{ id: "F-1", severity: "high", title: "auth bypass" }],
 			});
-			let body = "";
+			let posted = 0;
 			const tool = toolWith({
-				postComment: (input) => {
-					body = input.body;
-					return {
-						action: "created",
-						commentId: 9,
-						pr: 29,
-						url: "https://example.test/9",
-					};
+				postComment: () => {
+					posted += 1;
+					throw new Error("postComment must not run");
 				},
 			});
-			await tool.execute(
-				"call-1",
-				{
-					action: "comment",
-					repository,
-					priorRunId: "review-1",
-					ownerApproved: true,
-					pr: 29,
-				},
-				undefined,
-				undefined,
-				{},
+			await expect(
+				tool.execute(
+					"call-1",
+					{
+						action: "comment",
+						repository,
+						priorRunId: "review-1",
+						ownerApproved: true,
+						pr: 29,
+					},
+					undefined,
+					undefined,
+					{},
+				),
+			).rejects.toThrow(
+				"comment refused: F-1 was never verified: verify it, or dismiss it with a reason",
 			);
-			expect(body).toContain("**1 finding** (1 high) · **1 open**");
-			expect(body).toContain(
-				"### Open (not resolved)\n- **F-1 [high]** auth bypass · not verified",
-			);
-			expect(body).not.toMatch(/resolved in|fixed/iu);
+			expect(posted).toBe(0);
 		});
 	});
 
