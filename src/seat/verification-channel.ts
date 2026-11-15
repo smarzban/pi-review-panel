@@ -36,10 +36,13 @@ export type SubmitVerificationTool = {
 export function createSubmitVerificationTool({
 	expectedIds,
 	cycle,
+	undoableIds = [],
 	channel = createSubmissionChannel<VerificationResult>(),
 }: {
 	expectedIds: readonly string[];
 	cycle: number;
+	/** Ids an earlier round resolved, which a regression may say it undoes. */
+	undoableIds?: readonly string[];
 	channel?: SubmissionChannel<VerificationResult>;
 }): {
 	tool: SubmitVerificationTool;
@@ -69,6 +72,7 @@ export function createSubmitVerificationTool({
 				{ items, regressions: regressions ?? [] },
 				expectedIds,
 				cycle,
+				undoableIds,
 			);
 			if (!validation.ok) {
 				throw new Error(formatVerificationErrors(validation.errors));

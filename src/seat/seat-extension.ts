@@ -559,11 +559,13 @@ export function createSeatTools({
 	profile = DEFAULT_SEAT_PROFILE,
 	expectedIds = [],
 	cycle,
+	undoableIds = [],
 }: {
 	worktree: string;
 	profile?: SeatProfile;
 	expectedIds?: readonly string[];
 	cycle?: number;
+	undoableIds?: readonly string[];
 }): SeatToolset {
 	const readOnly = createGitDiffTool({ worktree });
 	if (profile.kind === "verification") {
@@ -573,6 +575,7 @@ export function createSeatTools({
 		const { tool, channel } = createSubmitVerificationTool({
 			expectedIds,
 			cycle,
+			undoableIds,
 		});
 		return { tools: [readOnly, tool], channel };
 	}

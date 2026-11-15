@@ -27,6 +27,11 @@ export type RegressionRow = {
 	line: number;
 	title: string;
 	evidence: string;
+	/**
+	 * An id an earlier verify round marked resolved that this fix range
+	 * touches or undoes; only one of the ids the caller allowed.
+	 */
+	undoes?: string;
 };
 
 export type StampedRegressionRow = RegressionRow & {
@@ -48,7 +53,13 @@ export type VerificationValidationResult =
 	| { ok: false; errors: VerificationValidationError[] };
 
 const itemFields = new Set(["id", "disposition", "evidence"]);
-const regressionFields = new Set(["file", "line", "title", "evidence"]);
+const regressionFields = new Set([
+	"file",
+	"line",
+	"title",
+	"evidence",
+	"undoes",
+]);
 const evidenceFields = new Set(["file", "explanation"]);
 
 function isNonEmptyString(value: unknown): value is string {
@@ -121,6 +132,7 @@ export function validateVerification(
 	input: unknown,
 	expectedIds: readonly string[],
 	cycle: number,
+	undoableIds: readonly string[] = [],
 ): VerificationValidationResult {
 	if (!Number.isInteger(cycle) || cycle < 1) {
 		return {
@@ -229,6 +241,7 @@ export function validateVerification(
 		}
 	}
 
+	const undoable = new Set(undoableIds);
 	const regressions: StampedRegressionRow[] = [];
 	if (input.regressions === undefined) {
 		errors.push({ path: "regressions", message: "is required" });
@@ -251,6 +264,7 @@ export function validateVerification(
 			const evidence = Object.hasOwn(row, "evidence")
 				? row.evidence
 				: undefined;
+			const undoes = Object.hasOwn(row, "undoes") ? row.undoes : undefined;
 
 			if (!isNonEmptyString(file)) {
 				errors.push({
@@ -277,6 +291,19 @@ export function validateVerification(
 				});
 			}
 
+			if (
+				undoes !== undefined &&
+				(typeof undoes !== "string" || !undoable.has(undoes))
+			) {
+				errors.push({
+					path: `${rowPath}.undoes`,
+					message:
+						undoable.size === 0
+							? "is not allowed: no earlier round resolved an id"
+							: `must be one of the ids an earlier round resolved: ${[...undoable].join(", ")}`,
+				});
+			}
+
 			if (errors.length === rowErrorsBefore) {
 				regressions.push({
 					// Loop-unique trusted stamp (AC-42): the cycle prefix keeps a
@@ -287,6 +314,7 @@ export function validateVerification(
 					line: line as number,
 					title: title as string,
 					evidence: evidence as string,
+					...(undoes === undefined ? {} : { undoes: undoes as string }),
 				});
 			}
 		}

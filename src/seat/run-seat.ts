@@ -119,6 +119,9 @@ async function runSeatInternal(
 		profile,
 		expectedIds: spec.expectedIds,
 		cycle: spec.cycle,
+		...(spec.undoableIds === undefined
+			? {}
+			: { undoableIds: spec.undoableIds }),
 	});
 	const replay = {
 		...spec,
@@ -128,6 +131,9 @@ async function runSeatInternal(
 		...(spec.expectedIds === undefined
 			? {}
 			: { expectedIds: [...spec.expectedIds] }),
+		...(spec.undoableIds === undefined
+			? {}
+			: { undoableIds: [...spec.undoableIds] }),
 	};
 	let session: SdkSeatSession | undefined;
 	let aborted = options.abortSignal?.aborted === true;
