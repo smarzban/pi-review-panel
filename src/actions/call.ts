@@ -132,6 +132,7 @@ export async function callAction(
 	options: CallOptions,
 ): Promise<ActionResult> {
 	const action = args.action;
+	// The CLI refuses `audit` earlier (parseCommand, `call`); this guard is for library callers of callAction.
 	if (action === "audit") {
 		throw new CallArgumentError(AUDIT_REMOVED);
 	}

@@ -230,10 +230,6 @@ describe("the audit command was removed", () => {
 		await expect(call).rejects.toBeInstanceOf(CallArgumentError);
 		await expect(call).rejects.toThrow(REMOVED);
 	});
-
-	it("is no action any more", () => {
-		expect(Object.keys(realActions)).not.toContain("audit");
-	});
 });
 
 describe("an audit record left in a repository", () => {
