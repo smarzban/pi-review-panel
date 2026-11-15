@@ -13,8 +13,8 @@ import {
 	dispositionsOf,
 	resolvedIdsOf,
 	type SignedVerifyRound,
-	seatsOf,
 	unresolvedIdsOf,
+	votedSeatsOf,
 } from "./closeout-rounds.js";
 
 export type CloseoutRunFacts = {
@@ -196,7 +196,7 @@ export function assertFixedResolved(
 	} | null;
 	return {
 		runId,
-		seats: seatsOf(parseJson(signed.get("panel.json") as string, "panel.json")),
+		seats: votedSeatsOf(outcomes),
 		resolved: resolvedIdsOf(dispositions),
 		unresolved: unresolvedIdsOf(dispositions),
 		...(typeof meta?.headOid === "string" ? { headOid: meta.headOid } : {}),

@@ -96,16 +96,24 @@ export function unresolvedIdsOf(
 	return unresolved;
 }
 
-/** The seats of a panel record, as roster id and lens. */
-export function seatsOf(panel: unknown): CloseoutSeat[] {
-	const seats = (panel as { seats?: unknown } | null)?.seats;
-	if (!Array.isArray(seats)) {
+/**
+ * The seats that voted in a verify, as roster id and lens, from its
+ * outcomes: a lost seat (any other outcome) is not one.
+ */
+export function votedSeatsOf(outcomes: unknown): CloseoutSeat[] {
+	if (!Array.isArray(outcomes)) {
 		return [];
 	}
-	return seats.flatMap((seat: { rosterId?: unknown; lens?: unknown }) =>
-		typeof seat?.rosterId === "string" && typeof seat.lens === "string"
-			? [{ rosterId: seat.rosterId, lens: seat.lens }]
-			: [],
+	return outcomes.flatMap(
+		(row: {
+			seat?: { rosterId?: unknown; lens?: unknown };
+			outcome?: { kind?: unknown };
+		}) =>
+			row?.outcome?.kind === "voted" &&
+			typeof row.seat?.rosterId === "string" &&
+			typeof row.seat.lens === "string"
+				? [{ rosterId: row.seat.rosterId, lens: row.seat.lens }]
+				: [],
 	);
 }
 
@@ -145,7 +153,7 @@ export function verifyRoundOf(
 	const dispositions = dispositionsOf(verification.outcomes);
 	return {
 		runId,
-		seats: seatsOf(parse(signed.get("panel.json"))),
+		seats: votedSeatsOf(verification.outcomes),
 		resolved: resolvedIdsOf(dispositions),
 		unresolved: unresolvedIdsOf(dispositions),
 		...(typeof meta.headOid === "string" ? { headOid: meta.headOid } : {}),

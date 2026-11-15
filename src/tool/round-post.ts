@@ -51,6 +51,7 @@ import {
 	resolvedIdsOf,
 	roundCommentLinks,
 	unresolvedIdsOf,
+	votedSeatsOf,
 } from "./closeout-rounds.js";
 import {
 	type CommentGroupRow,
@@ -960,7 +961,7 @@ function buildCloseout(
 		{
 			runId: verifyRunId,
 			round,
-			seats: facts.panel,
+			seats: votedSeatsOf(result.outcomes),
 			resolved: resolvedIdsOf(dispositions),
 			unresolved: unresolvedIdsOf(dispositions),
 		},

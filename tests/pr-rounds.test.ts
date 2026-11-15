@@ -4155,6 +4155,67 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 		});
 	});
 
+	it("Verified by names only the seats that voted, never a lost one (R-2)", async () => {
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			// An earlier round where opus was lost.
+			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+				votes: [{ seat: GLM, items: [resolved("F-2")] }, { seat: OPUS }],
+			});
+			writeSignedMarker(reviewRecordDir(repo), "round-1.posted", "v-0", {
+				pr: 12,
+			});
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await cleanVerify(repo, gh);
+			const card = bodyOf(closeoutPosts(gh.calls)[0]);
+			expect(card).toContain(
+				"**Verified by:** fix-verification (glm, terra)\n",
+			);
+			expect(card).not.toContain("opus");
+		});
+	});
+
+	it("the manual card's Verified by leaves out the named verify's lost seat (R-2)", async () => {
+		await withRepository(async (repo) => {
+			writeReviewRecord(repo, REVIEW_ID, ROWS);
+			writeVerifyRecord(repo, "v-0", REVIEW_ID, {
+				votes: [
+					{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] },
+					{ seat: OPUS },
+				],
+				posted: false,
+			});
+			const gh = fakeGh({ comments: [] });
+			const result = await commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: REVIEW_ID,
+					verifyRunId: "v-0",
+					dismissed: [],
+					lowAdvisory: ["F-3"],
+					pr: 12,
+				},
+				{
+					deps: deps(gh.runGh, {
+						postComment: (input) =>
+							postCloseoutComment({
+								...input,
+								runGh: gh.runGh as (
+									args: readonly string[],
+									options?: { cwd?: string; input?: string },
+								) => string,
+							}),
+					}),
+				},
+			);
+			expect(textOf(result)).toContain(
+				"**Verified by:** fix-verification (glm)\n",
+			);
+			expect(bodyOf(posts(gh.calls)[0])).not.toContain("opus");
+		});
+	});
+
 	it("a round's number is its signed file name's N, never the marker's unsigned round field (P-2)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
