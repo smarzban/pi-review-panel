@@ -352,12 +352,19 @@ export async function listModels(input: {
 			continue;
 		}
 		if (loaded === TIMED_OUT) {
+			const seconds = `${timeoutMs / 1000} s`;
+			if (group.label === undefined) {
+				problems.push(
+					`The model catalog did not finish loading within ${seconds}; the built-in models are not listed`,
+				);
+				continue;
+			}
 			const where =
 				group.label === group.extensionPaths[0]
 					? group.label
 					: `${group.label} (${group.extensionPaths.join(", ")})`;
 			problems.push(
-				`Extension ${where} did not finish loading within ${timeoutMs / 1000} s; its models are not listed`,
+				`Extension ${where} did not finish loading within ${seconds}; its models are not listed`,
 			);
 			continue;
 		}
@@ -396,8 +403,18 @@ export async function listModels(input: {
 		input.provider !== undefined &&
 		!listed.some((row) => row.provider === input.provider)
 	) {
+		// A package that failed or did not finish loading may be the one that
+		// registers the provider: say so instead of only calling it missing.
 		throw new SetupError(
-			`No provider ${shown(input.provider)} in this agent folder or its installed extensions. review-panel auth providers lists the providers; review-panel extension list lists the extensions.`,
+			[
+				`No provider ${shown(input.provider)} in this agent folder or its installed extensions. review-panel auth providers lists the providers; review-panel extension list lists the extensions.`,
+				...(problems.length === 0
+					? []
+					: [
+							"These did not load, and one of them may register it:",
+							...problems.map((line) => `  ${line}`),
+						]),
+			].join("\n"),
 		);
 	}
 	let models = listed.filter(
