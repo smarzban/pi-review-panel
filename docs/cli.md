@@ -255,12 +255,14 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
   appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   any value in a `call` object, such as `repository` or `priorRunId`, and the source of
-  `extension install` or `remove`. A source is always printed redacted: the user info of a URL
-  (`https://user:token@host/...`) and the value of a query parameter named like a secret
-  (`?private_token=...`) show as `***`, in progress, result, list, `models` and error lines and
-  in `--json`. `git` itself strips credentials from the URLs it prints; a credential helper is
-  still the safer place for a token, because the source as given is stored in the agent
-  folder's `settings.json`.
+  `extension install` or `remove`. `extension install` refuses a source that carries a
+  credential: the user info of an `https://` URL, a password in any other URL, a scheme-less
+  `git:user:token@host/...` or `git:token@host/...`, or a query parameter named like a secret
+  (`?private_token=...`). Pi would store it in `settings.json`, name the clone folder after it
+  and git would print that folder. Give git the token through a credential helper, use an SSH
+  source (`git:git@host:owner/repo`), or put an npm token in `.npmrc`. As a second guard, every
+  printed source and path (progress, result, list, `models`, errors and `--json`) shows such a
+  credential as `***`, for a source that Pi or an earlier version recorded.
 
 | Exit code | Meaning |
 |---|---|

@@ -84,25 +84,53 @@ export type SetupSdk = {
 export class SetupError extends Error {}
 
 /**
- * Text with any credential an extension source may carry hidden: the user
- * info of every `scheme://user:token@host` URL, and the value of every query
- * parameter whose name looks like a secret (`token`, `key`, `secret`,
- * `password`, `auth`, `sig`, `credential`). Sources reach the package manager
- * as given; only what is printed is redacted.
+ * Text with any credential an extension source may carry hidden:
+ *
+ * - the user info of an `http(s)://` URL, and of any other `scheme://` URL
+ *   when it holds a password (`ssh://git@host` names a user, not a secret);
+ * - the user info of a scheme-less `git:` source (`git:user:token@host/...`,
+ *   `git:token@host/...`), which Pi clones over HTTPS, but not an scp-style
+ *   SSH user (`git:git@host:owner/repo`);
+ * - a path segment holding user info, as Pi names the clone folder of such a
+ *   source after its host (`.../git/user:token@host/owner/repo`);
+ * - the value of a query parameter whose name looks like a secret.
+ *
+ * Sources reach the package manager as given; only what is printed changes.
  */
 export function redactSecrets(text: string): string {
 	return text
-		.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@?#]+@/gi, "$1***@")
+		.replace(/(\bhttps?:\/\/)[^\s/@?#]+@/gi, "$1***@")
+		.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@?#:]+:[^\s/@?#]*@/gi, "$1***@")
+		.replace(/(\bgit:)[^\s/@:]+:[^\s/@]+@/gi, "$1***@")
+		.replace(/(\bgit:)(?!git@)[^\s/@:]+@(?=[^\s/:@]+\/)/gi, "$1***@")
+		.replace(/\/(?!git@|\*\*\*@)[^\s/@]+@(?=[^\s/@]+\/)/g, "/***@")
 		.replace(
-			/([?&][^=&#\s]*(?:token|key|secret|passw|pwd|auth|sig|credential)[^=&#\s]*=)[^&#\s]*/gi,
+			/([?&][^=&#\s/]*(?:token|key|secret|passw|pwd|auth|sig|credential)[^=&#\s/]*=)[^&#\s/]*/gi,
 			"$1***",
 		);
+}
+
+/** A source Pi treats as a local path: no `npm:`, `git:` or URL prefix. */
+function isLocalSource(source: string): boolean {
+	return !/^(npm|git|github|http|https|ssh|builtin):/.test(source.trim());
+}
+
+/**
+ * True when a non-local source carries a credential that `redactSecrets`
+ * would hide. Such a source is never installed: Pi would keep the credential
+ * in settings.json and, for a scheme-less `git:` source, in the clone
+ * folder's name, and git would print that folder.
+ */
+export function carriesCredential(source: string): boolean {
+	const trimmed = source.trim();
+	return !isLocalSource(trimmed) && redactSecrets(trimmed) !== trimmed;
 }
 
 function redactedExtension(entry: InstalledExtension): InstalledExtension {
 	return {
 		...entry,
 		source: redactSecrets(entry.source),
+		entries: entry.entries.map(redactSecrets),
 		...(entry.installedPath === undefined
 			? {}
 			: { installedPath: redactSecrets(entry.installedPath) }),
@@ -364,7 +392,7 @@ export async function listModels(input: {
 	}
 	for (const extension of input.extensions) {
 		const resolved = path.resolve(input.cwd, extension);
-		groups.push({ label: resolved, extensionPaths: [resolved] });
+		groups.push({ label: redactSecrets(resolved), extensionPaths: [resolved] });
 	}
 
 	const problems: string[] = [];
@@ -401,10 +429,11 @@ export async function listModels(input: {
 				);
 				continue;
 			}
+			const paths = group.extensionPaths.map(redactSecrets);
 			const where =
-				group.label === group.extensionPaths[0]
+				group.label === paths[0]
 					? group.label
-					: `${group.label} (${group.extensionPaths.join(", ")})`;
+					: `${group.label} (${paths.join(", ")})`;
 			problems.push(
 				`Extension ${where} did not finish loading within ${seconds}; its models are not listed`,
 			);
@@ -435,7 +464,9 @@ export async function listModels(input: {
 			seen.add(key);
 			listed.push({
 				...row,
-				extensionPaths: [...group.extensionPaths],
+				// Loaded as given; printed redacted (a folder Pi named after a
+				// source with a token in it keeps that token).
+				extensionPaths: group.extensionPaths.map(redactSecrets),
 				...(group.label === undefined ? {} : { extensionSource: group.label }),
 			});
 		}
@@ -620,6 +651,11 @@ export async function installExtension(input: {
 	signal?: AbortSignal;
 }): Promise<string> {
 	const source = absoluteSource(input.source, input.cwd, input.home);
+	if (carriesCredential(source)) {
+		throw new SetupError(
+			`${redactSecrets(source)} carries a credential (a password or token in the source). review-panel does not install it, so the credential never lands in settings.json, a folder name or the output. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.`,
+		);
+	}
 	const installed = redactedExtension(
 		await untilAborted(
 			input.sdk.installExtension({

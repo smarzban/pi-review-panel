@@ -109,9 +109,13 @@ the agent folder is `~/.pi/agent`, install and remove change Pi's own `packages`
 output says so. Setup commands race the run's abort signal, so the first Ctrl-C ends them at
 once; the per-group timer stays referenced while it waits (an extension that awaits a promise
 that never settles holds no handle, and an unreferenced timer would let Node end the process
-with the top-level await unsettled). Install and remove set `GIT_TERMINAL_PROMPT=0`. Every
-printed source, `--json` included, goes through `redactSecrets` (URL user info and secret-named
-query values become `***`); the package manager gets the source as given.
+with the top-level await unsettled). Install and remove set `GIT_TERMINAL_PROMPT=0`. `extension
+install` refuses a non-local source that carries a credential (`carriesCredential`: anything
+`redactSecrets` would change) before the package manager runs, because Pi's generic Git parser
+keeps a scheme-less source's user info in the clone folder's host segment and a query in its
+path, stores the source in `settings.json`, and git prints the folder. Every printed source and
+path, `--json` included, still goes through `redactSecrets` for sources recorded earlier; the
+package manager gets the source as given.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
 their trigger matches: `tests` means thin or missing coverage including an untested production
