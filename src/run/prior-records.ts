@@ -30,7 +30,7 @@ type RecencyEntry = PriorRecord & {
 };
 
 /** Absent recency facts sort oldest; name order breaks ties below. */
-const UNKNOWN_RECENCY = Number.NEGATIVE_INFINITY;
+export const UNKNOWN_RECENCY = Number.NEGATIVE_INFINITY;
 
 /**
  * Discovers prior completed run records under `<repoDir>/.review-panel/`,
@@ -72,7 +72,8 @@ export function discoverPriorRecords(repoDir: string): PriorRecord[] {
 }
 
 /** The fixed-width UTC timestamp prefix of a run id, as epoch milliseconds. */
-function runIdRecency(name: string): number {
+/** When a run was reserved, from its id; {@link UNKNOWN_RECENCY} when its id carries no time. */
+export function runIdRecency(name: string): number {
 	// Shape produced by run reservation: YYYY-MM-DDTHH-MM-SS-mmmZ-...
 	const prefix = name.slice(0, 24);
 	if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.test(prefix)) {

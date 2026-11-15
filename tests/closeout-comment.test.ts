@@ -645,12 +645,20 @@ describe("cardRounds (T505)", () => {
 		]);
 	});
 
-	it("a verify that never posted comes after every posted round, with no number", () => {
+	it("a verify that never posted counts after the posted rounds made before it, with no number (R-3)", () => {
+		const at = (hour: number) =>
+			`2026-11-14T${String(hour).padStart(2, "0")}-00-00-000Z-main-abc`;
+		const posted = [r(at(10), 1), r(at(12), 2)];
 		expect(
-			cardRounds([r("v-1", 1)], r("v-9")).map((row) => [row.runId, row.round]),
+			cardRounds(posted, r(at(11))).map((row) => [row.runId, row.round]),
 		).toEqual([
-			["v-1", 1],
-			["v-9", undefined],
+			[at(10), 1],
+			[at(11), undefined],
+		]);
+		// A run id with no creation time cannot be ordered: nothing posted
+		// counts before it.
+		expect(cardRounds(posted, r("v-9")).map((row) => row.runId)).toEqual([
+			"v-9",
 		]);
 		expect(cardRounds([r("v-1", 1)], undefined)).toHaveLength(1);
 	});

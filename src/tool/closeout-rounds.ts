@@ -17,6 +17,7 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 
+import { runIdRecency, UNKNOWN_RECENCY } from "../run/prior-records.js";
 import { NEW_REVIEW_FIX, resolvePriorRunId } from "../run/prior-run.js";
 import { COMPLETE_MARKER, readSignedRecord } from "../run/record.js";
 import type {
@@ -235,10 +236,22 @@ export function postedVerifyRounds(
 }
 
 /**
+ * The time a run was reserved, from its id, or undefined when the id
+ * carries none. A record's run id is bound into its `record.mac`, so this
+ * is the signed order of the owner's runs.
+ */
+function reservedAt(runId: string): number | undefined {
+	const at = runIdRecency(runId);
+	return at === UNKNOWN_RECENCY ? undefined : at;
+}
+
+/**
  * The rounds a card counts: the card's own verify last, and before it each
  * posted round that came before it. A posted round after the card's own is
- * not counted. The card's own verify keeps its posted number, when it has
- * one, from either list.
+ * not counted: by number when the card's verify posted, otherwise by when
+ * each run was reserved (its run id), and a run whose id carries no time
+ * cannot be placed before it. The card's own verify keeps its posted
+ * number, when it has one, from either list.
  */
 export function cardRounds(
 	posted: readonly CloseoutVerifyRound[],
@@ -249,11 +262,15 @@ export function cardRounds(
 	}
 	const round =
 		own.round ?? posted.find((row) => row.runId === own.runId)?.round;
-	const others = posted.filter(
-		(row) =>
-			row.runId !== own.runId &&
-			(round === undefined || (row.round ?? 0) < round),
-	);
+	const ownAt = reservedAt(own.runId);
+	const before = (row: CloseoutVerifyRound): boolean => {
+		if (round !== undefined) {
+			return (row.round ?? 0) < round;
+		}
+		const rowAt = reservedAt(row.runId);
+		return ownAt !== undefined && rowAt !== undefined && rowAt < ownAt;
+	};
+	const others = posted.filter((row) => row.runId !== own.runId && before(row));
 	return [...others, { ...own, ...(round === undefined ? {} : { round }) }];
 }
 

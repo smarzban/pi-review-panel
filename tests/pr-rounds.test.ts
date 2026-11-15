@@ -4355,6 +4355,40 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			});
 		});
 
+		it("counts only the posted rounds made before an unposted named verify (R-3)", async () => {
+			await withRepository(async (repo) => {
+				writeReviewRecord(repo, REVIEW_ID, ROWS);
+				const reviewDir = reviewRecordDir(repo);
+				const EARLY = "2026-11-14T17-00-00-000Z-main-e52d7adb77ca8882";
+				const NAMED = "2026-11-14T18-00-00-000Z-main-e52d7adb77ca8882";
+				const LATE = "2026-11-14T19-00-00-000Z-main-e52d7adb77ca8882";
+				writeVerifyRecord(repo, EARLY, REVIEW_ID, {
+					votes: [{ seat: GLM, items: [resolved("F-2")] }],
+				});
+				writeSignedMarker(reviewDir, "round-1.posted", EARLY, { pr: 12 });
+				writeVerifyRecord(repo, NAMED, REVIEW_ID, {
+					votes: [{ seat: GLM, items: [resolved("F-1"), resolved("F-2")] }],
+					posted: false,
+				});
+				writeVerifyRecord(repo, LATE, REVIEW_ID, {
+					votes: [{ seat: OPUS, items: [resolved("F-1")] }],
+				});
+				writeSignedMarker(reviewDir, "round-2.posted", LATE, { pr: 12 });
+				const gh = fakeGh({ comments: [] });
+				const { body } = await manual(repo, gh, { verifyRunId: NAMED });
+				expect(body).toContain("**2 resolved** in 2 verify rounds");
+				expect(body).toContain("**Verified by:** fix-verification (glm)\n");
+				expect(body).toMatch(
+					/^- \*\*F-1 \[high\]\*\* auth bypass · resolved$/m,
+				);
+				expect(body).toContain(
+					"- **F-2 [medium]** missing timeout · resolved in verify 1",
+				);
+				expect(body).not.toContain("verify 2");
+				expect(body).not.toContain("opus");
+			});
+		});
+
 		it("shows the named verify's signed head, its round number and links", async () => {
 			await withRepository(async (repo) => {
 				writeReviewRecord(repo, REVIEW_ID, ROWS);
