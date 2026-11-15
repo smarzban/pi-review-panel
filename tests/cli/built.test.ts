@@ -5,12 +5,14 @@
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -625,5 +627,95 @@ describe("the packed tarball", () => {
 		);
 		expect(version.status).toBe(0);
 		expect(version.stdout).toBe(`${CLI_VERSION}\n`);
+	});
+});
+
+describe("the pack lifecycle (P-3)", () => {
+	it("npm pack on a clean copy without dist/ builds it, and the unpacked package runs the SDK and installs the skill", () => {
+		// A clean copy: the package's sources, no dist/. node_modules is the
+		// checkout's, for the build tool only.
+		const copy = tempHome();
+		for (const entry of [
+			"package.json",
+			"package-lock.json",
+			"LICENSE",
+			"README.md",
+			"scripts",
+			"src",
+			"prompts",
+			"skills",
+			"docs",
+		]) {
+			cpSync(path.join(REPO, entry), path.join(copy, entry), {
+				recursive: true,
+			});
+		}
+		symlinkSync(
+			path.join(REPO, "node_modules"),
+			path.join(copy, "node_modules"),
+		);
+		expect(existsSync(path.join(copy, "dist"))).toBe(false);
+
+		const out = tempHome();
+		execFileSync("npm", ["pack", "--pack-destination", out], {
+			cwd: copy,
+			stdio: "ignore",
+		});
+		expect(existsSync(path.join(copy, "dist", "src", "cli", "main.js"))).toBe(
+			true,
+		);
+		const tarball = readdirSync(out).find((name) => name.endsWith(".tgz"));
+		execFileSync("tar", ["-xzf", path.join(out, tarball as string)], {
+			cwd: out,
+		});
+		const unpacked = path.join(out, "package");
+		const bin = path.join(unpacked, "dist", "src", "cli", "main.js");
+		expect(existsSync(bin)).toBe(true);
+		// The runtime dependencies, as an install would place them.
+		symlinkSync(
+			path.join(REPO, "node_modules"),
+			path.join(unpacked, "node_modules"),
+		);
+
+		const home = tempHome();
+		mkdirSync(path.join(home, ".claude"));
+		const config = path.join(tempHome(), "config.json");
+		writeFileSync(
+			config,
+			JSON.stringify({
+				roster: [
+					{ id: "opus", provider: "anthropic", model: "claude-opus-4-5" },
+				],
+				defaults: { seats: ["opus"] },
+			}),
+		);
+		const repo = tempRepo();
+		const run = (args: string[]) =>
+			spawnSync(process.execPath, [bin, ...args], {
+				cwd: repo,
+				encoding: "utf8",
+				env: {
+					PATH: process.env.PATH ?? "",
+					HOME: home,
+					PI_REVIEW_PANEL_CONFIG: config,
+				},
+				timeout: 60_000,
+			});
+
+		// An SDK-backed, offline command: the version comes from the SDK, and
+		// the readiness check resolves the roster's model through it.
+		const diagnose = run(["diagnose"]);
+		expect(diagnose.status).toBe(0);
+		expect(diagnose.stdout).toMatch(/^review-panel \S+ \(Pi SDK 1\.5\.2\)$/m);
+		expect(diagnose.stdout).toContain("# Review panel readiness");
+		expect(diagnose.stdout).toContain(
+			'authentication anthropic: Authenticate the Pi provider "anthropic"',
+		);
+
+		const install = run(["skill", "install"]);
+		expect(install.status).toBe(0);
+		expect(
+			realpathSync(path.join(home, ".claude", "skills", "review-panel")),
+		).toBe(realpathSync(path.join(unpacked, "skills", "review-panel")));
 	});
 });

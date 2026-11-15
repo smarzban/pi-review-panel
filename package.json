@@ -31,7 +31,8 @@
 		"prepack": "npm run build",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"check": "biome check ."
+		"check": "biome check .",
+		"smoke:installed": "node scripts/smoke-installed.mjs"
 	},
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "1.5.2"
