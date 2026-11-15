@@ -583,7 +583,7 @@ describe("--close-out", () => {
 		expect(command.kind).toBe("action");
 		const args = (command as { args: Record<string, unknown> }).args;
 		const card = await stopWith(args);
-		expect(card.body).toMatch(/^## Review panel · close-out/u);
+		expect(card.body).toMatch(/^## Review panel\n/u);
 		expect(card.body).toContain("resolved in verify 3");
 	});
 

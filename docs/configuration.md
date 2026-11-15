@@ -532,7 +532,9 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   only the verify comment is posted, and the reply says why, such as
   `PR close-out: not posted (F-2 is still present)`, `PR close-out: not posted (still open: F-2)`
   or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. Without
-  `closeOut`, a verify that leaves nothing open says how to ask for the card. When the owner
+  `closeOut`, a verify that leaves nothing open names the command that posts the card:
+  `review-panel comment --prior-run-id <review> --owner-approved`, once the owner says the
+  rounds are done (a verify cannot be run again at the same head). When the owner
   stops the rounds with ids still open, `comment` posts the card listing them as open. See
   [The close-out card](#the-close-out-card) for what it shows.
 - The close-out posts at most once per review, by these rules and with the exceptions below:

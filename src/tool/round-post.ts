@@ -1144,7 +1144,7 @@ export async function postVerifyRound(
 			lines.push(
 				notPosted(
 					"PR close-out",
-					"not asked for; nothing is open, so pass --close-out on a verify, or post it with comment once the owner says the rounds are done",
+					`not asked for; nothing is open: once the owner says the rounds are done, post it with \`review-panel comment --prior-run-id ${facts.result.priorRunId} --owner-approved\``,
 				),
 			);
 		}
