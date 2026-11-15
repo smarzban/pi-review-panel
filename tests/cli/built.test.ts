@@ -499,6 +499,42 @@ describe("skill install from the built bin", () => {
 		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
 	});
 
+	it("installs and uninstalls through CODEX_HOME and PI_CODING_AGENT_DIR, never the default folders (P-2)", () => {
+		const home = tempHome();
+		const elsewhere = tempHome();
+		const codexHome = path.join(elsewhere, "codex");
+		const piHome = path.join(elsewhere, "pi-agent");
+		mkdirSync(codexHome);
+		mkdirSync(piHome);
+		// Decoys: the default folders exist too, and must not change.
+		mkdirSync(path.join(home, ".codex"));
+		mkdirSync(path.join(home, ".pi", "agent"), { recursive: true });
+		const env = { CODEX_HOME: codexHome, PI_CODING_AGENT_DIR: piHome };
+		const links = [codexHome, piHome].map((dir) =>
+			path.join(dir, "skills", "review-panel"),
+		);
+
+		const installed = cli(home, ["skill", "install"], { env });
+		expect(installed.code).toBe(0);
+		for (const link of links) {
+			expect(realpathSync(link)).toBe(
+				path.join(REPO, "skills", "review-panel"),
+			);
+		}
+		expect(readdirSync(path.join(home, ".codex"))).toEqual([]);
+		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
+		const diagnose = cli(home, ["diagnose"], { env });
+		expect(diagnose.stdout).toContain(`- Codex: linked (${links[0]})`);
+		expect(diagnose.stdout).toContain(`- Pi: linked (${links[1]})`);
+
+		expect(cli(home, ["skill", "uninstall"], { env }).code).toBe(0);
+		for (const link of links) {
+			expect(existsSync(link)).toBe(false);
+		}
+		expect(readdirSync(path.join(home, ".codex"))).toEqual([]);
+		expect(readdirSync(path.join(home, ".pi", "agent"))).toEqual([]);
+	});
+
 	it("finds no agent in an empty home, exits 1 and creates nothing", () => {
 		const home = tempHome();
 		const { code, stdout } = cli(home, ["skill", "install", "--dry-run"]);
