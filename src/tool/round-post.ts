@@ -46,7 +46,11 @@ import {
 	type CloseoutVerifyRound,
 } from "./closeout-comment.js";
 import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
-import { parseJsonPages } from "./closeout-post.js";
+import {
+	CLOSEOUT_HEADING,
+	isCloseoutCardFor,
+	parseJsonPages,
+} from "./closeout-post.js";
 import {
 	chainRounds,
 	REVIEW_ROUND_HEADING,
@@ -106,7 +110,7 @@ const GH_TIMEOUT_MS = 30_000;
 /** Room for a paginated comment listing that holds several full round comments. */
 const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
-export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
+export const CLOSEOUT_ROUND_HEADING = CLOSEOUT_HEADING;
 /**
  * Written exclusively in the review's run record once its close-out card is
  * on the PR; no verify posts a close-out after it. The card is claimed
@@ -994,7 +998,6 @@ function buildCloseout(
 			lost: review.lost,
 			verifyLost: rounds.flatMap((row) => row.lost ?? []),
 			meta: { ...review.run.meta, headOid: result.headOid },
-			heading: CLOSEOUT_ROUND_HEADING,
 			runIds: { review: review.run.runId, verify: verifyRunId },
 			...(links === undefined ? {} : { links }),
 		});
@@ -1040,16 +1043,10 @@ function hasCloseoutFor(
 		if (comment?.user?.login !== target.author) {
 			return false;
 		}
-		const body = typeof comment.body === "string" ? comment.body : "";
-		const [first, second] = body.split(/\r?\n/, 2);
-		if (first?.trim() !== CLOSEOUT_ROUND_HEADING) {
-			return false;
-		}
-		// A card posted before the hidden marker named its review on line 2,
-		// which the tool writes and no seat text reaches.
-		const legacy = `Review ${postedCode(reviewRunId)} `;
-		return (
-			isRunMarkerFor(body, reviewRunId) || second?.startsWith(legacy) === true
+		// Either path's card: `comment`'s too, under its old heading.
+		return isCloseoutCardFor(
+			typeof comment.body === "string" ? comment.body : "",
+			reviewRunId,
 		);
 	});
 }

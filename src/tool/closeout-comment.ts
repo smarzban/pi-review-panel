@@ -1,5 +1,6 @@
 import type { PanelRecord, PlannedSeat, StampedFinding } from "../run/types.js";
 import type { ChainItem, ChainState } from "../run/verify-chain.js";
+import { CLOSEOUT_HEADING } from "./closeout-post.js";
 import {
 	fitCommentBody,
 	markerTail,
@@ -82,8 +83,6 @@ export type CloseoutCommentInput = {
 	baseRef: string;
 	baseOid: string;
 	headOid: string;
-	/** Defaults to `## Review panel`, the manual `comment` card's heading. */
-	heading?: string;
 	/** The run ids the card is for, carried in its hidden marker only. */
 	runIds?: CloseoutRunIds;
 	links?: CloseoutLinks;
@@ -124,7 +123,6 @@ export type AssembleCloseoutInput = AccountCloseoutInput & {
 	verifyLost?: readonly string[];
 	meta: { baseRef: string; baseOid: string; headOid: string };
 	rounds?: readonly CloseoutVerifyRound[];
-	heading?: string;
 	runIds?: CloseoutRunIds;
 	links?: CloseoutLinks;
 };
@@ -306,7 +304,7 @@ export function closeoutCardParts(
 				? `**Final check:** verify ${last.round} lost its seat, so nothing was checked`
 				: `**Final check:** verify ${last.round}, from the reviewed head to the final head`;
 	const head = [
-		input.heading ?? "## Review panel",
+		CLOSEOUT_HEADING,
 		"",
 		// The final check resolves nothing: it has its own line.
 		countsLine(input, rounds.filter((round) => round.final !== true).length),
@@ -536,7 +534,6 @@ export function assembleCloseoutParts(
 		baseRef: input.meta.baseRef,
 		baseOid: input.meta.baseOid,
 		headOid: input.meta.headOid,
-		...(input.heading === undefined ? {} : { heading: input.heading }),
 		...(input.runIds === undefined ? {} : { runIds: input.runIds }),
 		...(input.links === undefined ? {} : { links: input.links }),
 	});

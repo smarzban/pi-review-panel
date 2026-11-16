@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { postCloseoutComment } from "../src/tool/closeout-post.js";
+import {
+	isCloseoutCardFor,
+	type PostCloseoutInput,
+	type PostCloseoutResult,
+	postCloseoutComment,
+} from "../src/tool/closeout-post.js";
+
+const REVIEW = "2026-11-15T10-00-00-000Z-main-review";
 
 const BODY = [
-	"## Review panel",
+	"## Review panel · close-out",
 	"",
 	"0 findings submitted · 0 fixed · 0 dismissed · 0 left as low/advisory",
 	"Seats: terra (holistic)",
 	"Lost: none",
 	"`main` (`a1b2c3d`) → `HEAD` (`e4f5a6b`)",
+	"",
+	`<!-- review-panel review=${REVIEW} verify=v-1 -->`,
 ].join("\n");
 
 const HEAD = "e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3";
@@ -26,13 +35,14 @@ function posterWith(
 	prRows?: "scripted",
 ): {
 	calls: GhCall[];
-	run: typeof postCloseoutComment;
+	run: (input: Omit<PostCloseoutInput, "reviewRunId">) => PostCloseoutResult;
 } {
 	const calls: GhCall[] = [];
 	return {
 		calls,
 		run: (input) =>
 			postCloseoutComment({
+				reviewRunId: REVIEW,
 				...input,
 				runGh: (args, options) => {
 					const call = { args, input: options?.input };
@@ -101,7 +111,7 @@ describe("postCloseoutComment", () => {
 		expect(calls.some((call) => is(call, "--method", "PATCH"))).toBe(false);
 	});
 
-	it("updates the existing author comment with heading ## Review panel", () => {
+	it("updates this review's card by this author, under either heading (T510)", () => {
 		const { calls, run } = posterWith((call) => {
 			if (is(call, "repo", "view")) {
 				return "smarzban/demo";
@@ -118,16 +128,22 @@ describe("postCloseoutComment", () => {
 						html_url: "https://example.test/8",
 					},
 					{
-						id: 9,
-						user: { login: "saeed" },
-						body: "## Review panel\n\nolder card",
-						html_url: "https://example.test/9",
+						id: 3,
+						user: { login: "mallory" },
+						body: BODY,
+						html_url: "https://example.test/3",
 					},
 					{
-						id: 10,
+						id: 4,
 						user: { login: "saeed" },
-						body: "## Review panel\n\nnewer card",
-						html_url: "https://example.test/10",
+						body: "## Review panel · close-out\n\n<!-- review-panel review=other-review verify=v-9 -->",
+						html_url: "https://example.test/4",
+					},
+					{
+						id: 9,
+						user: { login: "saeed" },
+						body: `## Review panel\n\ncard comment posted before T510\n\n<!-- review-panel review=${REVIEW} verify=v-1 -->`,
+						html_url: "https://example.test/9",
 					},
 				]);
 			}
@@ -159,6 +175,7 @@ describe("postCloseoutComment", () => {
 		expect(() =>
 			postCloseoutComment({
 				repository: "/repo",
+				reviewRunId: REVIEW,
 				headOid: HEAD,
 				body: "PR is ready for merge.",
 				runGh: () => {
@@ -330,4 +347,43 @@ describe("postCloseoutComment reads every page of comments", () => {
 			expect(calls.some((call) => is(call, "pr", "view"))).toBe(false);
 		},
 	);
+});
+
+describe("isCloseoutCardFor: one card per review, whichever path posted it (T510)", () => {
+	const marker = `<!-- review-panel review=${REVIEW} verify=v-2 -->`;
+	it.each([
+		[
+			"the close-out heading",
+			`## Review panel · close-out\nbody\n\n${marker}`,
+			true,
+		],
+		[
+			"comment's heading before T510",
+			`## Review panel\nbody\n\n${marker}`,
+			true,
+		],
+		[
+			"a card from before the marker, naming the review on line 2",
+			`## Review panel\nReview \`${REVIEW}\` · head \`abc\``,
+			true,
+		],
+		[
+			"another review's card",
+			"## Review panel · close-out\n\n<!-- review-panel review=other verify=v-2 -->",
+			false,
+		],
+		["a verify round", `## Review panel · verify 2\n\n${marker}`, false],
+		[
+			"the heading not first",
+			`note\n## Review panel · close-out\n\n${marker}`,
+			false,
+		],
+		[
+			"the marker not last",
+			`## Review panel · close-out\n${marker}\nlater`,
+			false,
+		],
+	] as const)("%s", (_name, body, expected) => {
+		expect(isCloseoutCardFor(body, REVIEW)).toBe(expected);
+	});
 });

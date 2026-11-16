@@ -258,7 +258,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   `defaults.prComment: "ownerApproved"`, a round posts only with `--owner-approved`. A post
   that cannot be made ends the report with one line saying why, and the exit code does not
   change. See [Posting rounds to the pull request](../docs/configuration.md#posting-rounds-to-the-pull-request).
-- `comment` posts or updates the manual close-out card on the pull request, from the
+- `comment` posts the review's close-out card (`## Review panel · close-out`), or updates the one
+  already there, whether `verify --close-out` or an earlier `comment` posted it, from the
   review's whole verify chain: each id resolved (with the round that resolved it), dismissed,
   low/advisory, or still open when the owner stops the rounds. Run it straight away when a
   verify left nothing open without `--close-out` (the reply names the command), and before the

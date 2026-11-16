@@ -72,7 +72,10 @@ presentation, not a verdict: the agents judge and the owner merges.
 cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card with `--owner-approved`
 (passed once nothing is open, or when the owner stops the rounds with ids open), found later
-by author plus heading `## Review panel`. A review with no findings and no verify after it has
+by `isCloseoutCardFor` (`src/tool/closeout-post.ts`): author, heading `## Review panel · close-out`
+(or the old `## Review panel`) and this review's marker, so it updates the card a `--close-out`
+posted, and a later `--close-out` finds the card `comment` posted. Both paths render the one
+heading. A review with no findings and no verify after it has
 no card: its review comment ends `No findings · no close-out needed` (`NO_CLOSEOUT_NEEDED`; only when some seat voted, since a review where none did checked nothing), and
 `comment` refuses it right after loading the chain, before any seat or post. It posts only to an open PR whose head is the commit
 the card is about: the one `--pr` names, or the one open PR at that head. Both cards are built from the review and its whole verify chain (`comment` reads it
@@ -245,8 +248,9 @@ tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No ru
 visible text: each body ends with one hidden `<!-- review-panel review=<id> verify=<id> -->`
 marker holding only ids of the run-id character set (an id with `--`, from a base ref such as
 `HEAD^`, is safe: the marker is its own HTML block, which only `-->` ends), and the close-out
-duplicate check matches author, first-line heading and that exact marker as the last non-empty
-line, or, for a card posted before the marker, ``Review `<id>` `` on line 2.
+duplicate check (and `comment`'s lookup) matches author, first-line heading (`## Review panel ·
+close-out`, or the old `## Review panel`) and that exact marker as the last non-empty line, or,
+for a card posted before the marker, ``Review `<id>` `` on line 2.
 Bodies are cut by rows in order (`fitCommentBody`): a group that does not fit whole posts its
 header, first member and a cut line, later rows are still tried, and what is left then goes to
 that group's further members; a plain row, or a group that cannot fit even its first member,

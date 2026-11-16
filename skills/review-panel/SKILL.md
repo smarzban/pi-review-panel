@@ -253,5 +253,5 @@ line `Latest verify:` names the final check: verify against that run id next. Pa
 latest verify; an older one is refused. Pass `--dismissed` and `--low-advisory` only for ids
 still open (or, with no verify, never placed): comment refuses an id a round already resolved,
 dismissed or left as low/advisory, because the card shows it as that round left it. An open id
-you name here is dismissed (or low/advisory) on the card, not open. It updates the one existing panel card instead of opening a second
+you name here is dismissed (or low/advisory) on the card, not open. It updates this review's one close-out card, even one `--close-out` posted, instead of opening a second
 one. Never write ready to merge on the card.

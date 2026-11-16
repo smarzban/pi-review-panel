@@ -593,8 +593,9 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
     round claim, and checks `closeout.posted` again after the create. Only the creator of a claim
     posts. Before posting it checks the PR's comments for a close-out of this review by the same
-    author: the first line is `## Review panel · close-out` and the last non-empty line is exactly
-    that review's hidden marker (the manual card does not count; its heading differs). Seat text
+    author: the first line is `## Review panel · close-out` (or `## Review panel`, the heading
+    `comment` used before) and the last non-empty line is exactly that review's hidden marker, so
+    a card `comment` posted counts too. Seat text
     cannot make that line, because posted text escapes `<`. A review whose id cannot be in a marker
     is never found this way. If one is there it writes
     `closeout.posted` and posts nothing: `PR close-out: not posted (a close-out for this review is
@@ -682,9 +683,11 @@ for any review, and `comment` posts it too.
 
 The `comment` action is the manual path. With `ownerApproved: true`, passed once a verify left
 nothing open without `--close-out` or after the owner stops the rounds with ids open, it posts
-or updates its own card with the heading `## Review panel`, separate from the
-`## Review panel · close-out` comment a verify posts with `--close-out`. Its card is cut by whole
-rows below the same limit.
+or updates the review's one close-out card, `## Review panel · close-out`, the same card a verify
+posts with `--close-out`: it updates the card of this review by this author (that heading, or the
+old `## Review panel`, and this review's marker as the last line) wherever it came from, never
+another review's or another author's, and creates one only when there is none. Its card is cut by
+whole rows below the same limit.
 
 ### The close-out card
 

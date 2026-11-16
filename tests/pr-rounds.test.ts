@@ -3237,7 +3237,7 @@ describe("fix round 2: the manual card is capped too (L5)", () => {
 		});
 		expect(card.length).toBeLessThan(GITHUB_COMMENT_LIMIT);
 		expect(card).toMatch(/- \d+ row\(s\) cut to fit GitHub's comment limit/);
-		expect(card.split("\n")[0]).toBe("## Review panel");
+		expect(card.split("\n")[0]).toBe("## Review panel · close-out");
 	});
 });
 
@@ -3587,7 +3587,7 @@ describe("T498: readable PR comments", () => {
 		});
 		expect(card).toBe(
 			[
-				"## Review panel",
+				"## Review panel · close-out",
 				"",
 				"**1 finding** (1 low) · 1 left as low/advisory",
 				"**Review seats:** holistic (terra, glm), tests (terra)",
@@ -3799,11 +3799,12 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			"mallory",
 			`## Review panel · review\n\n<!-- review-panel review=${REVIEW_ID} -->`,
 		),
-		// The manual card carries the same marker as verify 1.
+		// Verify 1's marker under the review's heading. (A card with this
+		// review's marker is its close-out card, which stops a second card.)
 		comment(
 			2,
 			"saeed",
-			`## Review panel\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+			`## Review panel · review\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 		),
 		// The marker only in the middle of the body.
 		comment(
@@ -4252,7 +4253,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				const base = git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7);
 				expect(body).toBe(
 					[
-						"## Review panel",
+						"## Review panel · close-out",
 						"",
 						"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 left as low/advisory",
 						"**Review seats:** holistic (terra)",

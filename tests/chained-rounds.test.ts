@@ -29,6 +29,7 @@ import type { SeatSpec } from "../src/seat/sdk-session.js";
 import {
 	findCloseoutPr,
 	type PostCloseoutInput,
+	postCloseoutComment,
 } from "../src/tool/closeout-post.js";
 import { postedText } from "../src/tool/posted-text.js";
 import type { RoundGhRunner } from "../src/tool/round-post.js";
@@ -208,6 +209,15 @@ const runGh: RoundGhRunner = (args, options) => {
 		const html_url = `https://github.com/${REPO_SLUG}/pull/12#issuecomment-${id}`;
 		comments.push({ id, html_url, body, user: { login: "saeed" } });
 		return JSON.stringify({ id, html_url });
+	}
+	const patched = /issues\/comments\/(\d+)/.exec(joined);
+	if (patched !== null && joined.includes("PATCH")) {
+		const row = comments.find((entry) => entry.id === Number(patched[1]));
+		if (row === undefined) {
+			throw new Error(`no comment ${patched[1]}`);
+		}
+		row.body = (JSON.parse(options?.input ?? "{}") as { body: string }).body;
+		return JSON.stringify({ id: row.id, html_url: row.html_url });
 	}
 	if (/issues\/12\/comments/.test(joined)) {
 		return JSON.stringify(comments);
@@ -651,7 +661,7 @@ describe("a review with no findings (T510)", () => {
 	it("once a verify follows, comment posts the card", async () => {
 		await verify({ priorRunId: CLEAN, head: commits[2] }, { items: [] });
 		const card = await stopWith({ priorRunId: CLEAN });
-		expect(card.body).toMatch(/^## Review panel\n/u);
+		expect(card.body).toMatch(/^## Review panel · close-out\n/u);
 	});
 });
 
@@ -724,6 +734,89 @@ describe("a verify with nothing open (T510)", () => {
 	});
 });
 
+/** `comment` posting through gh as a script, as it does for real. */
+async function commentForReal(priorRunId: string) {
+	return textOf(
+		await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{
+				deps: {
+					...deps(),
+					postComment: (input: PostCloseoutInput) =>
+						postCloseoutComment({ ...input, runGh: runGh as never }),
+				},
+			},
+		),
+	);
+}
+
+function verifyComments() {
+	return comments.filter((row) =>
+		row.body.startsWith("## Review panel · verify "),
+	);
+}
+
+describe("one close-out card per review, whichever path posts it (T510)", () => {
+	beforeEach(() => {
+		writeReview(CLEAN, []);
+	});
+
+	it("comment after a --close-out card and more verifies updates that card, linking every round", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], closeOut: true },
+			{ items: [] },
+		);
+		expect(closeouts()).toHaveLength(1);
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3] },
+			{ items: [] },
+		);
+		await verify({ priorRunId: v2.runId, head: commits[4] }, { items: [] });
+		const cardId = comments.find((row) =>
+			row.body.startsWith("## Review panel · close-out"),
+		)?.id;
+		const reply = await commentForReal(CLEAN);
+		expect(reply.split("\n")[0]).toBe("Posted comment on PR #12 (updated)");
+		expect(closeouts()).toHaveLength(1);
+		expect(
+			comments.filter((row) => row.body.startsWith("## Review panel")),
+		).toHaveLength(4);
+		const card = comments.find((row) => row.id === cardId)?.body ?? "";
+		expect(card.split("\n")[0]).toBe("## Review panel · close-out");
+		expect(card).toContain("3 verify rounds");
+		for (const round of verifyComments()) {
+			expect(card).toContain(`(${round.html_url})`);
+		}
+	});
+
+	it("--close-out after a comment card posts no second card", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [] },
+		);
+		const reply = await commentForReal(CLEAN);
+		expect(reply.split("\n")[0]).toBe("Posted comment on PR #12 (created)");
+		expect(closeouts()).toHaveLength(1);
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
+			{ items: [] },
+		);
+		expect(v2.reply).toContain(
+			"PR close-out: not posted (a close-out for this review is already on PR #12)",
+		);
+		expect(closeouts()).toHaveLength(1);
+		expect(
+			comments.filter((row) => row.body.startsWith("## Review panel\n")),
+		).toEqual([]);
+	});
+});
+
 describe("why this round (T510)", () => {
 	it("the verify comment shows the caller's scoping note as one inert line under the range", async () => {
 		writeReview(CLEAN, []);
@@ -789,7 +882,7 @@ describe("--close-out", () => {
 		expect(command.kind).toBe("action");
 		const args = (command as { args: Record<string, unknown> }).args;
 		const card = await stopWith(args);
-		expect(card.body).toMatch(/^## Review panel\n/u);
+		expect(card.body).toMatch(/^## Review panel · close-out\n/u);
 		expect(card.body).toContain("resolved in verify 3");
 	});
 

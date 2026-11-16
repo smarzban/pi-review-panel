@@ -1,6 +1,29 @@
 import { execFileSync } from "node:child_process";
+import { isRunMarkerFor, postedCode } from "./posted-text.js";
 
-export const CLOSEOUT_HEADING = "## Review panel";
+/** The close-out card's one heading, whichever path posts it. */
+export const CLOSEOUT_HEADING = "## Review panel · close-out";
+
+/** The heading `comment` gave its card before it took the one above. */
+const LEGACY_CARD_HEADING = "## Review panel";
+
+/**
+ * Is this body the close-out card of this review: either heading as its
+ * first line, and this review's marker as its last non-empty line (or, for a
+ * card posted before the marker, the review on line 2, which the tool writes
+ * and no seat text reaches)? The author is the caller's to check.
+ */
+export function isCloseoutCardFor(body: string, reviewRunId: string): boolean {
+	const [first, second] = body.split(/\r?\n/, 2);
+	const heading = first?.trim();
+	if (heading !== CLOSEOUT_HEADING && heading !== LEGACY_CARD_HEADING) {
+		return false;
+	}
+	const legacy = `Review ${postedCode(reviewRunId)} `;
+	return (
+		isRunMarkerFor(body, reviewRunId) || second?.startsWith(legacy) === true
+	);
+}
 
 export type GhRunner = (
 	args: readonly string[],
@@ -17,6 +40,8 @@ export type CommentListing = {
 
 export type PostCloseoutInput = {
 	repository: string;
+	/** The review the card is about: its card on the PR is updated, never another's. */
+	reviewRunId: string;
 	/** The head commit the card is about: the verify's, or else the review's. */
 	headOid: string;
 	/** The card as posted when there is no `render`. */
@@ -166,13 +191,6 @@ function parseComments(raw: string): IssueComment[] {
 	return rows as IssueComment[];
 }
 
-function hasCloseoutHeading(body: string | undefined): boolean {
-	if (body === undefined) {
-		return false;
-	}
-	return body.split(/\r?\n/).some((line) => line.trim() === CLOSEOUT_HEADING);
-}
-
 function parseCreated(raw: string): { id: number; url: string } {
 	const parsed: unknown = JSON.parse(trimOutput(raw));
 	if (
@@ -309,7 +327,11 @@ function resolvePr(
 	};
 }
 
-/** Find-or-update the one owner comment whose body has heading `## Review panel`. */
+/**
+ * Find-or-update this review's one close-out card: the owner's comment that
+ * `isCloseoutCardFor` this review, whether `comment` or `verify --close-out`
+ * posted it.
+ */
 export function postCloseoutComment(
 	input: PostCloseoutInput,
 ): PostCloseoutResult {
@@ -339,7 +361,9 @@ export function postCloseoutComment(
 	);
 	const existing = comments.find(
 		(comment) =>
-			comment.user?.login === author && hasCloseoutHeading(comment.body),
+			comment.user?.login === author &&
+			typeof comment.body === "string" &&
+			isCloseoutCardFor(comment.body, input.reviewRunId),
 	);
 
 	const body =

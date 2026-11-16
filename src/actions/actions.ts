@@ -1200,6 +1200,7 @@ export async function commentAction(
 	const post = () =>
 		resolved.postComment({
 			repository: repoDir,
+			reviewRunId: facts.run.runId,
 			headOid,
 			body,
 			render: (listing) =>
