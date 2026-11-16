@@ -536,7 +536,10 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   verify (or `none`), each kept id as resolved, still present or inconclusive with the panel's
   one-line evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept,
   and the regressions as new findings, by their `V<link>-R<n>` id, with `· undoes F-1` when
-  one undoes an earlier fix. Verify checks `dismissed` and `lowAdvisory` against the review
+  one undoes an earlier fix. When nothing was open before the verify (no open id, and no
+  finding left to place) and at least one seat voted, its headline, in the comment and the
+  reply, says `Nothing was open; this round checked the new commits for regressions only`
+  instead of `no kept ids`. Verify checks `dismissed` and `lowAdvisory` against the review
   record and the chain before any seat runs.
 - A verify never posts the close-out card by itself. With `closeOut: true` (CLI `--close-out`),
   it posts the card as a separate comment, `## Review panel · close-out`, only when every verify

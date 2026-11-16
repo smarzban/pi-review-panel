@@ -104,6 +104,11 @@ export type RunVerifyResult = {
 	cleanupError?: string;
 	/** This verify was the final check (see {@link RunVerifyInput.final}). */
 	final?: true;
+	/**
+	 * Nothing was open before this verify (no open id, no finding left to
+	 * place), so it checked the new commits for regressions only.
+	 */
+	nothingOpen?: true;
 };
 
 export type VerifyProgressEvent = {
@@ -436,6 +441,11 @@ export async function runVerify(
 	const kept = input.keptFindingIds.map((id) =>
 		verifyItemOf(state.items.get(id) as ChainItem),
 	);
+	const nothingOpen =
+		!final &&
+		input.keptFindingIds.length === 0 &&
+		state.open.length === 0 &&
+		[...state.items.values()].every((item) => item.state.status !== "unplaced");
 	const undoable = undoableOf(state.items.values(), chain.links);
 	if (final && undoable.length === 0) {
 		throw new Error(
@@ -688,6 +698,7 @@ export async function runVerify(
 			outcomes,
 			...(cleanupError === undefined ? {} : { cleanupError }),
 			...(final ? { final: true as const } : {}),
+			...(nothingOpen ? { nothingOpen: true as const } : {}),
 		};
 	}
 }

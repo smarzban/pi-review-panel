@@ -566,6 +566,9 @@ describe("one number per round (S-4)", () => {
 });
 
 const CLEAN = "2026-11-15T10-00-00-000Z-main-clean";
+const NOTHING_OPEN =
+	"Nothing was open; this round checked the new commits for regressions only";
+
 describe("a review with no findings (T510)", () => {
 	beforeEach(() => {
 		writeReview(CLEAN, []);
@@ -613,6 +616,75 @@ describe("a review with no findings (T510)", () => {
 		await verify({ priorRunId: CLEAN, head: commits[2] }, { items: [] });
 		const card = await stopWith({ priorRunId: CLEAN });
 		expect(card.body).toMatch(/^## Review panel\n/u);
+	});
+});
+
+describe("a verify with nothing open (T510)", () => {
+	it("the first verify of a review with no findings says so plainly", async () => {
+		writeReview(CLEAN, []);
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [] },
+		);
+		const headline = `1/1 voted · ${NOTHING_OPEN} · no regressions`;
+		expect(v1.reply.split("\n")[1]).toBe(headline);
+		expect(v1.body.split("\n")[2]).toBe(headline);
+		expect(`${v1.reply}\n${v1.body}`).not.toContain("no kept ids");
+	});
+
+	it("a round whose every seat was lost does not say it checked anything", async () => {
+		writeReview(CLEAN, []);
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [], lost: true },
+		);
+		expect(v1.reply.split("\n")[1]).toBe(
+			"0/1 voted · no kept ids · no regressions",
+		);
+		expect(v1.body.split("\n")[2]).toBe(
+			"0/1 voted · no kept ids · no regressions",
+		);
+		expect(`${v1.reply}\n${v1.body}`).not.toContain(NOTHING_OPEN);
+	});
+
+	it("after the chain closed everything, says so plainly instead of no kept ids", async () => {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		const v3 = await verify(
+			{ priorRunId: v2.runId, head: commits[4] },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		expect(v3.reply).not.toContain(NOTHING_OPEN);
+		const v4 = await verify(
+			{ priorRunId: v3.runId, head: commits[5] },
+			{ items: [] },
+		);
+		expect(v4.reply.split("\n")[1]).toBe(
+			`1/1 voted · ${NOTHING_OPEN} · no regressions`,
+		);
+		expect(v4.body.split("\n")[2]).toBe(
+			`1/1 voted · ${NOTHING_OPEN} · no regressions`,
+		);
+	});
+
+	it("a round that names no ids while some are open keeps no kept ids", async () => {
+		const v1 = await round1();
+		const v2 = await verify(
+			{
+				priorRunId: v1.runId,
+				head: commits[3],
+				keptFindingIds: [],
+				dismissed: [
+					{ id: "F-2", reason: "by design" },
+					{ id: "F-5", reason: "redacted upstream" },
+					{ id: "V1-R1", reason: "not reachable" },
+				],
+			},
+			{ items: [] },
+		);
+		expect(v2.reply.split("\n")[1]).toBe(
+			"1/1 voted · no kept ids · no regressions",
+		);
 	});
 });
 

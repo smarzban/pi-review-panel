@@ -84,6 +84,7 @@ import {
 	formatSuggestion,
 	formatSuggestionsUnavailable,
 	inert,
+	NOTHING_OPEN,
 	orderFindings,
 	reviewHeadLines,
 	reviewLostLine,
@@ -750,7 +751,9 @@ export function renderVerifyRound(
 	const failed = result.outcomes.filter((row) => row.outcome.kind === "failed");
 	const keptSummary =
 		seen.keptIds.length === 0
-			? "no kept ids"
+			? result.nothingOpen === true && seen.voted > 0
+				? NOTHING_OPEN
+				: "no kept ids"
 			: seen.keptIds
 					.map((id) => githubSafe(dispositionLabel(seen, id), 80))
 					.join(", ");
