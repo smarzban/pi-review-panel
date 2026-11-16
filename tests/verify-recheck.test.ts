@@ -107,6 +107,10 @@ let abortedLenses: string[];
 let activePrompts: number;
 /** Sessions waiting in a `hold`. */
 let holding: number;
+/** When set, every prompt waits until this many prompts have started. */
+let barrier:
+	| { need: number; arrived: number; open: () => void; wait: Promise<void> }
+	| undefined;
 /** Each verify seat's disposition per id; resolved when not named. */
 let verifyScript: Map<string, "resolved" | "still present">;
 /** Every session the runner opened, with its spec and its prompt. */
@@ -186,6 +190,7 @@ beforeEach(() => {
 	abortedLenses = [];
 	activePrompts = 0;
 	holding = 0;
+	barrier = undefined;
 	verifyScript = new Map();
 	sessions = [];
 	refusals = [];
@@ -223,6 +228,13 @@ const factory: SdkSessionFactory = async (input) => {
 		entry.prompt ||= text;
 		if (submitted) {
 			return;
+		}
+		if (barrier !== undefined) {
+			barrier.arrived += 1;
+			if (barrier.arrived >= barrier.need) {
+				barrier.open();
+			}
+			await barrier.wait;
 		}
 		if (recheckScript.get(spec.lens) === "hold") {
 			// Waits until the runner aborts this session.
@@ -713,6 +725,86 @@ describe("verify --recheck", () => {
 		expect(v3.reply).toContain(both);
 		expect(v3.body).not.toContain("regressions only");
 		expect(v3.reply).not.toContain("regressions only");
+	});
+
+	it("progress counts every seat, recheck seats included, and how many run at once", async () => {
+		let open = () => undefined as void;
+		const wait = new Promise<void>((resolve) => {
+			open = resolve;
+		});
+		// The verify seat and both recheck seats are all running before
+		// any of them submits.
+		barrier = { need: 3, arrived: 0, open, wait };
+		const views: Array<{
+			event: string;
+			active?: number;
+			completed?: number;
+			total?: number;
+		}> = [];
+		await verifyAction(
+			{
+				repoDir: repo,
+				priorRunId: REVIEW,
+				head: commits[2] as string,
+				keptFindingIds: ["F-1", "F-2"],
+				recheck: ["tests"],
+			},
+			{ deps: deps(), onProgress: (view) => views.push(view as never) },
+		);
+		expect(views[0]).toMatchObject({
+			event: "started",
+			total: 3,
+			completed: 0,
+		});
+		const seatViews = views.slice(1);
+		expect(seatViews.every((view) => view.total === 3)).toBe(true);
+		expect(Math.max(...seatViews.map((view) => view.active ?? 0))).toBe(3);
+		const finished = seatViews.filter((view) => view.event === "finished");
+		expect(finished.map((view) => view.completed)).toEqual([1, 2, 3]);
+		expect(finished.at(-1)?.active).toBe(0);
+	});
+
+	it("the recheck seat data names what this round and earlier rounds dismissed or left as low/advisory", async () => {
+		recheckScript.set("tests", [NIT]);
+		const v1 = await verify({
+			priorRunId: REVIEW,
+			head: commits[2],
+			keptFindingIds: ["F-1"],
+			dismissed: [{ id: "F-2", reason: "retries are capped upstream" }],
+			recheck: ["tests"],
+		});
+		const data1 = v1.seats.find((row) => row.spec.lens === "tests")?.spec
+			.dataAppendix;
+		expect(data1).toContain(
+			"- F-2 [medium, dismissed] retry loop never backs off (src/cache.ts:3)",
+		);
+		expect(data1).toContain(
+			"- F-1 [high, open] cache key misses the tenant (src/cache.ts:3)",
+		);
+		recheckScript.set("tests", []);
+		const v2 = await verify({
+			priorRunId: v1.runId,
+			head: commits[3],
+			lowAdvisory: ["V1-F1"],
+			dismissed: [{ id: "V1-F2", reason: "same as V1-F1" }],
+			recheck: ["tests"],
+		});
+		const data2 = v2.seats.find((row) => row.spec.lens === "tests")?.spec
+			.dataAppendix;
+		// Earlier rounds' judgments, from the chain.
+		expect(data2).toContain(
+			"- F-1 [high, resolved] cache key misses the tenant (src/cache.ts:3)",
+		);
+		expect(data2).toContain(
+			"- F-2 [medium, dismissed] retry loop never backs off (src/cache.ts:3)",
+		);
+		// This round's own, from the call.
+		expect(data2).toContain(
+			"- V1-F1 [low, low/advisory] backoff constant is unnamed (src/retry.ts:2)",
+		);
+		expect(data2).toContain(
+			"- V1-F2 [low, dismissed] backoff constant is unnamed (src/retry.ts:2)",
+		);
 	});
 
 	it("nothing found: the round says nothing new", async () => {

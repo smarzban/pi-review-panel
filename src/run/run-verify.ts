@@ -154,6 +154,8 @@ export type VerifyProgressEvent = {
 	seat: PlannedSeat;
 	completedSeats: number;
 	totalSeats: number;
+	/** Seats running now, verify and recheck seats together. */
+	activeSeats?: number;
 	attempts?: 1 | 2;
 	tokens?: number;
 	lastTool?: string;
@@ -678,6 +680,11 @@ export async function runVerify(
 	);
 	const totalSeats = panel.length + recheckSeats.length;
 	let completedSeats = 0;
+	// The verify loop runs one seat at a time; the recheck scheduler counts
+	// its own.
+	let verifyActive = 0;
+	let recheckActive = 0;
+	const activeSeats = () => verifyActive + recheckActive;
 
 	const record = reserve(input.repoDir, baseOid, { role: "verify" });
 	// No forks: before any seat runs, this verify claims the record it
@@ -722,11 +729,13 @@ export async function runVerify(
 				if (options.abortSignal?.aborted) {
 					throw new VerifyCancelledError();
 				}
+				verifyActive += 1;
 				options.onProgress?.({
 					kind: "seat-started",
 					seat,
 					completedSeats,
 					totalSeats,
+					activeSeats: activeSeats(),
 				});
 				const live: LiveSeatProbe = {};
 				const heartbeat = setInterval(() => {
@@ -736,6 +745,7 @@ export async function runVerify(
 						seat,
 						completedSeats,
 						totalSeats,
+						activeSeats: activeSeats(),
 						...(snap === undefined
 							? {}
 							: {
@@ -828,11 +838,13 @@ export async function runVerify(
 					throw new VerifyCancelledError();
 				}
 				completedSeats += 1;
+				verifyActive -= 1;
 				options.onProgress?.({
 					kind: "seat-finished",
 					seat,
 					completedSeats,
 					totalSeats,
+					activeSeats: activeSeats(),
 				});
 			}
 		};
@@ -862,11 +874,13 @@ export async function runVerify(
 						if (event.kind === "seat-finished") {
 							completedSeats += 1;
 						}
+						recheckActive = event.activeSeats;
 						options.onProgress?.({
 							kind: event.kind,
 							seat: event.seat,
 							completedSeats,
 							totalSeats,
+							activeSeats: activeSeats(),
 							...(event.attempts === undefined
 								? {}
 								: { attempts: event.attempts }),

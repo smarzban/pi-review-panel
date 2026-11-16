@@ -176,7 +176,7 @@ export function progressFromVerifyEvent(
 		event: event.kind.replace("seat-", ""),
 		elapsedMs,
 		seat: `${event.seat.rosterId}/${event.seat.lens}`,
-		active: event.kind === "seat-finished" ? 0 : 1,
+		active: event.activeSeats ?? (event.kind === "seat-finished" ? 0 : 1),
 		completed: event.completedSeats,
 		total: event.totalSeats,
 		...(event.cost === undefined ? {} : { cost: event.cost }),
