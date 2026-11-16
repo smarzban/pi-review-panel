@@ -582,7 +582,7 @@ function validateCommentInput(
 ): CommentInput {
 	if (args.ownerApproved !== true) {
 		throw new Error(
-			"comment refused: ownerApproved must be true after the owner asked to post",
+			"comment refused: ownerApproved must be true: pass it once nothing is open, or when the owner stops the rounds with ids open; when the owner config asks for approval first, only after the owner's yes",
 		);
 	}
 	const priorRunId = validateNonEmptyString(args.priorRunId, "priorRunId");

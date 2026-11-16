@@ -475,7 +475,9 @@ describe("exit codes never encode review content", () => {
 		const h = harness();
 		expect(await h.run(["comment", "--prior-run-id", "r"])).toBe(EXIT_FAILED);
 		expect(h.calls.comment).toBeUndefined();
-		expect(h.err()).toContain("--owner-approved");
+		expect(h.err()).toContain(
+			"comment refused: pass --owner-approved (ownerApproved: true) once nothing is open, or when the owner stops the rounds with ids open; when the owner config asks for approval first, only after the owner's yes",
+		);
 	});
 
 	it("exits 1 when an action throws (a refusal or an operational failure)", async () => {
@@ -663,6 +665,9 @@ describe("output", () => {
 		]) {
 			expect(h.out()).toContain(command);
 		}
+		expect(h.out()).toContain(
+			"Post or update the manual close-out PR card, once nothing is open or when the owner stops the rounds: --prior-run-id <run> --owner-approved",
+		);
 	});
 });
 
