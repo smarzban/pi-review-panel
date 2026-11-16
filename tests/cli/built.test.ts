@@ -875,6 +875,43 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 		},
 		120_000,
 	);
+	it.each([
+		[`git:h.invalid/o/r@v1?t=${SECRET}`, "git:h.invalid/o/r@v1?***"],
+		[
+			`npm:pkg@https://h.invalid/x.tgz#${SECRET}`,
+			"npm:pkg@https://h.invalid/x.tgz#***",
+		],
+	])(
+		"a recorded %s is listed and removed as %s (R-6, R-7)",
+		(source, printed) => {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			mkdirSync(agent, { recursive: true });
+			writeFileSync(
+				path.join(agent, "settings.json"),
+				JSON.stringify({ packages: [source] }),
+			);
+			const env = { PI_CODING_AGENT_DIR: agent };
+			const listed = cli(home, ["extension", "list", "--json"], { env });
+			expect(listed.code).toBe(0);
+			expect(JSON.parse(listed.stdout).extensions[0].source).toBe(printed);
+			const text = cli(home, ["extension", "list"], { env });
+			expect(text.stdout).toContain(printed);
+			expect(
+				listed.stdout + listed.stderr + text.stdout + text.stderr,
+			).not.toContain(SECRET);
+
+			const removed = cli(home, ["extension", "remove", printed], { env });
+			expect(removed.code).toBe(0);
+			expect(removed.stdout).toContain(`Removed ${printed} from ${agent}.`);
+			expect(removed.stdout + removed.stderr).not.toContain(SECRET);
+			expect(
+				JSON.parse(readFileSync(path.join(agent, "settings.json"), "utf8"))
+					.packages,
+			).toEqual([]);
+		},
+		120_000,
+	);
 });
 
 describe("an install stopped by Ctrl-C (N-3)", () => {

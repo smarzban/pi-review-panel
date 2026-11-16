@@ -194,13 +194,27 @@ function isRegistryPackage(
 }
 
 /**
- * The exact credential text in a parsed source: user info that can hold a
- * secret (with its `@`), query strings (with their `?`) and, in a git source,
- * fragments (with their `#`, which Pi keeps in the clone URL and folder).
- * Printing a source, or a folder Pi named after it, hides these.
+ * The exact credential text in a source and Pi's parse of it: user info that
+ * can hold a secret (with its `@`), and, for any source that is not a local
+ * path, everything after the first `?` and everything after the first `#` of
+ * the source string, whichever field Pi's parser put it in (a ref, a version,
+ * a path), plus the query and fragment of the fields Pi derives a clone URL
+ * and folder from. Printing a source, or a folder Pi named after it, hides
+ * these. A local path is never changed.
  */
-export function credentialParts(parsed: ParsedSource): string[] {
+export function credentialParts(
+	source: string,
+	parsed: ParsedSource,
+): string[] {
 	const parts: string[] = [];
+	if (parsed.type !== "local") {
+		for (const mark of ["?", "#"]) {
+			const at = source.indexOf(mark);
+			if (at !== -1) {
+				parts.push(source.slice(at));
+			}
+		}
+	}
 	const fromUrl = (url: string, allowSshUser: boolean) => {
 		const found = urlParts(url);
 		if (
@@ -347,7 +361,7 @@ async function redactorFor(
 ): Promise<(text: string) => string> {
 	let parts: string[] = [];
 	try {
-		parts = credentialParts(await sdk.parseSource(source));
+		parts = credentialParts(source, await sdk.parseSource(source));
 	} catch {
 		// Unparseable: the source-string rules still apply.
 	}

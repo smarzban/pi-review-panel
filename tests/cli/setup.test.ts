@@ -1344,7 +1344,7 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 	);
 });
 
-describe("a recorded source's credential never shows in list or remove (R-4, R-5)", () => {
+describe("a recorded source's credential never shows in list, models or remove (R-4, R-5, R-6, R-7)", () => {
 	const S = TOKEN;
 
 	function recorded(source: string) {
@@ -1363,36 +1363,64 @@ describe("a recorded source's credential never shows in list or remove (R-4, R-5
 				input.progress(`Removing ${input.source}...`);
 				return input.source === source;
 			},
+			// Each extension package hangs, so models names it as not loaded.
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: new Promise<ModelGroup>(() => {}),
 		});
 		return { sdk, removed };
 	}
 
-	// A fragment is hidden like a query: Pi keeps it in the clone URL (R-5).
-	it.each([
-		[`git:h.invalid/o/r#${S}`, "git:h.invalid/o/r#***"],
-		[`https://h.invalid/o/r@v1#${S}`, "https://h.invalid/o/r@v1#***"],
-	])("list and list --json show %s as %s", async (source, printed) => {
-		const { sdk } = recorded(source);
-		for (const argv of [
-			["extension", "list"],
-			["extension", "list", "--json"],
-		]) {
-			const h = harness({ sdk });
-			expect(await h.run(argv)).toBe(EXIT_OK);
-			expect(h.out(), argv.join(" ")).toContain(printed);
-			expect(h.out() + h.err(), argv.join(" ")).not.toContain(S);
-		}
-	});
-
-	// Remove by the printed form or the exact source shows the printed form,
-	// in Pi's progress line and the answer (R-4).
-	describe.each([
+	// Every recorded source that is not a local path, as list prints it:
+	// user info hidden, and everything after the first ? and after the first #
+	// of the source string, whichever field Pi's parser put it in.
+	const RECORDED: [string, string][] = [
+		// R-4, R-5: a query, user info, another SSH user, a fragment.
 		[`git:h.invalid/o/r?t=${S}`, "git:h.invalid/o/r?***"],
 		[`git:user:${S}@h.invalid/o/r`, "git:***@h.invalid/o/r"],
-		[`ssh://deploy@h.invalid/o/r`, "ssh://***@h.invalid/o/r"],
+		[`ssh://${S}@h.invalid/o/r`, "ssh://***@h.invalid/o/r"],
 		[`git:h.invalid/o/r#${S}`, "git:h.invalid/o/r#***"],
 		[`https://h.invalid/o/r@v1#${S}`, "https://h.invalid/o/r@v1#***"],
-	])("remove of the recorded %s", (source, printed) => {
+		// R-6: a query or fragment after an @ref, which Pi puts in the ref.
+		[`git:h.invalid/o/r@v1?t=${S}`, "git:h.invalid/o/r@v1?***"],
+		[`git:h.invalid/o/q@v1#${S}`, "git:h.invalid/o/q@v1#***"],
+		[`git:git@h.invalid:o/r@v1?t=${S}`, "git:git@h.invalid:o/r@v1?***"],
+		[`git:git@h.invalid:o/r#${S}`, "git:git@h.invalid:o/r#***"],
+		[`ssh://git@h.invalid/o/r@v1?t=${S}`, "ssh://git@h.invalid/o/r@v1?***"],
+		[`https://h.invalid/o/r@v1?x=1#${S}`, "https://h.invalid/o/r@v1?***"],
+		[`https://h.invalid/o/r@v1#a?t=${S}`, "https://h.invalid/o/r@v1#***"],
+		// R-7: an npm URL spec with a query or a fragment.
+		[
+			`npm:pkg@https://h.invalid/x.tgz#${S}`,
+			"npm:pkg@https://h.invalid/x.tgz#***",
+		],
+		[
+			`npm:pkg@https://h.invalid/x.tgz?t=${S}`,
+			"npm:pkg@https://h.invalid/x.tgz?***",
+		],
+	];
+
+	it.each(RECORDED)(
+		"list, list --json and models show %s as %s",
+		async (source, printed) => {
+			const { sdk } = recorded(source);
+			for (const argv of [
+				["extension", "list"],
+				["extension", "list", "--json"],
+				["models"],
+			]) {
+				const h = harness({ sdk, extensionTimeoutMs: 20 });
+				expect(await h.run(argv)).toBe(EXIT_OK);
+				expect(h.out(), argv.join(" ")).toContain(printed);
+				expect(h.out() + h.err(), argv.join(" ")).not.toContain(S);
+			}
+		},
+	);
+
+	// Remove by the printed form or the exact source shows the printed form,
+	// in Pi's progress line and the answer.
+	describe.each(RECORDED)("remove of the recorded %s", (source, printed) => {
 		it.each([
 			["the printed form", printed],
 			["the exact source", source],
@@ -1404,7 +1432,26 @@ describe("a recorded source's credential never shows in list or remove (R-4, R-5
 			expect(h.err()).toBe(`Removing ${printed}...\n`);
 			expect(h.out()).toContain(`Removed ${printed} from ${OWN_FOLDER.dir}.`);
 			expect(h.out() + h.err()).not.toContain(S);
-			expect(h.out() + h.err()).not.toContain("deploy");
 		});
+	});
+
+	it("remove of a recorded source with another SSH user does not name the user (R-4)", async () => {
+		const source = "ssh://deploy@h.invalid/o/r";
+		const { sdk, removed } = recorded(source);
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "remove", source])).toBe(EXIT_OK);
+		expect(removed).toEqual([source]);
+		expect(h.out() + h.err()).not.toContain("deploy");
+	});
+
+	it.each([
+		"/Users/me/ext#1@v2/src",
+		"/home/u/.pnpm/pi-foo@1.2.0/node_modules/pi-foo",
+		"../ext?draft#2",
+	])("a local source %s prints unchanged", async (source) => {
+		const { sdk } = recorded(source);
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "list", "--json"])).toBe(EXIT_OK);
+		expect(JSON.parse(h.out()).extensions[0].source).toBe(source);
 	});
 });
