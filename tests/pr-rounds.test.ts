@@ -3360,6 +3360,32 @@ describe("T498: readable PR comments", () => {
 		});
 	});
 
+	it("a review with no findings says no close-out is needed, as the comment's last line (T510)", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, { runReview: reviewRun(repo, REVIEW_RUN, []) }),
+				},
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			const base = git(repo, ["rev-parse", "--short=7", "main~1"]);
+			expect(body).toBe(
+				[
+					"## Review panel · review",
+					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\``,
+					"2/2 voted · 0 findings",
+					"**Seats:** holistic (terra, claude)",
+					"",
+					"No findings · no close-out needed",
+					"",
+					`<!-- review-panel review=${REVIEW_RUN} -->`,
+				].join("\n"),
+			);
+		});
+	});
+
 	it("the review comment bolds the Lost label of a failed seat", async () => {
 		await withRepository(async (repo, head) => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
@@ -3392,6 +3418,8 @@ describe("T498: readable PR comments", () => {
 			const lines = bodyOf(posts(gh.calls)[0]).split("\n");
 			expect(lines).toContain("**Lost:** claude/holistic (provider-error)");
 			expect(lines.filter((line) => line.includes("Lost:"))).toHaveLength(1);
+			// Lost coverage stays shown; a clean review still needs no card.
+			expect(lines.at(-3)).toBe("No findings · no close-out needed");
 		});
 	});
 

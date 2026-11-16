@@ -264,7 +264,9 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   first runs the final check (one seat, the owner's, minutes like a verify) and lists what it
   finds as open; when nothing was open before it, what it finds (or a lost seat) refuses the card
   and says what to run next. `--verify-run-id`, when given,
-  must be the latest verify. It is refused
+  must be the latest verify. A review with no findings and no verify after it has no card:
+  `comment` refuses it (its review comment ends `No findings · no close-out needed`); once a
+  verify follows, the card posts as usual. It is refused
   without `--owner-approved`: pass that flag when nothing is open (the default: a card posts once everything is done,
   unless the owner config sets `defaults.prComment: "ownerApproved"`) or after the owner said to
   stop the rounds with ids open. It posts only to an

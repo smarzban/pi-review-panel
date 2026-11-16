@@ -669,6 +669,12 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`, and
   a claim the verify held is given back. Comment listings read every page.
 
+A review with no findings and no verify after it has no close-out card: its review comment ends
+with `No findings · no close-out needed` (a lost seat is still named on `Lost:`), and `comment`
+refuses it before any seat or post. Once a verify follows (later pushes, say), the rounds have
+something to summarise: `verify --close-out` posts the card when nothing is open after it, as
+for any review, and `comment` posts it too.
+
 The `comment` action is the manual path. With `ownerApproved: true`, passed once a verify left
 nothing open without `--close-out` or after the owner stops the rounds with ids open, it posts
 or updates its own card with the heading `## Review panel`, separate from the

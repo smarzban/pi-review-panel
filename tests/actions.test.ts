@@ -560,7 +560,8 @@ describe("the actions without Pi", () => {
 
 	it("comment runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
-			writeReviewRecord(repo, "review-1", []);
+			// A review with no findings and no verify has no card (T510).
+			writeReviewRecord(repo, "review-1", [{ id: "F-1", severity: "low" }]);
 			const { bodies, postComment } = poster();
 			const result = await commentAction(
 				{
@@ -768,7 +769,8 @@ describe("each action refuses a bad input itself, as an argument object is refus
 
 	it("comment drops an empty head the way an argument object does", async () => {
 		await withRepository(async (repo) => {
-			writeReviewRecord(repo, "review-1", []);
+			// A review with no findings and no verify has no card (T510).
+			writeReviewRecord(repo, "review-1", [{ id: "F-1", severity: "low" }]);
 			const viaCall = poster();
 			await createPanelCaller(
 				deps({ postComment: viaCall.postComment }),

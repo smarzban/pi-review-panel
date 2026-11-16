@@ -580,6 +580,40 @@ describe("a review with no findings (T510)", () => {
 		expect(specs).toHaveLength(1);
 		expect(specs[0]?.model).toBe("gpt-5.6-terra");
 	});
+
+	it("comment refuses the card while no verify has followed, before any seat or post", async () => {
+		await expect(
+			commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: CLEAN,
+					dismissed: [],
+					lowAdvisory: [],
+				},
+				{ deps: deps() },
+			),
+		).rejects.toThrow(
+			`comment refused: review "${CLEAN}" had no findings and no verify followed it, so there is no close-out card to post`,
+		);
+		expect(specs).toEqual([]);
+		expect(comments).toEqual([]);
+	});
+
+	it("once a verify follows, --close-out posts the card for its rounds", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], closeOut: true },
+			{ items: [] },
+		);
+		expect(v1.reply).toContain("PR close-out: posted to #12");
+		expect(closeouts()).toHaveLength(1);
+	});
+
+	it("once a verify follows, comment posts the card", async () => {
+		await verify({ priorRunId: CLEAN, head: commits[2] }, { items: [] });
+		const card = await stopWith({ priorRunId: CLEAN });
+		expect(card.body).toMatch(/^## Review panel\n/u);
+	});
 });
 
 describe("--close-out", () => {

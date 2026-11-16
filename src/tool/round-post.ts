@@ -579,6 +579,9 @@ export type ReviewRoundFacts = {
 	suggestions?: Suggestion[] | SuggestionsUnavailable;
 };
 
+/** A review comment's last line when the review had no findings. */
+export const NO_CLOSEOUT_NEEDED = "No findings · no close-out needed";
+
 /** The review comment: the reply's content without the local record path. */
 export function renderReviewRound(facts: ReviewRoundFacts): string {
 	const [, summary, seats] = reviewHeadLines("", facts);
@@ -602,8 +605,10 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 		groups === undefined
 			? orderFindings(findings).map((entry) => findingRow(entry, facts.panel))
 			: groups.map((group) => groupRow(group, facts.panel));
-	if (rows.length === 0) {
-		head.push("None submitted.");
+	const clean = rows.length === 0;
+	if (clean) {
+		// The closing line below stands in for the empty list.
+		head.pop();
 	}
 	const ran = new Set(facts.panel.map((seat) => seat.lens));
 	const offered = facts.suggestions ?? [];
@@ -623,6 +628,11 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 				...shown.map((row) => ownLine(formatSuggestion(row))),
 			);
 		}
+	}
+	if (clean) {
+		// No findings, so nothing for a close-out card to summarise; once a
+		// verify round follows, the card posts at the end as usual.
+		tail.push("", NO_CLOSEOUT_NEEDED);
 	}
 	tail.push(...markerTail({ review: facts.runId }));
 	return fitCommentBody(

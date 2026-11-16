@@ -235,6 +235,9 @@ review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \
 ```
 
 - Post the card before the PR is merged: `comment` posts only to an open PR at the card's head.
+- After a review with no findings and no verify, post no card: the review comment ends
+  `No findings · no close-out needed`, and `comment` refuses. Once a verify follows (later
+  pushes), the card posts at the end as usual.
 - When the owner config asks for approval first, every post needs a yes, the card's too: ask
   before `--close-out` or `comment`.
 

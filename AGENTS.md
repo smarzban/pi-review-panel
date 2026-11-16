@@ -72,7 +72,8 @@ Before touching these, read the matching section of `docs/internals.md`:
   open after a verify with no lost seat, or by `comment`, which lists what is still open. Both
   first run one final check (one owner seat, review head → final head, every resolved id under
   the undo guard), a signed link of the chain; what it finds is a regression, open. It blocks the
-  `--close-out` card, and `comment`'s card only when nothing was open before the check.
+  `--close-out` card, and `comment`'s card only when nothing was open before the check. A review
+  with no findings and no verify after it has no card: `comment` refuses it.
 - Every posted body goes through `src/tool/posted-text.ts`; seat text is one line of inert plain
   text. Posting claims are exclusive creates and are never taken over.
 - Fixed operational bounds may halt work, but they never make a quality claim.

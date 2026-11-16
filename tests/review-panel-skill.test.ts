@@ -245,6 +245,9 @@ describe("review-panel skill", () => {
 		);
 		expect(atVerify).toBeGreaterThan(body.indexOf("## 6. Fix and verify"));
 		expect(atVerify).toBeLessThan(body.indexOf("## 7. Resume"));
+		expect(body).toContain(
+			"After a review with no findings and no verify, post no card",
+		);
 		expect(body).not.toContain("Do not post until they say yes");
 		expect(body).not.toContain("When the owner says to finish");
 		expect(body).not.toMatch(/ready to merge\b(?! on the card)/i);

@@ -1087,6 +1087,13 @@ export async function commentAction(
 	};
 	let links = chainNow();
 	let tip = links.at(-1);
+	// A review with no findings and no verify after it has no rounds to
+	// summarise: no card, no seat, no post. Once a verify follows, it has.
+	if (facts.run.findings.length === 0 && tip === undefined) {
+		throw new Error(
+			`comment refused: review "${facts.run.runId}" had no findings and no verify followed it, so there is no close-out card to post`,
+		);
+	}
 	if (valid.verifyRunId !== undefined) {
 		// A named verify is authenticated as a verify of this review, and
 		// must be the chain's latest: the card is about where the rounds

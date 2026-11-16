@@ -48,7 +48,8 @@ What you get instead:
   change runs first. The card shows counts by severity, each id with the verify
   round that resolved it or listed as still open, the verify seats, dismissals with reasons,
   leftover lows, and links to the review and verify comments. Never “fixed”, never
-  “ready to merge.” Turn it off per run
+  “ready to merge.” A review with no findings and no verify after it needs no card:
+  its comment says so. Turn it off per run
   with `--no-pr-comment`, or set `defaults.prComment: "ownerApproved"` so every
   post needs the owner's yes.
 
