@@ -632,7 +632,29 @@ describe("verify --recheck", () => {
 	it("a recheck finding blocks --close-out in the round that found it", async () => {
 		recheckScript.set("security", [LEAK]);
 		const v1 = await first({ recheck: ["security"], closeOut: true });
-		expect(v1.reply).toMatch(/^PR close-out: not posted/mu);
+		// Refused by the round itself, before the card is built.
+		expect(v1.reply).toContain(
+			"PR close-out: not posted (2 new findings in this round's recheck)",
+		);
+		expect(
+			comments.some((row) =>
+				row.body.startsWith("## Review panel · close-out"),
+			),
+		).toBe(false);
+	});
+
+	it("a recheck id an earlier round left open blocks a later clean round's card", async () => {
+		recheckScript.set("security", [LEAK]);
+		const v1 = await first({ recheck: ["security"] });
+		recheckScript.clear();
+		// Verify 2 checks V1-F1 only and resolves it; V1-F2 stays open.
+		const v2 = await verify({
+			priorRunId: v1.runId,
+			head: commits[3],
+			keptFindingIds: ["V1-F1"],
+			closeOut: true,
+		});
+		expect(v2.reply).toContain("PR close-out: not posted (still open: V1-F2)");
 		expect(
 			comments.some((row) =>
 				row.body.startsWith("## Review panel · close-out"),
