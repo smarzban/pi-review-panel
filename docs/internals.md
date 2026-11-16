@@ -63,15 +63,17 @@ one open PR whose head is the run's head, by default, as a new comment (`## Revi
 `## Review panel · verify N`). Verify rounds chain (see "Verify chain" below): each verify checks
 only what is open after the latest one. A verify posts the close-out card
 (`## Review panel · close-out`, once per review) only when asked with `--close-out`, and then only
-when nothing is open after a verify with no lost seat; never automatically mid-way. The card is
+when nothing is open after a verify with no lost seat; never automatically mid-way. The skill
+passes `--close-out` on every verify it expects to leave nothing open; without it, such a verify's
+reply names the `comment` command that posts the card now, at that head. The card is
 presentation, not a verdict: the agents judge and the owner merges.
 `--no-pr-comment` (`prComment: false` in a `call` object) turns posting off for a run, and owner config
 `defaults.prComment: "ownerApproved"` makes every post need `--owner-approved`. A post that
 cannot be made is one reply line, never a run failure.
-`comment` stays the manual path: it posts or updates one PR card after the owner says yes
-(`--owner-approved`), found later by author plus heading `## Review panel`. It posts only to an
-open PR whose head is the commit the card is about: the one `--pr` names, or the one open PR at
-that head. Both cards are built from the review and its whole verify chain (`comment` reads it
+`comment` stays the manual path: it posts or updates one PR card with `--owner-approved`
+(passed once nothing is open, or when the owner stops the rounds with ids open), found later
+by author plus heading `## Review panel`. It posts only to an open PR whose head is the commit
+the card is about: the one `--pr` names, or the one open PR at that head. Both cards are built from the review and its whole verify chain (`comment` reads it
 itself; a `verifyRunId` it is given must be the latest link) and list each id as “resolved in
 verify N” (N the place in the chain of the link that resolved it, the same `verify N` its comment
 posts as, whether or not it posted),

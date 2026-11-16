@@ -554,11 +554,15 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   the `Final check:` line names `review-panel comment`, which checks again. Otherwise
   only the verify comment is posted, and the reply says why, such as
   `PR close-out: not posted (F-2 is still present)`, `PR close-out: not posted (still open: F-2)`
-  or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. Without
-  `closeOut`, a verify that leaves nothing open names the command that posts the card:
-  `review-panel comment --prior-run-id <review> --owner-approved`, once the owner says the
-  rounds are done (a verify cannot be run again at the same head). When the owner
-  stops the rounds with ids still open, `comment` posts the card listing them as open. `comment`
+  or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card is
+  posted once everything is done: pass `closeOut` on every verify you expect to leave nothing
+  open. Without it, a verify that leaves nothing open says the card was not asked for, names the
+  command that posts it now at this head,
+  `review-panel comment --prior-run-id <review> --owner-approved` (a verify cannot be run again
+  at the same head), and says to pass `--close-out` on the last verify next time; run it then,
+  before the PR is merged, with no further ask. The owner's say is needed only to stop the
+  rounds with ids still open: `comment` then posts the card listing them as open. An owner who
+  wants to approve every post sets `defaults.prComment: "ownerApproved"`. `comment`
   runs the final check too, after its own refusals and before the card, when it is due, and
   the reply names it as the latest verify. When ids were already open, it only reports: what
   it finds is listed as open, and a lost seat is named on `Lost:` and on the
@@ -663,7 +667,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`, and
   a claim the verify held is given back. Comment listings read every page.
 
-The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
+The `comment` action is the manual path. With `ownerApproved: true`, passed once a verify left
+nothing open without `--close-out` or after the owner stops the rounds with ids open, it posts
 or updates its own card with the heading `## Review panel`, separate from the
 `## Review panel · close-out` comment a verify posts with `--close-out`. Its card is cut by whole
 rows below the same limit.
