@@ -1248,6 +1248,44 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 		expect(result.out + result.err).not.toContain(S);
 	});
 
+	async function removal(source: string) {
+		const removals: string[] = [];
+		const { sdk } = fakeSdk({
+			removeExtension: async (input) => {
+				removals.push(input.source);
+				input.progress(`Removing ${input.source}...`);
+				return false;
+			},
+		});
+		const h = harness({ sdk });
+		const code = await h.run(["extension", "remove", source]);
+		return { code, removals, out: h.out(), err: h.err() };
+	}
+
+	// The refusals made before Pi parses a source are shared with remove (F-1,
+	// F-2).
+	it.each([
+		[`${S}@host.com:o/r`, SCP],
+		[`file://${S}@host.example/x`, FILE_URL],
+	])(
+		"install and remove refuse %s with a fixed message",
+		async (source, message) => {
+			const installed = await refusal(source);
+			expect(installed.code).toBe(EXIT_FAILED);
+			expect(installed.installs).toEqual([]);
+			expect(installed.out).toBe("");
+			expect(installed.err).toBe(`review-panel: ${message}\n`);
+			const removed = await removal(source);
+			expect(removed.code).toBe(EXIT_FAILED);
+			expect(removed.removals).toEqual([]);
+			expect(removed.out).toBe("");
+			expect(removed.err).toBe(`review-panel: ${message}\n`);
+			expect(
+				installed.out + installed.err + removed.out + removed.err,
+			).not.toContain(S);
+		},
+	);
+
 	it.each(REFUSED)(
 		"%s is refused with one of the fixed messages",
 		async (source) => {
