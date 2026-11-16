@@ -225,7 +225,8 @@ The close-out card is posted once, at the end, as soon as nothing is open:
 - Pass `--close-out` on every verify you expect to leave nothing open: every kept id fixed,
   every finding you chose not to fix in `--dismissed` with a reason, every advisory low in
   `--low-advisory`. It posts the card only when nothing is open after it and no seat was lost;
-  otherwise the `PR close-out:` line says why.
+  otherwise the `PR close-out:` line says why. If `comment` already posted this review's card (say
+  with ids open), it brings that card up to date instead: `PR close-out: updated on #N`.
 - If a verify left nothing open without `--close-out` (it cannot run again at the same head),
   post the card straight away with `review-panel comment --prior-run-id <review run> --owner-approved`,
   the command its `PR close-out:` line names: the card posts once everything is done; do not ask.

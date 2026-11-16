@@ -597,9 +597,11 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     `comment` used before) and the last non-empty line is exactly that review's hidden marker, so
     a card `comment` posted counts too. Seat text
     cannot make that line, because posted text escapes `<`. A review whose id cannot be in a marker
-    is never found this way. If one is there it writes
-    `closeout.posted` and posts nothing: `PR close-out: not posted (a close-out for this review is
-    already on PR #12)`.
+    is never found this way. If one is there (a card `comment` posted, perhaps with ids still
+    open, or one whose marker a crash lost), the verify edits that card in place with the current
+    card, under its claim, writes `closeout.posted`, and posts nothing new:
+    `PR close-out: updated on #12 (<comment URL>)`. So the PR has one card, and it is current. It
+    never edits a comment that is not this review's card by this author.
   - A posted card writes `closeout.posted` exclusively, then deletes the claim. A failed post
     deletes the claim, so a later verify can post it.
   - A live claim means another verify is posting it:
@@ -612,7 +614,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     stopped; delete them from the review's run record to post it)`.
   - One case is set aside: a verify that crashes after GitHub accepted the card but before it
     wrote `closeout.posted`. The PR-comment check catches it, so the next verify finds the card
-    and posts no second one.
+    and posts no second one (it edits it, or, after a stale claim, leaves it as it is).
   - Another is set aside: a verify that is still posting but whose claim looks stale to another
     verify can lead to a second card. That happens when it pauses for over 65 s mid-post, when
     its machine's clock runs over 65 s behind the other's, or when it runs in a container that

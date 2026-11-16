@@ -182,6 +182,13 @@ function fakeGh(script: GhScript = {}): { calls: GhCall[]; runGh: GhRunner } {
 					`https://github.com/${REPO_SLUG}/pull/${pr}#issuecomment-${nextId}`,
 			});
 		}
+		const edited = /issues\/comments\/(\d+)/.exec(joined);
+		if (edited !== null && joined.includes("PATCH")) {
+			return JSON.stringify({
+				id: Number(edited[1]),
+				html_url: `https://github.com/${REPO_SLUG}/pull/12#issuecomment-${edited[1]}`,
+			});
+		}
 		if (/issues\/\d+\/comments/.test(joined)) {
 			return script.commentsRaw ?? JSON.stringify(script.comments ?? []);
 		}
@@ -206,6 +213,15 @@ function fakeGh(script: GhScript = {}): { calls: GhCall[]; runGh: GhRunner } {
 
 function openPr(number: number, sha: string) {
 	return { number, state: "open", head: { sha } };
+}
+
+/** The reply when a verify edits this review's card already on PR 12. */
+const UPDATED_ON_12 = expect.stringMatching(
+	/^PR close-out: updated on #12 \(https:\/\/github\.com\/smarzban\/demo\/pull\/12#issuecomment-\d+\)$/u,
+);
+
+function edits(calls: GhCall[]): GhCall[] {
+	return calls.filter((call) => call.args.includes("PATCH"));
 }
 
 function posts(calls: GhCall[]): GhCall[] {
@@ -1142,12 +1158,22 @@ describe("a clean verify with --close-out also posts the close-out card, once pe
 		});
 	});
 
-	it("does not post a second close-out for the same review", async () => {
+	it("does not post a second close-out for the same review: it edits that card, and only that one (T510)", async () => {
 		await withRepository(async (repo, head) => {
 			writeReviewRecord(repo, REVIEW_ID, ROWS);
 			const gh = fakeGh({
 				pulls: [openPr(12, head)],
 				comments: [
+					{
+						id: 7,
+						user: { login: "mallory" },
+						body: `## Review panel · close-out\n\n<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
+					},
+					{
+						id: 8,
+						user: { login: "saeed" },
+						body: "## Review panel · close-out\n\n<!-- review-panel review=another-review verify=v-0 -->",
+					},
 					{
 						id: 9,
 						user: { login: "saeed" },
@@ -1178,9 +1204,15 @@ describe("a clean verify with --close-out also posts the close-out card, once pe
 				},
 			);
 			expect(posts(gh.calls)).toHaveLength(1);
-			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			expect(
+				edits(gh.calls).map((call) =>
+					call.args.find((arg) => arg.includes("issues/comments/")),
+				),
+			).toEqual([`repos/${REPO_SLUG}/issues/comments/9`]);
+			expect(bodyOf(edits(gh.calls)[0])).toMatch(
+				/^## Review panel · close-out\n/u,
 			);
+			expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 		});
 	});
 
@@ -2136,9 +2168,7 @@ describe("fix round 1: the comment listing is read across pages (F-2)", () => {
 					},
 				);
 				expect(closeoutPosts(gh.calls)).toHaveLength(0);
-				expect(textOf(result).split("\n").at(-1)).toBe(
-					"PR close-out: not posted (a close-out for this review is already on PR #12)",
-				);
+				expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 			});
 		});
 	}
@@ -2736,9 +2766,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 			});
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
-			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (a close-out for this review is already on PR #12)",
-			);
+			expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 			expect(
 				existsSync(path.join(reviewRecordDir(repo), CLOSEOUT_POSTED_MARKER)),
 			).toBe(true);
@@ -2769,9 +2797,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 				reviewId,
 			);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
-			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (a close-out for this review is already on PR #12)",
-			);
+			expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 		});
 	});
 
@@ -2790,9 +2816,7 @@ describe("fix round 3: close-out claims are generations, never taken over", () =
 			});
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
-			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (a close-out for this review is already on PR #12)",
-			);
+			expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 		});
 	});
 
@@ -3618,9 +3642,7 @@ describe("T498: readable PR comments", () => {
 				{ rosterId: "terra", items: [resolved("F-1")] },
 			]);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
-			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (a close-out for this review is already on PR #12)",
-			);
+			expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 		});
 	});
 
@@ -3734,9 +3756,7 @@ describe("T502: the round number and the close-out read only signed records and 
 			});
 			const result = await verifyOnce(repo, gh, "v-1", clean);
 			expect(closeoutPosts(gh.calls)).toHaveLength(0);
-			expect(textOf(result).split("\n").at(-1)).toBe(
-				"PR close-out: not posted (a close-out for this review is already on PR #12)",
-			);
+			expect(textOf(result).split("\n").at(-1)).toEqual(UPDATED_ON_12);
 		});
 	});
 

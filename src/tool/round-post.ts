@@ -414,6 +414,30 @@ async function createComment(
 	return typeof created?.html_url === "string" ? created.html_url : "";
 }
 
+/** Edits a comment in place; only ever this review's own close-out card. */
+async function updateComment(
+	gh: Gh,
+	target: PrTarget,
+	id: number,
+	body: string,
+): Promise<string> {
+	const updated = parseJson(
+		await gh(
+			[
+				"api",
+				"--method",
+				"PATCH",
+				`repos/${target.repo}/issues/comments/${id}`,
+				"--input",
+				"-",
+			],
+			JSON.stringify({ body }),
+		),
+		"the edited comment",
+	) as { html_url?: unknown } | null;
+	return typeof updated?.html_url === "string" ? updated.html_url : "";
+}
+
 /** Cuts whole code points until the text is at most `maxBytes` of UTF-8. */
 function truncateBytes(text: string, maxBytes: number): string {
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) {
@@ -930,7 +954,11 @@ function commentRefusal(error: unknown): string {
 	);
 }
 
-type IssueComment = { user?: { login?: unknown }; body?: unknown };
+type IssueComment = {
+	id?: unknown;
+	user?: { login?: unknown };
+	body?: unknown;
+};
 
 type CloseoutCard = {
 	/** The card, linking the rounds whose comments were found. */
@@ -1032,13 +1060,13 @@ async function listComments(gh: Gh, target: PrTarget): Promise<unknown[]> {
 	return comments;
 }
 
-/** Is a close-out for this review among the comments, by this author? */
-function hasCloseoutFor(
+/** This review's close-out card among the comments, by this author. */
+function closeoutCardOf(
 	comments: readonly unknown[],
 	target: PrTarget,
 	reviewRunId: string,
-): boolean {
-	return comments.some((raw) => {
+): IssueComment | undefined {
+	return (comments as ReadonlyArray<IssueComment | null>).find((raw) => {
 		const comment = raw as IssueComment | null;
 		if (comment?.user?.login !== target.author) {
 			return false;
@@ -1048,7 +1076,16 @@ function hasCloseoutFor(
 			typeof comment.body === "string" ? comment.body : "",
 			reviewRunId,
 		);
-	});
+	}) as IssueComment | undefined;
+}
+
+/** Is a close-out for this review among the comments, by this author? */
+function hasCloseoutFor(
+	comments: readonly unknown[],
+	target: PrTarget,
+	reviewRunId: string,
+): boolean {
+	return closeoutCardOf(comments, target, reviewRunId) !== undefined;
 }
 
 /** Is a close-out for this review already on the PR, by this author? */
@@ -1332,18 +1369,29 @@ async function postCloseoutCard(
 	}
 	try {
 		const comments = await listComments(verify.gh, target);
-		if (hasCloseoutFor(comments, target, card.reviewRunId)) {
-			// An automatic close-out is there already (one whose marker a
-			// crash lost): record it, and post nothing.
-			settleCloseout(claim, true);
-			return notPosted(
-				"PR close-out",
-				`a close-out for this review is already on PR #${target.pr}`,
-			);
-		}
 		const body = card.render(
 			closeoutLinks(comments, target, card, round.runId, round.url),
 		);
+		// This review's card is there already (`comment` posted it, perhaps
+		// with ids open, or a crash lost the marker): edit it, under this
+		// claim, so the PR's one card is current.
+		const existing = closeoutCardOf(comments, target, card.reviewRunId);
+		if (existing !== undefined) {
+			const id = existing.id;
+			if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
+				// No id to edit by: it is still there, so post no second one.
+				settleCloseout(claim, true);
+				return notPosted(
+					"PR close-out",
+					`a close-out for this review is already on PR #${target.pr}`,
+				);
+			}
+			const url = await updateComment(verify.gh, target, id, body);
+			settleCloseout(claim, true);
+			return replyLine(
+				`PR close-out: updated on #${target.pr}${url === "" ? "" : ` (${inert(url)})`}`,
+			);
+		}
 		const url = await createComment(verify.gh, target, body);
 		settleCloseout(claim, true);
 		return posted("PR close-out", target, url);

@@ -271,7 +271,11 @@ verify's round (a POST `gh` reports as
 failed after GitHub accepted it gives its claim back; that repeat is set aside). The
 close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
 to the PR's comments, then to the next generation; only a generation's creator posts, and a
-posted card writes `closeout.posted` (`wx`), which stops every later verify. Every posted marker
+posted card writes `closeout.posted` (`wx`), which stops every later verify. A creator that finds
+this review's card already on the PR (`closeoutCardOf`, by `isCloseoutCardFor`: `comment`'s card,
+or one whose marker a crash lost) PATCHes that comment with the current card under its claim
+instead of posting, then writes `closeout.posted` (`PR close-out: updated on #N`); a stale
+generation that finds the card still only writes `closeout.posted`, with no claim to edit under. Every posted marker
 (`round-<N>.posted`, `closeout.posted`) holds a MAC from the owner's record key over the
 record's run id, the marker's file name and the verify that wrote it; an unsigned or copied
 marker, or one signed for another verify, is no marker for this verify, and the verify that

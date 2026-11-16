@@ -184,6 +184,9 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
+/** The head PR 12 was last asked about, for a lookup of the PR by number. */
+let prHead = "";
+
 /** gh as a script: PR 12 is open at whatever head is asked about. */
 const runGh: RoundGhRunner = (args, options) => {
 	calls.push({
@@ -199,6 +202,7 @@ const runGh: RoundGhRunner = (args, options) => {
 	}
 	const head = /commits\/([0-9a-f]+)\/pulls/.exec(joined);
 	if (head !== null) {
+		prHead = head[1] as string;
 		return JSON.stringify([
 			{ number: 12, state: "open", head: { sha: head[1] } },
 		]);
@@ -209,6 +213,9 @@ const runGh: RoundGhRunner = (args, options) => {
 		const html_url = `https://github.com/${REPO_SLUG}/pull/12#issuecomment-${id}`;
 		comments.push({ id, html_url, body, user: { login: "saeed" } });
 		return JSON.stringify({ id, html_url });
+	}
+	if (/repos\/[^/]+\/[^/]+\/pulls\/12$/.test(args[1] ?? "")) {
+		return JSON.stringify({ number: 12, state: "open", head: { sha: prHead } });
 	}
 	const patched = /issues\/comments\/(\d+)/.exec(joined);
 	if (patched !== null && joined.includes("PATCH")) {
@@ -349,7 +356,12 @@ async function verify(args: Record<string, unknown>, answer: Answer) {
 			{ deps: deps() },
 		),
 	);
-	return { reply, runId: recordOf(reply), body: posted().at(-1) ?? "" };
+	return {
+		reply,
+		runId: recordOf(reply),
+		body: posted().at(-1) ?? "",
+		url: verifyComments().at(-1)?.html_url ?? "",
+	};
 }
 
 const NULL_CHECK: Regression = {
@@ -795,25 +807,80 @@ describe("one close-out card per review, whichever path posts it (T510)", () => 
 		}
 	});
 
-	it("--close-out after a comment card posts no second card", async () => {
+	it("--close-out after a comment card edits that card, so the PR's one card is current", async () => {
 		const v1 = await verify(
 			{ priorRunId: CLEAN, head: commits[2] },
 			{ items: [] },
 		);
 		const reply = await commentForReal(CLEAN);
 		expect(reply.split("\n")[0]).toBe("Posted comment on PR #12 (created)");
-		expect(closeouts()).toHaveLength(1);
+		const cardId = comments.find((row) =>
+			row.body.startsWith("## Review panel · close-out"),
+		)?.id;
 		const v2 = await verify(
 			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
 			{ items: [] },
 		);
 		expect(v2.reply).toContain(
-			"PR close-out: not posted (a close-out for this review is already on PR #12)",
+			`PR close-out: updated on #12 (https://github.com/${REPO_SLUG}/pull/12#issuecomment-${cardId})`,
 		);
 		expect(closeouts()).toHaveLength(1);
+		const card = comments.find((row) => row.id === cardId)?.body ?? "";
+		expect(card).toContain("2 verify rounds");
+		expect(card).toContain(`(${v2.url})`);
+		expect(card).toContain(`verify=${v2.runId} -->`);
 		expect(
 			comments.filter((row) => row.body.startsWith("## Review panel\n")),
 		).toEqual([]);
+	});
+
+	it("--close-out twice: the second posts and edits nothing", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], closeOut: true },
+			{ items: [] },
+		);
+		expect(v1.reply).toContain("PR close-out: posted to #12");
+		const before = comments.map((row) => row.body);
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
+			{ items: [] },
+		);
+		expect(v2.reply).toContain(
+			"PR close-out: not posted (this review's close-out is already posted)",
+		);
+		expect(closeouts()).toHaveLength(1);
+		expect(comments.slice(0, before.length).map((row) => row.body)).toEqual(
+			before,
+		);
+		expect(calls.some((call) => call.args.includes("PATCH"))).toBe(false);
+	});
+});
+
+describe("a comment card with ids open, then fixes and --close-out (T510)", () => {
+	it("the one card is brought up to date: every id resolved, the new round linked", async () => {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		// The owner stops with F-2 open; comment's final check finds nothing.
+		answers.push({ items: [] });
+		const stopped = await commentForReal(REVIEW);
+		expect(stopped.split("\n")[0]).toBe("Posted comment on PR #12 (created)");
+		const cardId = comments.find((row) =>
+			row.body.startsWith("## Review panel · close-out"),
+		)?.id;
+		expect(comments.find((row) => row.id === cardId)?.body).toContain(
+			"### Open (not resolved)",
+		);
+		// The fix lands; the final check after it finds nothing.
+		const v4 = await verify(
+			{ priorRunId: latestOf(stopped), head: commits[4], closeOut: true },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		expect(v4.reply).toContain("PR close-out: updated on #12");
+		expect(closeouts()).toHaveLength(1);
+		const card = comments.find((row) => row.id === cardId)?.body ?? "";
+		expect(card).not.toContain("### Open (not resolved)");
+		expect(card).toContain("resolved in verify 4");
+		expect(card).toContain(`(${v4.url})`);
 	});
 });
 
