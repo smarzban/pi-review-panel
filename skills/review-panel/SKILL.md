@@ -165,9 +165,11 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
 
 4. Add `--close-out` to any verify you expect to leave nothing open, the first included: it
    posts the close-out card once nothing is open (see section 8).
-5. Pass `--scoping-note` on each verify naming where each change came from, such as
-   `"fixes F-2; owner found X; outside re-check found Y"`. The verify comment shows it as
-   `Why this round:`, so a reader can tell why the round exists; the seats read it too.
+5. Pass `--scoping-note` on a verify only when it says something the comment does not: a
+   change that came from outside the panel (`"owner found X; outside re-check found Y"`) or
+   why you chose each `--recheck` lens. Leave it out for a plain round of fixes: the comment
+   already names every id checked. The verify comment shows it as `This round:`; the
+   seats read it too.
 6. A verify checks only open ids and regressions. To have the panel hunt for new problems in
    this round's commits too, add `--recheck <lenses>`: one seat per lens on the owner's
    default seats (as in review; holistic only when you name it), over this round's diff only.
@@ -189,7 +191,9 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
-carry your reasons; each round records them, so name each id once. A regression has no
+carry your reasons; each round records them, so name each id once. Write each reason, and any
+`--scoping-note`, for a reader who has not seen the diff: one short, plain sentence that says
+why, with no code names it does not explain. A regression has no
 severity: dismiss it with a reason instead of listing it as low/advisory. Verify runs the
 owner's `defaults.verifySeats`, or the first `defaults.seats` row when that is unset. Verify and
 `comment` take only records signed with the owner's record key; when one is refused, or the
@@ -203,7 +207,8 @@ Do not start a new full discovery review on the same change.
 
 Posting is on by default. When the run's head is the head of exactly one open PR, `review`
 and each `verify` post their round there as a new comment. Each verify comment is a short
-delta: the ids it checked, what was dismissed now, its regressions, and what is still open; a
+delta: the ids it checked, why each one not resolved is still open, what was dismissed now,
+its regressions, and what is still open; a
 kept low counts as resolved and need not be listed in `--low-advisory`. A verify never posts
 the close-out card by itself. The report's `PR comment:` and
 `PR close-out:` lines say where it posted or why it did not.

@@ -587,6 +587,8 @@ export type VerifyFacts = {
 	dispositions: Map<string, Set<string>>;
 	/** The first resolved evidence each id got, as `file: explanation`. */
 	evidence: Map<string, { file: string; explanation: string }>;
+	/** The first evidence each id got from a seat that did not say resolved. */
+	openEvidence: Map<string, { file: string; explanation: string }>;
 	regressions: VerifyRegression[];
 	keptIds: string[];
 	voted: number;
@@ -596,6 +598,7 @@ export type VerifyFacts = {
 export function verifyFacts(result: RunVerifyResult): VerifyFacts {
 	const dispositions = new Map<string, Set<string>>();
 	const evidence = new Map<string, { file: string; explanation: string }>();
+	const openEvidence = new Map<string, { file: string; explanation: string }>();
 	const regressions: VerifyRegression[] = [];
 	let voted = 0;
 	for (const facts of result.outcomes) {
@@ -609,6 +612,13 @@ export function verifyFacts(result: RunVerifyResult): VerifyFacts {
 			dispositions.set(item.id, seen);
 			if (item.evidence !== undefined && !evidence.has(item.id)) {
 				evidence.set(item.id, item.evidence);
+			}
+			if (
+				item.disposition !== "resolved" &&
+				item.evidence !== undefined &&
+				!openEvidence.has(item.id)
+			) {
+				openEvidence.set(item.id, item.evidence);
 			}
 		}
 		for (const regression of facts.outcome.result.regressions) {
@@ -625,7 +635,7 @@ export function verifyFacts(result: RunVerifyResult): VerifyFacts {
 		result.kept.length > 0
 			? result.kept.map((row) => row.id)
 			: [...dispositions.keys()];
-	return { dispositions, evidence, regressions, keptIds, voted };
+	return { dispositions, evidence, openEvidence, regressions, keptIds, voted };
 }
 
 /** `F-1 resolved`, `F-2 resolved/still present`, or the bare id when no seat answered. */
@@ -647,6 +657,19 @@ export function nothingOpenLine(result: RunVerifyResult): string {
 	return result.recheck === undefined ? NOTHING_OPEN : NOTHING_OPEN_RECHECKED;
 }
 
+/**
+ * How many seats voted, out of how many ran. With a recheck the verify and
+ * recheck seats are counted apart (`verify 1/1 · recheck 2/2`), so a lost
+ * recheck seat never hides behind the verify count.
+ */
+export function votedCountLine(result: RunVerifyResult): string {
+	const count = (rows: readonly { outcome: { kind: string } }[]) =>
+		`${rows.filter((row) => row.outcome.kind === "voted").length}/${rows.length}`;
+	return result.recheck === undefined
+		? `${count(result.outcomes)} voted`
+		: `verify ${count(result.outcomes)} · recheck ${count(result.recheck.outcomes)}`;
+}
+
 export function renderVerifyResult(
 	result: RunVerifyResult,
 	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
@@ -662,7 +685,7 @@ export function renderVerifyResult(
 	const { regressions, keptIds } = facts;
 	const keptSummary = keptIds.map((id) => dispositionLabel(facts, id));
 	const summary = [
-		`${voted.length}/${result.outcomes.length} voted`,
+		votedCountLine(result),
 		keptSummary.length > 0
 			? keptSummary.join(", ")
 			: result.nothingOpen === true && voted.length > 0

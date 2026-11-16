@@ -4,6 +4,13 @@ import {
 	type ToolResult,
 } from "./channel-file.js";
 import {
+	EVIDENCE_MAX,
+	EXPLANATION_MAX,
+	explanationLimitErrors,
+	TITLE_MAX,
+	textLimitErrors,
+} from "./text-limits.js";
+import {
 	formatVerificationErrors,
 	type VerificationResult,
 	validateVerification,
@@ -51,8 +58,7 @@ export function createSubmitVerificationTool({
 	const tool: SubmitVerificationTool = {
 		name: "submit_verification",
 		label: "Submit verification",
-		description:
-			"Submit the complete verification result with one disposition row for every expected id and any direct regressions. A regression row has file, line, title and evidence; set its undoes field to an id only when the scope lists that id as resolved by an earlier round and this fix range undoes that fix. This can be called once.",
+		description: `Submit the complete verification result with one disposition row for every expected id and any direct regressions. Each evidence explanation is at most ${EXPLANATION_MAX} characters. A regression row has file, line, title (the problem, at most ${TITLE_MAX} characters) and evidence (at most ${EVIDENCE_MAX} characters); set its undoes field to an id only when the scope lists that id as resolved by an earlier round and this fix range undoes that fix. This can be called once.`,
 		parameters: {
 			type: "object",
 			required: ["items"],
@@ -76,6 +82,13 @@ export function createSubmitVerificationTool({
 			);
 			if (!validation.ok) {
 				throw new Error(formatVerificationErrors(validation.errors));
+			}
+			const tooLong = [
+				...explanationLimitErrors(validation.result.items),
+				...textLimitErrors(validation.result.regressions, "regressions"),
+			];
+			if (tooLong.length > 0) {
+				throw new Error(tooLong.join("; "));
 			}
 			channel.submit(validation.result);
 			const count = validation.result.items.length;

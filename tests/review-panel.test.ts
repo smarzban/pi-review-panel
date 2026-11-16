@@ -1085,13 +1085,13 @@ describe("the comment action", () => {
 			expect(posted?.pr).toBe(29);
 			expect(posted?.body).toContain("## Review panel");
 			expect(posted?.body).toMatch(
-				/^\*\*2 findings\*\* \([^)]*\) · 1 dismissed · 1 left as low\/advisory$/m,
+				/^\| Findings \| Dismissed \| Low \/ advisory \|\n\|---\|---\|---\|\n\| \*\*2\*\* \([^)]*\) \| 1 \| 1 \|$/m,
 			);
 			expect(posted?.body).not.toMatch(/fixed|resolved/i);
 			expect(posted?.body).toContain("**Lost:** deepseek/holistic");
-			expect(posted?.body).toMatch(/\*\*Review seats:\*\* .*security \(/);
+			expect(posted?.body).toMatch(/<sub>Review seats: .*security \(/);
 			expect(posted?.body).toContain(
-				"- **F-1** auth bypass — checked, not real",
+				"**F-1** auth bypass\n> checked, not real",
 			);
 			// The run id is in the hidden marker only.
 			expect(posted?.body.split("\n").at(-1)).toBe(
@@ -1186,13 +1186,13 @@ describe("the comment action", () => {
 				{},
 			);
 			expect(body).toContain(
-				"**2 findings** (1 high, 1 low) · **1 resolved** in 1 verify round · 1 left as low/advisory",
+				"| **2** (1 high, 1 low) | **1** in 1 verify round | 1 |",
 			);
 			expect(body).not.toContain("### Dismissed");
 			expect(body).toContain("- **F-2** nit");
 			// verify-1 posted no round, and is still verify 1: its chain link.
 			expect(body).toMatch(
-				/^- \*\*F-1 \[high\]\*\* auth bypass · resolved in verify 1$/m,
+				/^\| \*\*F-1\*\* \| high \| auth bypass \| resolved in verify 1 \|$/m,
 			);
 			expect(body).not.toMatch(/fixed/i);
 			// A verify run given as its record path is named by its id.

@@ -6,6 +6,7 @@ import {
 	groupCutLine,
 	isRunMarkerFor,
 	POSTED_TEXT_CHARS,
+	postedCellCode,
 	postedCode,
 	postedLink,
 	postedText,
@@ -348,5 +349,24 @@ describe("the run ids a marker carries (T505)", () => {
 		expect(
 			runMarkerIds("## x\n<!-- review-panel review=a b -->"),
 		).toBeUndefined();
+	});
+});
+
+describe("a code span inside a table cell", () => {
+	it("escapes every pipe, so the span cannot split the cell", () => {
+		expect(postedCellCode("a|b.ts")).toBe("`a\\|b.ts`");
+		expect(postedCellCode("`x`|y")).toBe("`` `x`\\|y ``");
+	});
+
+	it("is the same code span when there is no pipe", () => {
+		expect(postedCellCode("src/a.ts:3")).toBe(postedCode("src/a.ts:3"));
+		expect(postedCellCode("")).toBe("(empty)");
+	});
+});
+
+describe("a group's cut line", () => {
+	it("is its own list item after a blank line, so it closes the last member's toggle and is not nested under it", () => {
+		const line = groupCutLine(2);
+		expect(line.startsWith("\n- 2 more finding(s) in this group")).toBe(true);
 	});
 });

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { SEAT_PROFILES } from "../src/seat/channel-profile.js";
+import {
+	SEAT_PROFILES,
+	WRITING_RULE_FINDINGS,
+	WRITING_RULE_VERIFICATION,
+} from "../src/seat/channel-profile.js";
 import {
 	assembleSeatPrompt,
 	OUTPUT_CHANNEL_INSTRUCTION,
@@ -82,6 +86,30 @@ describe("assembleSeatPrompt", () => {
 		);
 		expect(OUTPUT_CHANNEL_INSTRUCTION).toBe(
 			SEAT_PROFILES.findings.outputChannelInstruction,
+		);
+	});
+});
+
+describe("the writing rule every seat that writes text gets", () => {
+	it("asks finding seats for the problem as the title, what goes wrong first, and short plain text", () => {
+		const text = SEAT_PROFILES.findings.outputChannelInstruction;
+		expect(text).toContain(WRITING_RULE_FINDINGS);
+		expect(WRITING_RULE_FINDINGS).toMatch(/the problem, not the fix/u);
+		expect(WRITING_RULE_FINDINGS).toMatch(/120 characters/u);
+		expect(WRITING_RULE_FINDINGS).toMatch(/800 characters/u);
+		expect(WRITING_RULE_FINDINGS).toMatch(/explain any code name/u);
+	});
+
+	it("asks verify seats to lead with what they found, in short plain text", () => {
+		const text = SEAT_PROFILES.verification.outputChannelInstruction;
+		expect(text).toContain(WRITING_RULE_VERIFICATION);
+		expect(WRITING_RULE_VERIFICATION).toMatch(/500 characters/u);
+		expect(WRITING_RULE_VERIFICATION).toMatch(/Still present:/u);
+	});
+
+	it("is not given to the grouping seat, which writes no finding text", () => {
+		expect(SEAT_PROFILES.grouping.outputChannelInstruction).not.toContain(
+			WRITING_RULE_FINDINGS,
 		);
 	});
 });

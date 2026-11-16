@@ -182,6 +182,18 @@ export function postedCode(text: string, maxChars = POSTED_CODE_CHARS): string {
 }
 
 /**
+ * {@link postedCode} for a Markdown table cell: GitHub splits a row at every
+ * unescaped `|`, a code span's included, so each pipe is escaped; the table
+ * reads `\|` back as `|`.
+ */
+export function postedCellCode(
+	text: string,
+	maxChars = POSTED_CODE_CHARS,
+): string {
+	return postedCode(text, maxChars).replace(/\|/gu, "\\|");
+}
+
+/**
  * A group as one unit of a body: its header lines, then each member's
  * lines. When the whole group does not fit, its header and the members that
  * fit are posted, with {@link groupCutLine} for the rest.
@@ -198,9 +210,11 @@ function isGroupRow(row: CommentRow): row is CommentGroupRow {
 	return !Array.isArray(row);
 }
 
-/** The line that ends a group posted in part. */
+/** The line that ends a group posted in part, after a blank line. */
 export function groupCutLine(count: number): string {
-	return `  - ${count} more finding(s) in this group cut to fit GitHub's comment limit; the full group is in the run record's report.md.`;
+	// A blank line ends the last member's toggle; the item is a sibling of
+	// the members, not nested under the last one.
+	return `\n- ${count} more finding(s) in this group cut to fit GitHub's comment limit; the full group is in the run record's report.md.`;
 }
 
 /**

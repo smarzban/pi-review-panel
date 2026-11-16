@@ -15,6 +15,7 @@ import {
 } from "./grouping-channel.js";
 import type { Finding } from "./schema.js";
 import { validateFindings } from "./schema.js";
+import { EVIDENCE_MAX, TITLE_MAX, textLimitErrors } from "./text-limits.js";
 import {
 	createSubmitVerificationTool,
 	type SubmitVerificationTool,
@@ -504,8 +505,7 @@ export function createSubmitFindingsTool({
 	const tool = defineTool({
 		name: "submit_findings",
 		label: "Submit findings",
-		description:
-			"Submit the complete findings array after reviewing. This can be called once.",
+		description: `Submit the complete findings array after reviewing. Each finding has file, line, severity (high, medium or low), title (the problem, at most ${TITLE_MAX} characters) and evidence (what goes wrong first, at most ${EVIDENCE_MAX} characters). This can be called once.`,
 		parameters: {
 			type: "object",
 			required: ["findings"],
@@ -517,6 +517,10 @@ export function createSubmitFindingsTool({
 			const validation = validateFindings(findings);
 			if (!validation.ok) {
 				throw new Error(validationErrorMessage(validation.errors));
+			}
+			const tooLong = textLimitErrors(validation.findings, "findings");
+			if (tooLong.length > 0) {
+				throw new Error(tooLong.join("; "));
 			}
 
 			channel.submit(validation.findings);

@@ -189,14 +189,26 @@ describe("renderCloseoutComment", () => {
 		// links on the range line, and the marker last.
 		const lines = text.split("\n");
 		expect(lines[0]).toBe("## Review panel · close-out");
-		expect(lines).toContain(
-			"**Review seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus), correctness (sol, opus)",
+		// Who reviewed and verified goes in small text at the end.
+		expect(lines.at(-3)).toBe(
+			"<sub>Review seats: holistic (sol, opus), tests (sol, opus), security (sol, opus), correctness (sol, opus) · Verified by: fix-verification (sol)</sub>",
 		);
-		expect(lines).toContain("**Verified by:** fix-verification (sol)");
+		// The counts are a table, then one table row per finding.
+		expect(text).toContain(
+			[
+				"| Findings | Resolved |",
+				"|---|---|",
+				"| **4** (4 medium) | **4** in 1 verify round |",
+				"",
+				"| | Severity | Finding | Status |",
+				"|---|---|---|---|",
+				"| **F-1** | medium | title 1 | resolved in verify 1 |",
+			].join("\n"),
+		);
 		expect(lines.find((line) => line.includes(" → "))).toBe(
 			`\`origin/main\` (\`5852b7e\`) → \`baf4d30\` · [review](${PR_URL}#issuecomment-11) · [verify 1](${PR_URL}#issuecomment-12)`,
 		);
-		expect(lines.filter((line) => line.startsWith("- "))).toHaveLength(4);
+		expect(lines.filter((line) => line.startsWith("| **F-"))).toHaveLength(4);
 		expect(lines.at(-1)).toBe("<!-- review-panel review=r-1 verify=v-1 -->");
 	});
 
@@ -239,7 +251,7 @@ describe("renderCloseoutComment", () => {
 			headOid,
 		});
 		expect(text).toContain(
-			"**1 finding** (1 high) · **1 resolved** in 1 verify round",
+			"| Findings | Resolved |\n|---|---|\n| **1** (1 high) | **1** in 1 verify round |",
 		);
 		expect(text).not.toMatch(/\b0\b/);
 		expect(text).not.toContain("Lost");
@@ -286,21 +298,31 @@ describe("renderCloseoutComment", () => {
 			[
 				"## Review panel · close-out",
 				"",
-				"**5 findings** (2 high, 1 medium, 2 low) · **1 resolved** in 1 verify round · 2 dismissed · 2 left as low/advisory",
-				"**Review seats:** holistic (terra, glm)",
-				"**Verified by:** fix-verification (sol)",
-				"**Lost:** deepseek/holistic",
 				"`origin/main` (`a1b2c3d`) → `e4f5a6b`",
+				"**Lost:** deepseek/holistic",
 				"",
-				"- **F-1 [high]** auth bypass · resolved in verify 1",
+				"| Findings | Resolved | Dismissed | Low / advisory |",
+				"|---|---|---|---|",
+				"| **5** (2 high, 1 medium, 2 low) | **1** in 1 verify round | 2 | 2 |",
+				"",
+				"| | Severity | Finding | Status |",
+				"|---|---|---|---|",
+				"| **F-1** | high | auth bypass | resolved in verify 1 |",
 				"",
 				"### Dismissed",
-				"- **F-4** stale cache claim — the cache key includes the tenant",
-				"- **F-5** auth header optional — the handler still rejects a missing token",
+				"**F-4** stale cache claim",
+				"> the cache key includes the tenant",
 				"",
-				"### Low / advisory (not kept)",
+				"**F-5** auth header optional",
+				"> the handler still rejects a missing token",
+				"",
+				"<details><summary>Low / advisory, not kept (2)</summary>",
+				"",
 				"- **F-8** rename the helper",
 				"- **F-9** extra log line",
+				"</details>",
+				"",
+				"<sub>Review seats: holistic (terra, glm) · Verified by: fix-verification (sol)</sub>",
 			].join("\n"),
 		);
 	});
@@ -333,12 +355,12 @@ describe("renderCloseoutComment", () => {
 			lost: [],
 			meta: { baseRef: "main", baseOid, headOid },
 		});
-		expect(text).toContain("**3 resolved** in 3 verify rounds");
-		const list = text.split("\n").filter((line) => line.startsWith("- "));
+		expect(text).toContain("| **3** in 3 verify rounds |");
+		const list = text.split("\n").filter((line) => line.startsWith("| **F-"));
 		expect(list).toEqual([
-			"- **F-1 [high]** auth bypass · resolved in verify 2",
-			"- **F-2 [medium]** missing timeout · resolved in verify 1",
-			"- **F-3 [low]** kept low · resolved in verify 3",
+			"| **F-1** | high | auth bypass | resolved in verify 2 |",
+			"| **F-2** | medium | missing timeout | resolved in verify 1 |",
+			"| **F-3** | low | kept low | resolved in verify 3 |",
 		]);
 		expect(text).not.toMatch(/fixed/i);
 	});
@@ -363,14 +385,19 @@ describe("renderCloseoutComment", () => {
 		});
 		const lines = text.split("\n");
 		expect(lines).toContain(
-			"**1 finding** (1 high) · **2 resolved** in 2 verify rounds · **1 open**",
+			"| **1** (1 high) | **2** in 2 verify rounds | **1** |",
 		);
-		expect(lines.filter((line) => line.startsWith("- "))).toEqual([
-			"- **F-1 [high]** auth bypass · resolved in verify 1",
-			"- **V1-R1 [regression]** null check gone · resolved in verify 2",
-			"- **V2-R1 [regression]** guard reverted (undoes `F-1`)",
+		expect(lines.filter((line) => /^\| \*\*[FV]/.test(line))).toEqual([
+			"| **F-1** | high | auth bypass | resolved in verify 1 |",
+			"| **V1-R1** | regression | null check gone | resolved in verify 2 |",
+			"| **V2-R1** | regression | guard reverted (undoes `F-1`) | open |",
 		]);
-		expect(lines).toContain("### Open (not resolved)");
+		// The open regression sits under its own heading, after the resolved.
+		expect(lines.indexOf("### Open (not resolved)")).toBeGreaterThan(
+			lines.indexOf(
+				"| **V1-R1** | regression | null check gone | resolved in verify 2 |",
+			),
+		);
 	});
 
 	it("rule 4: Verified by lists every round's seats once, grouped by lens", () => {
@@ -394,8 +421,10 @@ describe("renderCloseoutComment", () => {
 			baseOid,
 			headOid,
 		});
-		expect(text).toContain("**Verified by:** fix-verification (sol, glm)");
-		expect(text).toContain("2 verify rounds");
+		expect(text).toContain("Verified by: fix-verification (sol, glm)</sub>");
+		expect(text).toContain(
+			"| Findings | Verify rounds |\n|---|---|\n| none | 2 |",
+		);
 	});
 
 	it("rule 4: no rounds, no Verified by line", () => {
@@ -412,7 +441,9 @@ describe("renderCloseoutComment", () => {
 		});
 		expect(text).not.toContain("Verified by");
 		expect(text).not.toContain("verify round");
-		expect(text).toContain("**1 finding** (1 high) · 1 dismissed");
+		expect(text).toContain(
+			"| Findings | Dismissed |\n|---|---|\n| **1** (1 high) | 1 |",
+		);
 	});
 
 	it("rule 5: a link that is not this PR's comment URL is left out, never the post", () => {
@@ -499,7 +530,9 @@ describe("renderCloseoutComment", () => {
 			baseOid,
 			headOid,
 		});
-		expect(text).toContain("**3 findings** (1 high, 2 low) · **3 resolved**");
+		expect(text).toContain(
+			"| **3** (1 high, 2 low) | **3** in 1 verify round |",
+		);
 	});
 
 	it("a long list is cut last rows first, the head and the hidden marker kept", () => {
@@ -531,16 +564,18 @@ describe("renderCloseoutComment", () => {
 		});
 		expect(text.length).toBeLessThan(65_536);
 		const lines = text.split("\n");
-		expect(lines[2]).toBe(
-			"**600 findings** (600 high) · **600 resolved** in 1 verify round",
-		);
+		expect(lines.slice(4, 7)).toEqual([
+			"| Findings | Resolved |",
+			"|---|---|",
+			"| **600** (600 high) | **600** in 1 verify round |",
+		]);
 		expect(lines.at(-1)).toBe("<!-- review-panel review=r-1 verify=v-1 -->");
 		expect(text).toMatch(
 			/\n- \d+ row\(s\) cut to fit GitHub's comment limit; the full list is in the run record\.\n/,
 		);
 		const listed = lines
-			.filter((line) => line.startsWith("- **F-"))
-			.map((line) => /^- \*\*(F-\d+) /.exec(line)?.[1]);
+			.filter((line) => line.startsWith("| **F-"))
+			.map((line) => /^\| \*\*(F-\d+)\*\* /.exec(line)?.[1]);
 		expect(listed.length).toBeGreaterThan(10);
 		expect(listed.length).toBeLessThan(600);
 		// The rows kept are the first ones, in order.
@@ -627,19 +662,19 @@ describe("assembleCloseoutComment", () => {
 		});
 
 		expect(text).toContain(
-			"**4 findings** (2 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 dismissed · 1 left as low/advisory",
+			"| **4** (2 high, 1 medium, 1 low) | **2** in 1 verify round | 1 | 1 |",
 		);
 		expect(text).toContain(
-			"**Review seats:** holistic (terra, glm, deepseek), security (terra, glm), tests (terra, glm)",
+			"<sub>Review seats: holistic (terra, glm, deepseek), security (terra, glm), tests (terra, glm)",
 		);
 		expect(text).toContain(
-			"- **F-1 [high]** auth bypass · resolved in verify 1",
+			"| **F-1** | high | auth bypass | resolved in verify 1 |",
 		);
 		expect(text).toContain(
-			"- **F-2 [medium]** missing timeout · resolved in verify 1",
+			"| **F-2** | medium | missing timeout | resolved in verify 1 |",
 		);
 		expect(text).toContain(
-			"- **F-4** stale cache claim — the cache key includes the tenant",
+			"**F-4** stale cache claim\n> the cache key includes the tenant",
 		);
 		expect(text).toContain("- **F-3** rename helper");
 		expect(text).not.toMatch(/fixed/i);
@@ -660,7 +695,7 @@ describe("assembleCloseoutComment", () => {
 			lowAdvisory: [],
 		});
 		expect(text).toContain(
-			"### Low / advisory (not kept)\n- **F-3** rename helper",
+			"<details><summary>Low / advisory, not kept (1)</summary>\n\n- **F-3** rename helper\n</details>",
 		);
 		expect(() =>
 			assembleCloseoutComment({

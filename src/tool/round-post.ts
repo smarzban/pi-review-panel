@@ -58,6 +58,7 @@ import {
 } from "./closeout-rounds.js";
 import {
 	type CommentGroupRow,
+	type CommentRow,
 	fitCommentBody,
 	isRunMarkerFor,
 	markerTail,
@@ -83,7 +84,6 @@ export { fitCommentBody, GITHUB_COMMENT_LIMIT } from "./posted-text.js";
 export { claimRound, ROUND_DEADLINE_MS } from "./round-claim.js";
 
 import {
-	dispositionLabel,
 	findingAttribution,
 	formatSuggestion,
 	formatSuggestionsUnavailable,
@@ -95,6 +95,7 @@ import {
 	reviewLostLine,
 	truncateCodePoints,
 	verifyFacts,
+	votedCountLine,
 } from "./review-presentation.js";
 
 /** Bytes the reply keeps free for the `PR comment:` lines. */
@@ -207,6 +208,20 @@ export function githubSafe(text: string, maxChars = TITLE_CHARS): string {
 /** A file name or id as one code span it cannot close. */
 function safeCode(text: string, maxChars = FILE_CHARS): string {
 	return postedCode(text, maxChars);
+}
+
+/**
+ * `Seats: lens (id, id), …` with every owner-config name escaped like seat
+ * text, so a roster id cannot close the small text it sits in.
+ */
+export function postedSeatsLine(seats: readonly PlannedSeat[]): string {
+	return renderSeatsLine(
+		seats.map((seat) => ({
+			...seat,
+			rosterId: githubSafe(seat.rosterId, 60),
+			lens: githubSafe(seat.lens, 60),
+		})),
+	);
 }
 
 /** A line of tool-owned text that carries owner-config names. */
@@ -551,20 +566,60 @@ async function postOne(
 	return { line: posted("PR comment", target, url), target, url, gh };
 }
 
-function findingRow(
+/** Tool-owned small text; every part is already safe to post. */
+function small(parts: readonly string[]): string {
+	return `<sub>${parts.join(" · ")}</sub>`;
+}
+
+/**
+ * One entry: its bold label and title, a small line of where and who, and
+ * the seat's evidence folded under a toggle (nothing when it has none).
+ */
+function entryLines(
+	label: string,
+	meta: readonly string[],
+	evidence: string,
+): string[] {
+	const text = githubSafe(evidence, EVIDENCE_CHARS);
+	return [
+		label,
+		...(meta.length === 0 ? [] : [small(meta)]),
+		...(text === ""
+			? []
+			: ["<details><summary>Evidence</summary>", "", text, "</details>"]),
+	];
+}
+
+/** A finding's lines: label, severity and title, place and seat, evidence. */
+function findingLines(
 	entry: StampedFinding,
-	panel: PlannedSeat[],
+	panel: readonly PlannedSeat[],
 	label = githubSafe(entry.id, 40),
 ): string[] {
-	const where = safeCode(`${entry.finding.file}:${entry.finding.line}`);
-	const row = [
-		`- **${label} [${entry.finding.severity}]** ${githubSafe(entry.finding.title)} (${where}) — ${githubSafe(findingAttribution(entry, panel), 120)}`,
-	];
-	const evidence = githubSafe(entry.finding.evidence, EVIDENCE_CHARS);
-	if (evidence !== "") {
-		row.push(`  **Evidence:** ${evidence}`);
-	}
-	return row;
+	return entryLines(
+		`**${label} [${entry.finding.severity}]** ${githubSafe(entry.finding.title)}`,
+		[
+			safeCode(`${entry.finding.file}:${entry.finding.line}`),
+			githubSafe(findingAttribution(entry, [...panel]), 120),
+		],
+		entry.finding.evidence,
+	);
+}
+
+/** A finding as its own row, after a blank line. */
+function findingRow(
+	entry: StampedFinding,
+	panel: readonly PlannedSeat[],
+	label = githubSafe(entry.id, 40),
+): string[] {
+	return ["", ...findingLines(entry, panel, label)];
+}
+
+/** A group member as a list item: its lines indented under the bullet. */
+function memberRow(entry: StampedFinding, panel: PlannedSeat[]): string[] {
+	return findingLines(entry, panel).map((line, index) =>
+		index === 0 ? `- ${line}` : line === "" ? "" : `  ${line}`,
+	);
 }
 
 /**
@@ -580,20 +635,17 @@ function groupRow(group: GroupView, panel: PlannedSeat[]): CommentGroupRow {
 			head: findingRow(
 				only,
 				panel,
-				`${githubSafe(group.id, 40)} / ${githubSafe(only.id, 40)}`,
+				`${githubSafe(group.id, 40)} · ${githubSafe(only.id, 40)}`,
 			),
 			members: [],
 		};
 	}
 	return {
 		head: [
-			`- **${githubSafe(group.id, 40)} [${group.severity}, ${GROUP_SEVERITY_LABEL}]** ${githubSafe(group.lead.finding.title)}`,
+			"",
+			`**${githubSafe(group.id, 40)} [${group.severity}, ${GROUP_SEVERITY_LABEL}]** ${githubSafe(group.lead.finding.title)}`,
 		],
-		members: group.members.map((entry) =>
-			findingRow(entry, panel, githubSafe(entry.id, 40)).map(
-				(line) => `  ${line}`,
-			),
-		),
+		members: group.members.map((entry) => memberRow(entry, panel)),
 	};
 }
 
@@ -614,12 +666,25 @@ export const NO_CLOSEOUT_NEEDED = "No findings · no close-out needed";
 
 /** The review comment: the reply's content without the local record path. */
 export function renderReviewRound(facts: ReviewRoundFacts): string {
-	const [, summary, seats] = reviewHeadLines("", facts);
+	const [, summary] = reviewHeadLines("", facts);
+	// `2/2 voted · 3 findings in 2 groups · 1m 2s · $0.12`: the findings go
+	// up top, the rest in small text at the end.
+	const [votes, found, ...totals] = (summary as string).split(" · ");
+	const findings = facts.findings ?? [];
+	const severities = (["high", "medium", "low"] as const).flatMap((level) => {
+		const count = findings.filter(
+			(row) => row.finding.severity === level,
+		).length;
+		return count === 0 ? [] : [`${count} ${level}`];
+	});
 	const head = [
 		REVIEW_ROUND_HEADING,
-		`${safeCode(facts.baseRef)} (\`${shortOid(facts.baseOid)}\`) → \`${shortOid(facts.headOid)}\``,
-		ownLine(summary as string),
-		boldLabel(ownLine(seats as string)),
+		"",
+		[
+			`${safeCode(facts.baseRef)} (\`${shortOid(facts.baseOid)}\`) → \`${shortOid(facts.headOid)}\``,
+			`**${ownLine(found ?? "")}**`,
+			...severities,
+		].join(" · "),
 	];
 	if (facts.result.outcomes.some((row) => row.outcome.kind === "failed")) {
 		head.push(boldLabel(ownLine(reviewLostLine(facts.result))));
@@ -628,22 +693,36 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 	if (groupingLost !== undefined) {
 		head.push(boldLabel(ownLine(groupingLost)));
 	}
-	head.push("");
-	const findings = facts.findings ?? [];
 	const groups = groupedView(findings, facts.result.grouping);
-	const rows =
+	// A severity heading goes with the first row of that severity. Rows are
+	// in severity order; a group sits under the highest a seat stated.
+	let shownLevel: string | undefined;
+	const heading = (level: string): string[] => {
+		if (level === shownLevel) {
+			return [];
+		}
+		shownLevel = level;
+		return ["", `### ${level.charAt(0).toUpperCase()}${level.slice(1)}`];
+	};
+	const rows: CommentRow[] =
 		groups === undefined
-			? orderFindings(findings).map((entry) => findingRow(entry, facts.panel))
-			: groups.map((group) => groupRow(group, facts.panel));
+			? orderFindings(findings).map((entry) => {
+					const lines = findingRow(entry, facts.panel);
+					const top = heading(entry.finding.severity);
+					return top.length === 0 ? lines : [...top, ...lines.slice(1)];
+				})
+			: groups.map((group) => {
+					const row = groupRow(group, facts.panel);
+					const top = heading(group.severity);
+					return top.length === 0
+						? row
+						: { ...row, head: [...top, ...row.head.slice(1)] };
+				});
 	const clean = rows.length === 0;
 	// No seat voted: nothing was checked, so it is lost coverage, never clean.
 	const checked = facts.result.outcomes.some(
 		(row) => row.outcome.kind === "voted",
 	);
-	if (clean) {
-		// The closing line below stands in for the empty list.
-		head.pop();
-	}
 	const ran = new Set(facts.panel.map((seat) => seat.lens));
 	const offered = facts.suggestions ?? [];
 	const tail: string[] = [];
@@ -668,7 +747,19 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 		// verify round follows, the card posts at the end as usual.
 		tail.push("", NO_CLOSEOUT_NEEDED);
 	}
-	tail.push(...markerTail({ review: facts.runId }));
+	tail.push(
+		"",
+		small([
+			ownLine(votes ?? ""),
+			...totals.map((part) => ownLine(part)),
+			postedSeatsLine(
+				facts.result.grouping === undefined
+					? facts.panel
+					: [...facts.panel, facts.result.grouping.seat],
+			),
+		]),
+		...markerTail({ review: facts.runId }),
+	);
 	return fitCommentBody(
 		head,
 		rows,
@@ -771,7 +862,7 @@ function stateAfter(facts: VerifyRoundFacts): ChainState {
 	return chainState(facts.review.findings, chainWithOwn(facts));
 }
 
-/** The verify comment: fixed, not fixed and why, and what is new. */
+/** The verify comment: what the seats said per id, why any is not fixed, and what is new. */
 export function renderVerifyRound(
 	facts: VerifyRoundFacts,
 	round: number,
@@ -786,10 +877,7 @@ export function renderVerifyRound(
 	for (const row of [...(facts.reviewFindings ?? []), ...result.kept]) {
 		titles.set(row.id, row.finding.title);
 	}
-	const titled = (id: string) => {
-		const title = titles.get(id);
-		return title === undefined ? "" : ` — ${githubSafe(title)}`;
-	};
+	const title = (id: string) => githubSafe(titles.get(id) ?? "");
 	const failed = result.outcomes.filter((row) => row.outcome.kind === "failed");
 	const recheck = recheckView(result);
 	const lost = [
@@ -797,33 +885,28 @@ export function renderVerifyRound(
 		...(recheck?.lost ?? []),
 	];
 	const seats = [...facts.panel, ...(recheck?.seats ?? [])];
-	const keptSummary =
-		seen.keptIds.length === 0
-			? result.nothingOpen === true && seen.voted > 0
-				? nothingOpenLine(result)
-				: "no kept ids"
-			: seen.keptIds
-					.map((id) => githubSafe(dispositionLabel(seen, id), 80))
-					.join(", ");
 	const keptSet = new Set(seen.keptIds);
+	const said = (id: string) => [...(seen.dispositions.get(id) ?? [])];
+	const open = `**Open after this round:** ${
+		state.open.length === 0
+			? "none"
+			: state.open.map((id) => githubSafe(id, 40)).join(", ")
+	}${failed.length === 0 ? "" : " · a verify seat was lost, so this round resolved nothing"}`;
+	const regressions =
+		seen.regressions.length === 0
+			? "no regressions"
+			: `${seen.regressions.length} regression${seen.regressions.length === 1 ? "" : "s"}`;
 	const head = [
 		`## Review panel · verify ${round}`,
-		`\`${shortOid(result.priorHeadOid)}\` → \`${shortOid(result.headOid)}\``,
-		// The caller's own words, as one line of inert text; the tool adds
-		// nothing of its own.
-		...(result.scopingNote === undefined
-			? []
-			: [
-					`**Why this round:** ${githubSafe(result.scopingNote, EVIDENCE_CHARS)}`,
-				]),
-		[
-			`${seen.voted}/${result.outcomes.length} voted`,
-			keptSummary,
-			seen.regressions.length === 0
-				? "no regressions"
-				: `${seen.regressions.length} regression${seen.regressions.length === 1 ? "" : "s"}`,
-		].join(" · "),
-		...(seats.length === 0 ? [] : [boldLabel(ownLine(renderSeatsLine(seats)))]),
+		"",
+		`\`${shortOid(result.priorHeadOid)}\` → \`${shortOid(result.headOid)}\` · ${open} · ${regressions}`,
+		...(seen.keptIds.length === 0
+			? [
+					result.nothingOpen === true && seen.voted > 0
+						? nothingOpenLine(result)
+						: "No kept ids",
+				]
+			: []),
 		...(result.final === true
 			? [
 					"**Final check:** the whole change, from the reviewed head, for fixes that no longer hold or conflict",
@@ -832,55 +915,87 @@ export function renderVerifyRound(
 		...(lost.length === 0
 			? []
 			: [`**Lost:** ${lost.map((name) => githubSafe(name, 120)).join(", ")}`]),
-		`**Open after this round:** ${
-			state.open.length === 0
-				? "none"
-				: state.open.map((id) => githubSafe(id, 40)).join(", ")
-		}${failed.length === 0 ? "" : " · a verify seat was lost, so this round resolved nothing"}`,
+		// The caller's own words, as one line of inert text; the tool adds
+		// nothing of its own.
+		...(result.scopingNote === undefined
+			? []
+			: [
+					"",
+					`> **This round:** ${githubSafe(result.scopingNote, EVIDENCE_CHARS)}`,
+				]),
 	];
 	const rows: string[][] = [];
-	const section = (title: string, items: string[][]) => {
+	// A section's heading goes with its first row, so a cut never leaves a
+	// heading alone; each row starts with a blank line.
+	const section = (heading: string[], items: string[][]) => {
 		for (const [index, item] of items.entries()) {
-			rows.push(index === 0 ? ["", title, ...item] : item);
+			rows.push(index === 0 ? ["", ...heading, ...item] : ["", ...item]);
 		}
 	};
+	// One table row per checked id: what the seats said, never a verdict.
 	section(
-		"### Kept",
+		["| | Finding | Seats said |", "|---|---|---|"],
 		seen.keptIds.map((id) => {
-			const evidence = seen.evidence.get(id);
-			const why =
-				evidence === undefined
-					? ""
-					: ` — ${safeCode(evidence.file)}: ${githubSafe(evidence.explanation, EVIDENCE_CHARS)}`;
+			const states = said(id);
 			return [
-				`- **${githubSafe(dispositionLabel(seen, id), 80)}**${titled(id)}${why}`,
+				`| **${githubSafe(id, 40)}** | ${title(id)} | ${
+					states.length === 0
+						? "no answer"
+						: states.map((state) => githubSafe(state, 40)).join(", ")
+				} |`,
 			];
 		}),
 	);
+	// Table rows are not blank-separated.
+	for (const row of rows.slice(1)) {
+		row.shift();
+	}
+	// A kept id that no voting seat called resolved, with the reason the
+	// first such seat gave; a resolved id has its table row only.
 	section(
-		"### Dismissed (not fixed)",
+		["### Not resolved"],
+		seen.keptIds
+			.filter((id) => {
+				const states = said(id);
+				return (
+					states.length === 0 || states.some((state) => state !== "resolved")
+				);
+			})
+			.map((id) => {
+				const evidence = seen.openEvidence.get(id);
+				const states = said(id).filter((state) => state !== "resolved");
+				const label = `**${githubSafe(id, 40)} · ${
+					states.length === 0
+						? "no answer"
+						: states.map((state) => githubSafe(state, 40)).join(", ")
+				}**`;
+				return evidence === undefined
+					? [label]
+					: [
+							`${label} — ${safeCode(evidence.file)}`,
+							`> ${githubSafe(evidence.explanation, EVIDENCE_CHARS)}`,
+						];
+			}),
+	);
+	section(
+		["### Dismissed"],
 		facts.dismissed.map((row) => [
-			`- **${githubSafe(row.id, 40)}**${titled(row.id)} — ${githubSafe(row.reason, EVIDENCE_CHARS)}`,
+			`**${githubSafe(row.id, 40)}** ${title(row.id)}`,
+			`> ${githubSafe(row.reason, EVIDENCE_CHARS)}`,
 		]),
 	);
 	section(
-		"### Low / advisory (not kept)",
-		facts.lowAdvisory
-			.filter((id) => !keptSet.has(id))
-			.map((id) => [`- **${githubSafe(id, 40)}**${titled(id)}`]),
-	);
-	section(
-		"### New findings (regressions)",
+		["### New findings (regressions)"],
 		seen.regressions.map((row) => {
 			const undoes = state.items.get(row.id)?.regression?.undoes;
-			const lines = [
-				`- **${githubSafe(row.id, 40)}** ${githubSafe(row.title)} (${safeCode(`${row.file}:${row.line}`)})${undoes === undefined ? "" : ` · undoes ${safeCode(undoes, 40)}`}`,
-			];
-			const evidence = githubSafe(row.evidence, EVIDENCE_CHARS);
-			if (evidence !== "") {
-				lines.push(`  **Evidence:** ${evidence}`);
-			}
-			return lines;
+			return entryLines(
+				`**${githubSafe(row.id, 40)}** ${githubSafe(row.title)}`,
+				[
+					safeCode(`${row.file}:${row.line}`),
+					...(undoes === undefined ? [] : [`undoes ${safeCode(undoes, 40)}`]),
+				],
+				row.evidence,
+			);
 		}),
 	);
 	if (recheck !== undefined) {
@@ -888,9 +1003,9 @@ export function renderVerifyRound(
 			names.map((name) => githubSafe(name, 40)).join(", ");
 		if (recheck.findings.length > 0) {
 			section(
-				`**New in this round (recheck: ${lenses(recheck.lenses)}):**`,
+				[`### New in this round (recheck: ${lenses(recheck.lenses)})`],
 				orderFindings(recheck.findings).map((entry) =>
-					findingRow(entry, recheck.seats),
+					findingLines(entry, recheck.seats),
 				),
 			);
 		} else {
@@ -900,13 +1015,32 @@ export function renderVerifyRound(
 			]);
 		}
 	}
+	const lows = facts.lowAdvisory.filter((id) => !keptSet.has(id));
+	if (lows.length > 0) {
+		// One row: a toggle cut in half would swallow the rest of the body.
+		// Last, so a cut drops it before any regression or new finding.
+		rows.push([
+			"",
+			`<details><summary>Low / advisory, not kept (${lows.length})</summary>`,
+			"",
+			...lows.map((id) => `- **${githubSafe(id, 40)}** ${title(id)}`),
+			"</details>",
+		]);
+	}
 	return fitCommentBody(
 		head,
 		rows,
-		markerTail({
-			review: result.priorRunId,
-			verify: runIdOf(result.recordPath),
-		}),
+		[
+			"",
+			small([
+				votedCountLine(result),
+				...(seats.length === 0 ? [] : [postedSeatsLine(seats)]),
+			]),
+			...markerTail({
+				review: result.priorRunId,
+				verify: runIdOf(result.recordPath),
+			}),
+		],
 		"row",
 	);
 }
