@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type ActionDependencies,
 	type ActionResult,
+	commentAction,
 	parseVerifyArguments,
 	verifyAction,
 } from "../src/actions/actions.js";
@@ -26,6 +27,10 @@ import type { StampedFinding } from "../src/run/types.js";
 import { loadVerifyChain } from "../src/run/verify-chain.js";
 import type { SdkSessionFactory } from "../src/seat/run-seat.js";
 import type { SeatSpec } from "../src/seat/sdk-session.js";
+import {
+	findCloseoutPr,
+	type PostCloseoutInput,
+} from "../src/tool/closeout-post.js";
 import type { RoundGhRunner } from "../src/tool/round-post.js";
 import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
@@ -86,7 +91,7 @@ type Row = {
 };
 
 /** What each recheck seat submits, by lens; `lost` makes it fail. */
-let recheckScript: Map<string, Row[] | "lost">;
+let recheckScript: Map<string, Row[] | "lost" | { tries: unknown[][] }>;
 /** Each verify seat's disposition per id; resolved when not named. */
 let verifyScript: Map<string, "resolved" | "still present">;
 /** Every session the runner opened, with its spec and its prompt. */
@@ -195,47 +200,58 @@ const factory: SdkSessionFactory = async (input) => {
 				if (tool === undefined) {
 					throw new Error("no submit tool");
 				}
-				let args: Record<string, unknown>;
+				let tries: Array<Record<string, unknown>>;
 				if (
 					(spec.profile as { kind?: string } | undefined)?.kind ===
 					"verification"
 				) {
-					args = {
-						items: (spec.expectedIds ?? []).map((id) => {
-							const disposition = verifyScript.get(id) ?? "resolved";
-							return {
-								id,
-								disposition,
-								...(disposition === "resolved"
-									? {
-											evidence: {
-												file: "src/cache.ts",
-												explanation: `${id} holds at line 3`,
-											},
-										}
-									: {}),
-							};
-						}),
-						regressions: [],
-					};
+					tries = [
+						{
+							items: (spec.expectedIds ?? []).map((id) => {
+								const disposition = verifyScript.get(id) ?? "resolved";
+								return {
+									id,
+									disposition,
+									...(disposition === "resolved"
+										? {
+												evidence: {
+													file: "src/cache.ts",
+													explanation: `${id} holds at line 3`,
+												},
+											}
+										: {}),
+								};
+							}),
+							regressions: [],
+						},
+					];
 				} else {
 					const script = recheckScript.get(spec.lens) ?? [];
 					if (script === "lost") {
 						throw new Error("injected provider failure");
 					}
-					args = { findings: script };
+					tries = Array.isArray(script)
+						? [{ findings: script }]
+						: script.tries.map((findings) => ({ findings }));
 				}
-				try {
-					await tool.execute(
-						"scripted",
-						args,
-						new AbortController().signal,
-						() => undefined,
-						{},
-					);
-					submitted = true;
-				} catch (error) {
-					refusals.push(error instanceof Error ? error.message : String(error));
+				// Each try is a submission; a refused one is followed by the
+				// next, as a model would after a tool error.
+				for (const args of tries) {
+					try {
+						await tool.execute(
+							"scripted",
+							args,
+							new AbortController().signal,
+							() => undefined,
+							{},
+						);
+						submitted = true;
+						return;
+					} catch (error) {
+						refusals.push(
+							error instanceof Error ? error.message : String(error),
+						);
+					}
 				}
 			},
 			async abort() {},
@@ -655,11 +671,30 @@ describe("verify --recheck", () => {
 	});
 
 	it("a malformed recheck row is refused by the real submit tool; the seat's accepted row is what is recorded", async () => {
-		recheckScript.set("tests", [{ ...LEAK, severity: "critical" as never }]);
+		// Each tests seat submits a malformed row first, then a valid one.
+		recheckScript.set("tests", {
+			tries: [[{ ...LEAK, severity: "critical" }], [NIT]],
+		});
 		const v1 = await first({ recheck: ["tests"] });
-		expect(refusals.length).toBeGreaterThan(0);
-		// No row got past the tool, so nothing is recorded as found.
-		expect(v1.body).not.toContain("V1-F1");
+		expect(refusals).toHaveLength(2);
+		expect(refusals[0]).toMatch(/severity/u);
+		// Only the accepted rows are recorded, signed and posted.
+		const recorded = verificationOf(v1.runId).recheck as {
+			outcomes: Array<{ outcome: { kind: string; findings?: unknown[] } }>;
+		};
+		expect(recorded.outcomes.map((row) => row.outcome)).toEqual([
+			{ kind: "voted", findings: [NIT] },
+			{ kind: "voted", findings: [NIT] },
+		]);
+		const chain = loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY);
+		expect(chain[0]?.recheck?.findings.map((row) => row.title)).toEqual([
+			NIT.title,
+			NIT.title,
+		]);
+		expect(v1.body).toContain(
+			"- **V1-F1 [low]** backoff constant is unnamed (`src/retry.ts:2`) — terra/tests",
+		);
+		expect(v1.body).not.toContain("the new retry log prints the token");
 	});
 });
 
@@ -699,5 +734,54 @@ describe("the final check", () => {
 				row.body.startsWith("## Review panel · close-out"),
 			),
 		).toBe(true);
+	});
+});
+
+describe("comment", () => {
+	it("lists an open recheck id with its severity, takes it in --dismissed, and names a lost recheck seat", async () => {
+		recheckScript.set("tests", [LEAK]);
+		recheckScript.set("security", "lost");
+		await first({ recheck: ["tests", "security"] });
+		recheckScript.clear();
+		const bodies: string[] = [];
+		const reply = await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId: REVIEW,
+				dismissed: [{ id: "V1-F2", reason: "same leak as V1-F1" }],
+				lowAdvisory: [],
+			},
+			{
+				deps: {
+					...deps(),
+					findCloseoutPr: (input: Parameters<typeof findCloseoutPr>[0]) =>
+						findCloseoutPr({ ...input, runGh: runGh as never }),
+					postComment: (input: PostCloseoutInput) => {
+						bodies.push(input.body);
+						return {
+							action: "created" as const,
+							commentId: 1,
+							pr: 12,
+							url: `https://github.com/${REPO_SLUG}/pull/12#issuecomment-1`,
+						};
+					},
+				},
+			},
+		);
+		expect(textOf(reply)).not.toMatch(/refused/u);
+		const card = bodies[0] ?? "";
+		const lines = card.split("\n");
+		const open = lines.indexOf("### Open (not resolved)");
+		expect(open).toBeGreaterThan(0);
+		expect(lines[open + 1]).toBe(
+			"- **V1-F1 [medium]** the new retry log prints the token",
+		);
+		expect(card).toContain(
+			"- **V1-F2** the new retry log prints the token — same leak as V1-F1",
+		);
+		expect(card).toContain(
+			"**Lost:** terra/security (recheck), opus/security (recheck)",
+		);
 	});
 });

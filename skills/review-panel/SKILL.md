@@ -175,8 +175,11 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
    posting, parsing or other risky code, and skip it for a small fix. Pick each lens for a
    reason and put the reasons in `--scoping-note` (`"fixes F-2; recheck security: the fix
    rewrites token parsing"`). What the recheck finds gets ids such as `V2-F1` and is open like
-   any id: fix it or dismiss it with a reason on the next verify. A lost recheck seat is lost
-   coverage, never "nothing new", and blocks `--close-out` for that round.
+   any id: fix it or dismiss it with a reason on the next verify. Two seats can report the same
+   problem as two ids: fix it once and dismiss the duplicate with a reason. A lost recheck seat
+   is lost coverage, never "nothing new", and blocks `--close-out` for that round. That range
+   cannot be rechecked later (the next verify covers only its own commits), so tell the owner
+   which lens was lost; the card names it, and `comment` can post it once the owner agrees.
 
 ```bash
 review-panel verify --prior-run-id <latest verify run> --head <new head> \
