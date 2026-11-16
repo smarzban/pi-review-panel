@@ -540,7 +540,7 @@ describe("a review round posts to the PR whose head it reviewed", () => {
 			expect(body.split("\n")[0]).toBe("## Review panel · review");
 			expect(body.split("\n").at(-1)).toBe("<!-- review-panel review=r-1 -->");
 			expect(body).toContain("F-1");
-			expect(body).toContain("**Seats:** holistic (terra, claude)");
+			expect(body).toContain("Seats: holistic (terra, claude)</sub>");
 			expect(body).not.toContain(repo);
 			expect(body).not.toContain("Record:");
 			// No call edits or deletes a comment.
@@ -867,7 +867,14 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 										explanation: "the guard now checks null",
 									},
 								},
-								{ id: "F-2", disposition: "still present" },
+								{
+									id: "F-2",
+									disposition: "still present",
+									evidence: {
+										file: "src/r.ts",
+										explanation: "the loop still retries at once",
+									},
+								},
 							],
 							[{ title: "new crash on empty input", file: "src/b.ts" }],
 						),
@@ -880,11 +887,47 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			expect(body.split("\n")[0]).toBe("## Review panel · verify 2");
 			expect(body).toContain("v-2");
 			expect(body).toContain(REVIEW_ID);
-			expect(body).toMatch(/F-1 resolved\*\* .*the guard now checks null/);
-			expect(body).toMatch(/F-2 still present/);
-			expect(body).toMatch(/F-3\*\* .*by design, see ADR 4/);
-			expect(body).toMatch(/### Low \/ advisory \(not kept\)\n- \*\*F-4\*\*/);
-			expect(body).toMatch(/R-1\*\* .*new crash on empty input/);
+			expect(body).toContain(
+				"· **Open after this round:** F-2, V2-R1 · 1 regression\n",
+			);
+			// One table row per checked id, with what the seats said.
+			expect(body).toContain(
+				[
+					"| | Finding | Seats said |",
+					"|---|---|---|",
+					"| **F-1** | F-1 title | resolved |",
+					"| **F-2** | F-2 title | still present |",
+				].join("\n"),
+			);
+			expect(body).not.toContain("### Kept");
+			// Only what was not resolved gets a reason, quoted on its own.
+			expect(body).toContain(
+				[
+					"### Not fixed",
+					"**F-2 · still present** — `src/r.ts`",
+					"> the loop still retries at once",
+					"",
+					"### Dismissed",
+					"**F-3** F-3 title",
+					"> by design, see ADR 4",
+					"",
+					"<details><summary>Low / advisory, not kept (1)</summary>",
+					"",
+					"- **F-4** F-4 title",
+					"</details>",
+					"",
+					"### New findings (regressions)",
+					"**R-1** new crash on empty input",
+					"<sub>`src/b.ts:9`</sub>",
+					"<details><summary>Evidence</summary>",
+					"",
+					"regression evidence",
+					"</details>",
+				].join("\n"),
+			);
+			expect(body).toContain(
+				"<sub>1/1 voted · Seats: fix-verification (terra)</sub>",
+			);
 			expect(body).not.toContain(repo);
 			expect(textOf(result)).toContain("PR comment: posted to #12");
 			// Not every kept id is resolved: no close-out, and the reply says why.
@@ -953,12 +996,12 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			expect(posted.length).toBeGreaterThanOrEqual(1);
 			const body = bodyOf(posted[0]);
 			expect(body.split("\n")[0]).toBe("## Review panel · verify 1");
-			expect(body).toMatch(/F-1 resolved\*\*/);
-			expect(body).toMatch(
-				/### Dismissed \(not fixed\)\n- \*\*F-2\*\* — F-2 title — by design, see ADR 4\n- \*\*F-3\*\* — F-3 title — by design, see ADR 4\n/,
+			expect(body).toContain("| **F-1** | F-1 title | resolved |");
+			expect(body).toContain(
+				"### Dismissed\n**F-2** F-2 title\n> by design, see ADR 4\n\n**F-3** F-3 title\n> by design, see ADR 4\n",
 			);
-			expect(body).toMatch(
-				/### Low \/ advisory \(not kept\)\n- \*\*F-4\*\* — F-4 title\n- \*\*F-5\*\* — F-5 title\n/,
+			expect(body).toContain(
+				"<details><summary>Low / advisory, not kept (2)</summary>\n\n- **F-4** F-4 title\n- **F-5** F-5 title\n</details>",
 			);
 			expect(body).not.toMatch(/\bG-\d/);
 			expect(textOf(result)).toContain("PR comment: posted to #12");
@@ -1076,7 +1119,7 @@ describe("a clean verify with --close-out also posts the close-out card, once pe
 			const card = bodyOf(posted[1]);
 			expect(card.split("\n")[0]).toBe("## Review panel · close-out");
 			expect(card).toContain(
-				"**3 findings** (1 high, 1 medium, 1 low) · **1 resolved** in 1 verify round · 1 dismissed · 1 left as low/advisory",
+				"| **3** (1 high, 1 medium, 1 low) | **1** in 1 verify round | 1 | 1 |",
 			);
 			expect(card).toContain("out of scope for this PR");
 			expect(card).toContain(REVIEW_ID);
@@ -1152,7 +1195,7 @@ describe("a clean verify with --close-out also posts the close-out card, once pe
 			expect(posted).toHaveLength(2);
 			const card = bodyOf(posted[1]);
 			expect(card.split("\n")[0]).toBe("## Review panel · close-out");
-			expect(card).toContain("**Review seats:** holistic (terra)");
+			expect(card).toContain("<sub>Review seats: holistic (terra)");
 			expect(card).not.toContain("Lost");
 			expect(card).not.toContain("planted");
 		});
@@ -1329,15 +1372,16 @@ describe("posted text is safe", () => {
 				body,
 			);
 			expect(cut).not.toBeNull();
-			const shown = body
-				.split("\n")
-				.filter((line) => /^- \*\*F-\d+ /.test(line));
+			const shown = body.split("\n").filter((line) => /^\*\*F-\d+ /.test(line));
 			expect(shown.length + Number(cut?.[1])).toBe(400);
-			// Every shown finding row keeps its evidence line: rows are whole.
+			// Every shown finding row keeps its place line and its whole
+			// evidence toggle: rows are whole.
 			const lines = body.split("\n");
 			for (const [index, line] of lines.entries()) {
-				if (/^- \*\*F-\d+ /.test(line)) {
-					expect(lines[index + 1]?.startsWith("  ")).toBe(true);
+				if (/^\*\*F-\d+ /.test(line)) {
+					expect(lines[index + 1]?.startsWith("<sub>")).toBe(true);
+					expect(lines[index + 2]).toBe("<details><summary>Evidence</summary>");
+					expect(lines[index + 5]).toBe("</details>");
 				}
 			}
 		});
@@ -1682,20 +1726,47 @@ function expectInert(body: string): void {
 			// The tool's own hidden run marker.
 			continue;
 		}
-		// The tool's own bold labels: `**Seats:**` and the `- **F-1 …**` id,
-		// the close-out's `**3 findings**`, `**2 resolved**` and `**1 open**`
-		// counts, and
-		// its links to this PR's own comments.
-		const line = raw
+		// Lines the tool writes whole, with nothing from a seat in them: the
+		// toggles around evidence and low/advisory, and table headers.
+		if (
+			/^\s*(?:<\/details>|<details><summary>(?:Evidence|Low \/ advisory, not kept \(\d+\))<\/summary>)$/.test(
+				raw,
+			) ||
+			/^\|(?: [A-Za-z /]*? ?\|)+$/.test(raw) ||
+			/^\|(?:-{3}\|)+$/.test(raw)
+		) {
+			continue;
+		}
+		// The tool's own markup around seat text: the small-text wrapper, a
+		// quote line it starts, the cells of a table row (a seat's `|` is
+		// escaped, so only the tool's split a row), each cell's bold id.
+		// The wrapper is the line's start, so a code span inside it cannot
+		// open a fence: it is kept as a plain word.
+		let line = raw
+			.replace(/^(\s*)<sub>(.*)<\/sub>$/, "$1sub $2")
+			.replace(/^> /, "");
+		if (/^\| .* \|$/.test(line)) {
+			line = line
+				.slice(2, -2)
+				.split(/ (?<!\\)\| /)
+				.map((cell) => cell.replace(/^\*\*((?:[^*\\]|\\.)*?)\*\*/, "$1"))
+				.join(" ");
+		}
+		// The tool's own bold labels: `**Lost:**`, the `**F-1 …**` id at the
+		// start of a line (or of a list item), `**Open after this round:**`,
+		// the counts (`**3 findings**`, `**2**`), and its links to this PR's
+		// own comments.
+		line = line
 			.replace(/^(\s*)\*\*([A-Z][A-Za-z ]*:)\*\*/, "$1$2")
-			.replace(/^- \*\*((?:[^*\\]|\\.)*?)\*\*/, "- $1")
-			.replace(/\*\*(\d+ (?:findings?|resolved|open))\*\*/g, "$1")
+			.replace(/^(\s*(?:- )?)\*\*((?:[^*\\]|\\.)*?)\*\*/, "$1$2")
+			.replace(/\*\*(Open after this round:)\*\*/g, "$1")
+			.replace(/\*\*(\d+(?: (?:findings?|resolved|open))?)\*\*/g, "$1")
 			.replace(
 				/ · \[(?:review|verify \d+)\]\(https:\/\/github\.com\/smarzban\/demo\/pull\/12#issuecomment-\d+\)/g,
 				"",
 			);
 		if (/^#{2,3} [A-Z]/.test(line)) {
-			// Our own headings: `## Review panel · …` and `### Kept` and so on.
+			// Our own headings: `## Review panel · …`, `### High`, `### Dismissed`.
 			expect(line).toMatch(
 				/^(## Review panel( · [a-z0-9 -]+)?|### [A-Z][a-z /()-]+)$/,
 			);
@@ -1938,9 +2009,11 @@ describe("fix round 1: the close-out card keeps every line (H2)", () => {
 			expect(card).toHaveLength(1);
 			const lines = bodyOf(card[0]).split("\n");
 			expect(lines).toContain(
-				"**2 findings** (1 high, 1 medium) · **2 resolved** in 1 verify round",
+				"| **2** (1 high, 1 medium) | **2** in 1 verify round |",
 			);
-			expect(lines).toContain("**Review seats:** holistic (terra)");
+			expect(lines).toContain(
+				"<sub>Review seats: holistic (terra) · Verified by: fix-verification (terra)</sub>",
+			);
 			expect(lines.some((line) => line.includes("Lost"))).toBe(false);
 			expect(
 				lines.some((line) =>
@@ -1987,12 +2060,12 @@ describe("fix round 1: kept findings of any severity (M3)", () => {
 				const card = closeoutPosts(gh.calls);
 				expect(card).toHaveLength(1);
 				expect(bodyOf(card[0])).toContain(
-					"**2 findings** (1 high, 1 low) · **2 resolved** in 1 verify round",
+					"| **2** (1 high, 1 low) | **2** in 1 verify round |",
 				);
 				expect(bodyOf(card[0])).toContain(
-					"- **F-3 [low]** F-3 title · resolved in verify 1",
+					"| **F-3** | low | F-3 title | resolved in verify 1 |",
 				);
-				expect(bodyOf(posts(gh.calls)[0])).not.toContain("### Low / advisory");
+				expect(bodyOf(posts(gh.calls)[0])).not.toContain("Low / advisory");
 				expect(textOf(result).split("\n").at(-1)).toMatch(
 					/^PR close-out: posted to #12/,
 				);
@@ -2667,7 +2740,8 @@ const ROWS_R2: Row[] = [{ id: "F-1", severity: "high" }];
 
 /** A title that is not text: the verify body cannot be rendered from it. */
 const RENDER_FAILS_ROWS: Row[] = [
-	{ id: "F-1", severity: "high", title: 42 as unknown as string },
+	{ id: "F-1", severity: "high", title: "F-1 title" },
+	{ id: "F-2", severity: "low", title: 42 as unknown as string },
 ];
 
 describe("fix round 3: close-out claims are generations, never taken over", () => {
@@ -2966,6 +3040,8 @@ describe("fix round 3: round markers and claims through the verify action", () =
 					priorRunId: latest(repo, REVIEW_ID),
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
+					// Listed as low/advisory, so the body renders its title.
+					lowAdvisory: ["F-2"],
 				},
 				{
 					deps: deps(gh.runGh, {
@@ -2973,7 +3049,7 @@ describe("fix round 3: round markers and claims through the verify action", () =
 							repo,
 							"v-1",
 							REVIEW_ID,
-							RENDER_FAILS_ROWS,
+							RENDER_FAILS_ROWS.slice(0, 1),
 							STILL,
 						),
 					}),
@@ -3121,7 +3197,7 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 		expect(postedText("⚠‍b")).toBe("⚠�b");
 	});
 
-	it("evidence that reads as a block marker stays behind the Evidence: label", async () => {
+	it("evidence that reads as a block marker, alone on its line in a toggle or a quote, is escaped and forms none", async () => {
 		const rows: Row[] = [
 			{ id: "F-1", severity: "high", evidence: "===" },
 			{ id: "F-2", severity: "medium", evidence: "1. x" },
@@ -3134,7 +3210,11 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 					deps: deps(review.runGh, { runReview: reviewRun(repo, "r-1", rows) }),
 				},
 			);
-			expectInert(bodyOf(posts(review.calls)[0]));
+			const reviewBody = bodyOf(posts(review.calls)[0]);
+			expectInert(reviewBody);
+			// Each starts its own line inside the evidence toggle, escaped.
+			expect(reviewBody).toContain("\n\n\\===\n</details>");
+			expect(reviewBody).toContain("\n\n1\\. x\n</details>");
 			writeReviewRecord(repo, REVIEW_ID, rows);
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await verifyAction(
@@ -3169,7 +3249,13 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 					}),
 				},
 			);
-			expectInert(bodyOf(posts(gh.calls)[0]));
+			const verifyBody = bodyOf(posts(gh.calls)[0]);
+			expectInert(verifyBody);
+			// The Not fixed reasons are quoted lines the tool starts; what the
+			// seat wrote after `> ` is escaped, so it nests no second quote.
+			expect(verifyBody).toContain("\n> \\===\n");
+			expect(verifyBody).toContain("\n> \\> q\n");
+			expect(verifyBody).toContain("\n\n\\===\n</details>");
 		});
 	});
 });
@@ -3371,12 +3457,18 @@ describe("T498: readable PR comments", () => {
 			expect(body).toBe(
 				[
 					"## Review panel · review",
-					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\``,
-					"2/2 voted · 1 finding",
-					"**Seats:** holistic (terra, claude)",
 					"",
-					"- **F-1 [high]** \\*\\*not bold\\*\\* (really) (`src/a.ts:3`) — terra/holistic",
-					"  **Evidence:** calls f(x) for <span>$</span>5",
+					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\` · **1 finding** · 1 high`,
+					"",
+					"### High",
+					"**F-1 [high]** \\*\\*not bold\\*\\* (really)",
+					"<sub>`src/a.ts:3` · terra/holistic</sub>",
+					"<details><summary>Evidence</summary>",
+					"",
+					"calls f(x) for <span>$</span>5",
+					"</details>",
+					"",
+					"<sub>2/2 voted · Seats: holistic (terra, claude)</sub>",
 					"",
 					`<!-- review-panel review=${REVIEW_RUN} -->`,
 				].join("\n"),
@@ -3398,11 +3490,12 @@ describe("T498: readable PR comments", () => {
 			expect(body).toBe(
 				[
 					"## Review panel · review",
-					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\``,
-					"2/2 voted · 0 findings",
-					"**Seats:** holistic (terra, claude)",
+					"",
+					`\`main~1\` (\`${base}\`) → \`${head.slice(0, 7)}\` · **0 findings**`,
 					"",
 					"No findings · no close-out needed",
+					"",
+					"<sub>2/2 voted · Seats: holistic (terra, claude)</sub>",
 					"",
 					`<!-- review-panel review=${REVIEW_RUN} -->`,
 				].join("\n"),
@@ -3443,7 +3536,7 @@ describe("T498: readable PR comments", () => {
 			expect(lines).toContain("**Lost:** claude/holistic (provider-error)");
 			expect(lines.filter((line) => line.includes("Lost:"))).toHaveLength(1);
 			// Lost coverage stays shown; a clean review still needs no card.
-			expect(lines.at(-3)).toBe("No findings · no close-out needed");
+			expect(lines.at(-5)).toBe("No findings · no close-out needed");
 		});
 	});
 
@@ -3540,16 +3633,18 @@ describe("T498: readable PR comments", () => {
 			expect(verify).toBe(
 				[
 					"## Review panel · verify 1",
-					`\`bbbbbbb\` → \`${head.slice(0, 7)}\``,
-					"1/1 voted · F-1 resolved · no regressions",
-					"**Seats:** fix-verification (terra)",
-					"**Open after this round:** none",
 					"",
-					"### Kept",
-					"- **F-1 resolved** — F-1 title — `src/a.ts`: fixed",
+					`\`bbbbbbb\` → \`${head.slice(0, 7)}\` · **Open after this round:** none · no regressions`,
 					"",
-					"### Dismissed (not fixed)",
-					"- **F-2** — F-2 title — by design (ADR 4)",
+					"| | Finding | Seats said |",
+					"|---|---|---|",
+					"| **F-1** | F-1 title | resolved |",
+					"",
+					"### Dismissed",
+					"**F-2** F-2 title",
+					"> by design (ADR 4)",
+					"",
+					"<sub>1/1 voted · Seats: fix-verification (terra)</sub>",
 					"",
 					marker,
 				].join("\n"),
@@ -3558,16 +3653,22 @@ describe("T498: readable PR comments", () => {
 				[
 					"## Review panel · close-out",
 					"",
-					"**2 findings** (1 high, 1 medium) · **1 resolved** in 1 verify round · 1 dismissed",
-					"**Review seats:** holistic (terra)",
-					"**Verified by:** fix-verification (terra)",
-					"**Final check:** verify 2, from the reviewed head to the final head",
 					`\`main\` (\`${git(repo, ["rev-parse", "HEAD~1"]).slice(0, 7)}\`) → \`${head.slice(0, 7)}\` · [verify 1](https://github.com/smarzban/demo/pull/12#issuecomment-101)`,
+					"**Final check:** verify 2, from the reviewed head to the final head",
 					"",
-					"- **F-1 [high]** F-1 title · resolved in verify 1",
+					"| Findings | Resolved | Dismissed |",
+					"|---|---|---|",
+					"| **2** (1 high, 1 medium) | **1** in 1 verify round | 1 |",
+					"",
+					"| | Severity | Finding | Status |",
+					"|---|---|---|---|",
+					"| **F-1** | high | F-1 title | resolved in verify 1 |",
 					"",
 					"### Dismissed",
-					"- **F-2** F-2 title — by design (ADR 4)",
+					"**F-2** F-2 title",
+					"> by design (ADR 4)",
+					"",
+					"<sub>Review seats: holistic (terra) · Verified by: fix-verification (terra)</sub>",
 					"",
 					cardMarker,
 				].join("\n"),
@@ -3613,12 +3714,18 @@ describe("T498: readable PR comments", () => {
 			[
 				"## Review panel · close-out",
 				"",
-				"**1 finding** (1 low) · 1 left as low/advisory",
-				"**Review seats:** holistic (terra, glm), tests (terra)",
 				"`main` (`aaaaaaa`) → `bbbbbbb`",
 				"",
-				"### Low / advisory (not kept)",
+				"| Findings | Low / advisory |",
+				"|---|---|",
+				"| **1** (1 low) | 1 |",
+				"",
+				"<details><summary>Low / advisory, not kept (1)</summary>",
+				"",
 				"- **F-1** F-1 title",
+				"</details>",
+				"",
+				"<sub>Review seats: holistic (terra, glm), tests (terra)</sub>",
 				"",
 				`<!-- review-panel review=${REVIEW_RUN} verify=${VERIFY_RUN} -->`,
 			].join("\n"),
@@ -3917,17 +4024,24 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				[
 					"## Review panel · close-out",
 					"",
-					"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 2 verify rounds · 1 left as low/advisory",
-					"**Review seats:** holistic (terra)",
-					"**Verified by:** fix-verification (glm, terra)",
-					"**Final check:** verify 3, from the reviewed head to the final head",
 					`${rangeOf(repo)} · [review](${PR}#issuecomment-5) · [verify 1](${PR}#issuecomment-6) · [verify 2](${PR}#issuecomment-101)`,
+					"**Final check:** verify 3, from the reviewed head to the final head",
 					"",
-					"- **F-1 [high]** auth bypass · resolved in verify 2",
-					"- **F-2 [medium]** missing timeout · resolved in verify 1",
+					"| Findings | Resolved | Low / advisory |",
+					"|---|---|---|",
+					"| **3** (1 high, 1 medium, 1 low) | **2** in 2 verify rounds | 1 |",
 					"",
-					"### Low / advisory (not kept)",
+					"| | Severity | Finding | Status |",
+					"|---|---|---|---|",
+					"| **F-1** | high | auth bypass | resolved in verify 2 |",
+					"| **F-2** | medium | missing timeout | resolved in verify 1 |",
+					"",
+					"<details><summary>Low / advisory, not kept (1)</summary>",
+					"",
 					"- **F-3** rename helper",
+					"</details>",
+					"",
+					"<sub>Review seats: holistic (terra) · Verified by: fix-verification (glm, terra)</sub>",
 					"",
 					`<!-- review-panel review=${REVIEW_ID} verify=v-1-final -->`,
 				].join("\n"),
@@ -3947,17 +4061,17 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			const result = await cleanVerify(repo, gh);
 			const card = bodyOf(posts(gh.calls)[1]);
 			const lines = card.split("\n");
-			expect(lines[2]).toBe(
-				"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 left as low/advisory",
-			);
-			expect(lines[4]).toBe("**Verified by:** fix-verification (terra)");
-			expect(lines[5]).toBe(
+			expect(lines[2]).toBe(rangeOf(repo));
+			expect(lines[3]).toBe(
 				"**Final check:** verify 2, from the reviewed head to the final head",
 			);
-			expect(lines[6]).toBe(rangeOf(repo));
+			expect(lines[7]).toBe(
+				"| **3** (1 high, 1 medium, 1 low) | **2** in 1 verify round | 1 |",
+			);
+			expect(card).toContain("Verified by: fix-verification (terra)</sub>");
 			expect(card).not.toContain("](");
 			expect(card).toContain(
-				"- **F-1 [high]** auth bypass · resolved in verify 1",
+				"| **F-1** | high | auth bypass | resolved in verify 1 |",
 			);
 			expect(textOf(result).split("\n").at(-1)).toMatch(
 				/^PR close-out: posted to #12/,
@@ -4001,8 +4115,8 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			});
 			await cleanVerify(repo, gh);
 			const card = bodyOf(posts(gh.calls)[1]);
-			expect(card).toContain("**2 resolved** in 1 verify round");
-			expect(card).toContain("**Verified by:** fix-verification (terra)\n");
+			expect(card).toContain("| **2** in 1 verify round |");
+			expect(card).toContain("Verified by: fix-verification (terra)</sub>\n");
 			// This verify is verify 1; the planted record's comment is no round.
 			expect(card).toContain(`[verify 1](${PR}#issuecomment-101)`);
 			expect(card).not.toContain(`${PR}#issuecomment-6`);
@@ -4028,9 +4142,9 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await cleanVerify(repo, gh);
 			const card = bodyOf(closeoutPosts(gh.calls)[0]);
-			expect(card).toContain("**2 resolved** in 2 verify rounds");
+			expect(card).toContain("| **2** in 2 verify rounds |");
 			expect(card).toContain(
-				"- **F-1 [high]** auth bypass · resolved in verify 2",
+				"| **F-1** | high | auth bypass | resolved in verify 2 |",
 			);
 		});
 	});
@@ -4049,7 +4163,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			await cleanVerify(repo, gh);
 			const card = bodyOf(closeoutPosts(gh.calls)[0]);
 			expect(card).toContain(
-				"**Verified by:** fix-verification (glm, terra)\n",
+				"Verified by: fix-verification (glm, terra)</sub>\n",
 			);
 			// A lost seat is lost coverage, named as such, never a voter.
 			expect(card).toContain("**Lost:** opus/fix-verification (verify)\n");
@@ -4108,7 +4222,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				},
 			);
 			expect(textOf(result)).toContain(
-				"**Verified by:** fix-verification (glm)\n",
+				"Verified by: fix-verification (glm)</sub>\n",
 			);
 			expect(bodyOf(posts(gh.calls)[0]).match(/^.*opus.*$/gmu)).toEqual([
 				"**Lost:** opus/fix-verification (verify)",
@@ -4129,7 +4243,7 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
 			await cleanVerify(repo, gh);
 			const card = bodyOf(posts(gh.calls)[1]);
-			expect(card).toContain("**2 resolved** in 1 verify round");
+			expect(card).toContain("| **2** in 1 verify round |");
 			expect(card).not.toContain("glm");
 		});
 	});
@@ -4200,10 +4314,13 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				const { body } = await manual(repo, gh, { dismissed: ALL_DISMISSED });
 				const lines = body.split("\n");
-				expect(lines[2]).toBe(
-					"**3 findings** (1 high, 1 medium, 1 low) · 1 verify round · 2 dismissed · 1 left as low/advisory",
+				expect(lines).toContain(
+					"| **3** (1 high, 1 medium, 1 low) | 1 | 2 | 1 |",
 				);
-				expect(lines).toContain("**Verified by:** fix-verification (glm)");
+				expect(lines).toContain(
+					"| Findings | Verify rounds | Dismissed | Low / advisory |",
+				);
+				expect(body).toContain("Verified by: fix-verification (glm)</sub>");
 				expect(lines.find((line) => line.includes(" → "))).toMatch(
 					/ → `c0ffee1`$/,
 				);
@@ -4275,16 +4392,23 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 					[
 						"## Review panel · close-out",
 						"",
-						"**3 findings** (1 high, 1 medium, 1 low) · **2 resolved** in 1 verify round · 1 left as low/advisory",
-						"**Review seats:** holistic (terra)",
-						"**Verified by:** fix-verification (glm)",
 						`\`main\` (\`${base}\`) → \`c0ffee1\` · [review](${PR}#issuecomment-5) · [verify 1](${PR}#issuecomment-6)`,
 						"",
-						"- **F-1 [high]** auth bypass · resolved in verify 1",
-						"- **F-2 [medium]** missing timeout · resolved in verify 1",
+						"| Findings | Resolved | Low / advisory |",
+						"|---|---|---|",
+						"| **3** (1 high, 1 medium, 1 low) | **2** in 1 verify round | 1 |",
 						"",
-						"### Low / advisory (not kept)",
+						"| | Severity | Finding | Status |",
+						"|---|---|---|---|",
+						"| **F-1** | high | auth bypass | resolved in verify 1 |",
+						"| **F-2** | medium | missing timeout | resolved in verify 1 |",
+						"",
+						"<details><summary>Low / advisory, not kept (1)</summary>",
+						"",
 						"- **F-3** rename helper",
+						"</details>",
+						"",
+						"<sub>Review seats: holistic (terra) · Verified by: fix-verification (glm)</sub>",
 						"",
 						`<!-- review-panel review=${REVIEW_ID} verify=v-0 -->`,
 					].join("\n"),
@@ -4303,9 +4427,9 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				});
 				const gh = fakeGh({ comments: [], prs: openPrAt(VERIFY_HEAD) });
 				const { body } = await manual(repo, gh);
-				expect(body).toContain("**2 resolved** in 1 verify round");
+				expect(body).toContain("| **2** in 1 verify round |");
 				expect(body).toContain(
-					"- **F-1 [high]** auth bypass · resolved in verify 1\n",
+					"| **F-1** | high | auth bypass | resolved in verify 1 |\n",
 				);
 				expect(body).not.toContain("](");
 				expect(body).not.toMatch(/fixed/i);

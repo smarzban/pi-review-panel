@@ -362,21 +362,23 @@ describe("the grouped review PR comment", () => {
 	it("posts the grouped list with tool labels bold and seat text plain (T495)", () => {
 		const body = round(GROUPED);
 		expect(body).toContain("4 findings in 3 groups");
-		expect(body).toContain("**Seats:** holistic (sol, kimi), grouping (opus)");
 		expect(body).toContain(
-			"- **G-1 [high, stated by a seat]** Cache key ignores the tenant",
+			"Seats: holistic (sol, kimi), grouping (opus)</sub>",
 		);
 		expect(body).toContain(
-			"  - **F-1 [medium]** Cache key ignores the tenant (`src/cache.ts:489`) — sol/holistic",
+			"### High\n**G-1 [high, stated by a seat]** Cache key ignores the tenant\n- **F-1 [medium]**",
 		);
 		expect(body).toContain(
-			"  - **F-3 [high]** Tenant data leaks through the shared cache (`src/cache.ts:511`) — kimi/holistic",
+			"- **F-1 [medium]** Cache key ignores the tenant\n  <sub>`src/cache.ts:489` · sol/holistic</sub>",
 		);
 		expect(body).toContain(
-			"    **Evidence:** store() writes without the tenant id.",
+			"- **F-3 [high]** Tenant data leaks through the shared cache\n  <sub>`src/cache.ts:511` · kimi/holistic</sub>",
 		);
 		expect(body).toContain(
-			"- **G-2 / F-4 [medium]** No timeout on the fetch (`src/fetch.ts:3`) — kimi/holistic",
+			"  <details><summary>Evidence</summary>\n\n  store() writes without the tenant id.\n  </details>",
+		);
+		expect(body).toContain(
+			"**G-2 · F-4 [medium]** No timeout on the fetch\n<sub>`src/fetch.ts:3` · kimi/holistic</sub>",
 		);
 		for (const row of FINDINGS) {
 			expect(body).toContain(`${row.id} [${row.finding.severity}]`);
@@ -398,11 +400,12 @@ describe("the grouped review PR comment", () => {
 		});
 		const line = body
 			.split("\n")
-			.find((row) => row.startsWith("  - **F-3 [high]**"));
+			.find((row) => row.startsWith("- **F-3 [high]**"));
 		// One line, the bidi override replaced, `#` and `@` joined, `[` escaped.
 		expect(line).toBe(
-			"  - **F-3 [high]** Leak #\u200d Heading\ufffd @\u200doctocat \\[x\\](y) (`src/cache.ts:511`) — kimi/holistic",
+			"- **F-3 [high]** Leak #\u200d Heading\ufffd @\u200doctocat \\[x\\](y)",
 		);
+		expect(body).toContain("  <sub>`src/cache.ts:511` · kimi/holistic</sub>");
 		expect(body).not.toContain("\n# Heading");
 	});
 
@@ -445,8 +448,8 @@ describe("the grouped review PR comment", () => {
 		});
 		expect(body.length).toBeLessThan(GITHUB_COMMENT_LIMIT);
 		const lines = body.split("\n");
-		expect(lines).toContain("- **G-1 [high, stated by a seat]** Leak 1");
-		const shown = lines.filter((line) => /^ {2}- \*\*F-\d+ /.test(line));
+		expect(lines).toContain("**G-1 [high, stated by a seat]** Leak 1");
+		const shown = lines.filter((line) => /^- \*\*F-\d+ /.test(line));
 		expect(shown.length).toBeGreaterThan(0);
 		expect(shown.length).toBeLessThan(120);
 		const more = lines
@@ -462,10 +465,10 @@ describe("the grouped review PR comment", () => {
 		const markerAt = lines.findIndex((line) =>
 			line.includes("more finding(s) in this group"),
 		);
-		expect(lines[markerAt - 1]?.startsWith("    **Evidence:**")).toBe(true);
+		expect(lines[markerAt - 1]).toBe("  </details>");
 		// The row after the big group still posts, and nothing is cut whole.
 		expect(body).toContain(
-			"- **G-2 / F-121 [low]** Typo after the big group (`src/log.ts:1`)",
+			"### Low\n**G-2 · F-121 [low]** Typo after the big group\n<sub>`src/log.ts:1`",
 		);
 		expect(body).not.toContain("group(s) cut to fit");
 		expect(lines.at(-1)).toBe("<!-- review-panel review=r1 -->");
@@ -502,10 +505,10 @@ describe("the grouped review PR comment", () => {
 		});
 		expect(body.length).toBeLessThan(GITHUB_COMMENT_LIMIT);
 		for (const id of ["F-1", "F-2", "F-3", "F-4"]) {
-			expect(body).toContain(`- **${id} [high]** <span>$</span>`);
+			expect(body).toContain(`\n**${id} [high]** <span>$</span>`);
 		}
 		expect(body).toContain(
-			"- **F-5 [high]** Tenant data leaks through the shared cache",
+			"\n**F-5 [high]** Tenant data leaks through the shared cache\n",
 		);
 		expect(body).not.toContain("cut to fit GitHub's comment limit");
 	});

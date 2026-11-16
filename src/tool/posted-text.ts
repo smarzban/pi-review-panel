@@ -182,6 +182,18 @@ export function postedCode(text: string, maxChars = POSTED_CODE_CHARS): string {
 }
 
 /**
+ * {@link postedCode} for a Markdown table cell: GitHub splits a row at every
+ * unescaped `|`, a code span's included, so each pipe is escaped; the table
+ * reads `\|` back as `|`.
+ */
+export function postedCellCode(
+	text: string,
+	maxChars = POSTED_CODE_CHARS,
+): string {
+	return postedCode(text, maxChars).replace(/\|/gu, "\\|");
+}
+
+/**
  * A group as one unit of a body: its header lines, then each member's
  * lines. When the whole group does not fit, its header and the members that
  * fit are posted, with {@link groupCutLine} for the rest.

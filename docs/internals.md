@@ -14,6 +14,12 @@ command. A run fans N reviewer *seats* — each an exact `provider/model` paired
 lens — over one pinned snapshot, as isolated Pi SDK sessions inside the `review-panel` process that
 have only their read-only role tools and can report findings only through their submit tool
 (`submit_findings` for reviewers).
+Each finding and verify seat's channel instruction ends with a package-owned writing rule
+(`WRITING_RULE_FINDINGS`, `WRITING_RULE_VERIFICATION` in `src/seat/channel-profile.ts`): the
+title is the problem, not the fix; evidence says what goes wrong first, in plain words; no
+boilerplate. The submit tools refuse a title over 120 characters, evidence over 800 or a verify
+explanation over 500 (`src/seat/text-limits.ts`), naming the limit, and the seat submits again.
+Records are never checked against these limits, so an older record still reads.
 Seat identity is owner authority: an outside-repository roster config
 (`~/.pi-review-panel/config.json`, override `PI_REVIEW_PANEL_CONFIG`) selects exact `provider/model`
 rows and package-owned lens prompts by name; the calling agent chooses only among declared names.
@@ -216,6 +222,14 @@ the review's signed `execution.json`, and a per-round grouping would need its ow
 every id argument. The final check refuses `recheck`. Resume still refuses a verify run: an
 interrupted verify is never signed, so a new verify from the same tip runs every seat again.
 
+The verify comment's first line is the range, the open ids and the regression count. A table
+gives each checked id what the seats said. `### Not fixed` lists each kept id that a voting seat
+did not call resolved (or no seat answered), with the first such seat's evidence
+(`VerifyFacts.openEvidence`) as a quote; a resolved id has its table row only. Then
+`### Dismissed`, the folded low/advisory list, regressions and the recheck. The vote count, as
+`N/M voted` or with a recheck `verify N/M · recheck N/M` (`votedCountLine`), so a lost recheck
+seat is never hidden behind the verify count, closes the comment in small text with the seats.
+
 A verify's `scopingNote` goes to its seats in the scope note and back on `RunVerifyResult`
 (never on the final check), and the verify comment shows it under the range as
 `**Why this round:**` through `githubSafe` (one line, `EVIDENCE_CHARS`). It is not in the signed
@@ -266,8 +280,8 @@ so its posted size has a fixed cap. The only links the tool writes are the close
 links to this PR's own comments (`postedLink`), whose URL must be exactly
 `https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`. File
 names and ids are code spans with a fence longer than any backtick run inside, with nothing
-escaped or joined in them, and a value with nothing visible renders as `(empty)`. The caller's verify `scopingNote` posts like seat text, as one line
-after `**Why this round:**`; the review comment's `No findings · no close-out needed` is the
+escaped or joined in them, and a value with nothing visible renders as `(empty)`. The caller's verify `scopingNote` posts like seat text, as one quoted line
+after `> **Why this round:**`; the review comment's `No findings · no close-out needed` is the
 tool's own line. Labels the
 tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in
 visible text: each body ends with one hidden `<!-- review-panel review=<id> verify=<id> -->`
@@ -276,6 +290,14 @@ marker holding only ids of the run-id character set (an id with `--`, from a bas
 duplicate check (and `comment`'s lookup) matches author, first-line heading (`## Review panel ·
 close-out`, or the old `## Review panel`) and that exact marker as the last non-empty line, or,
 for a card posted before the marker, ``Review `<id>` `` on line 2.
+Layout the tool writes around that text: a findings or results table (a table's header
+goes with its first row, so a cut never leaves it alone; a code span in a cell goes through
+`postedCellCode`, which escapes `|`, because GitHub splits a row at every unescaped pipe, a code
+span's included; posted text already escapes `|`); a reason as a `> ` quote line after a blank
+line; evidence after a blank line inside `<details><summary>Evidence</summary>` … `</details>`;
+a folded low/advisory list, always one row, because a toggle cut in half would swallow the rest
+of the body; and `<sub>` small text holding only tool text and owner-config names. Each seat
+field stays one line of posted text, so none of it can open or close these blocks.
 Bodies are cut by rows in order (`fitCommentBody`): a group that does not fit whole posts its
 header, first member and a cut line, later rows are still tried, and what is left then goes to
 that group's further members; a plain row, or a group that cannot fit even its first member,

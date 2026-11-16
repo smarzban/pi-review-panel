@@ -253,11 +253,13 @@ describe("review-panel skill", () => {
 		expect(body).not.toMatch(/ready to merge\b(?! on the card)/i);
 	});
 
-	it("passes a verify scoping note that names where each change came from (T510)", () => {
+	it("passes a verify scoping note only when it adds something, not on every round", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
 		const at = body.indexOf(
-			"Pass `--scoping-note` on each verify naming where each change came from",
+			"Pass `--scoping-note` on a verify only when it says something the comment does not",
 		);
+		expect(body).toContain("Leave it out for a plain round of fixes");
+		expect(body).not.toContain("Pass `--scoping-note` on each verify");
 		expect(at).toBeGreaterThan(body.indexOf("## 6. Fix and verify"));
 		expect(at).toBeLessThan(body.indexOf("## 7. Resume"));
 		expect(body).toContain("`Why this round:`");

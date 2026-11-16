@@ -4,6 +4,7 @@ import { CLOSEOUT_HEADING } from "./closeout-post.js";
 import {
 	fitCommentBody,
 	markerTail,
+	postedCellCode,
 	postedCode,
 	postedLink,
 	postedText,
@@ -176,34 +177,40 @@ function severityCounts(findings: readonly StampedFinding[]): string {
 		: ` (${counts.map(([severity, count]) => `${count} ${severity}`).join(", ")})`;
 }
 
-/** The counts line: only counts that are not zero. */
-function countsLine(input: CloseoutCommentInput, rounds: number): string {
-	const parts: string[] = [];
+/** The counts as a two-row table: only counts that are not zero. */
+function countsTable(input: CloseoutCommentInput, rounds: number): string[] {
+	const columns: Array<[string, string]> = [];
 	const submitted = input.findings.length;
-	parts.push(
+	columns.push([
+		"Findings",
 		submitted === 0
-			? "No findings submitted"
-			: `**${plural(submitted, "finding")}**${severityCounts(input.findings)}`,
-	);
+			? "none"
+			: `**${submitted}**${severityCounts(input.findings)}`,
+	]);
 	const verified = rounds === 0 ? "" : plural(rounds, "verify round");
 	if (input.resolved.length > 0) {
-		parts.push(
-			`**${input.resolved.length} resolved**${verified === "" ? "" : ` in ${verified}`}`,
-		);
+		columns.push([
+			"Resolved",
+			`**${input.resolved.length}**${verified === "" ? "" : ` in ${verified}`}`,
+		]);
 	} else if (verified !== "") {
-		parts.push(verified);
+		columns.push(["Verify rounds", String(rounds)]);
 	}
 	const open = input.open?.length ?? 0;
 	if (open > 0) {
-		parts.push(`**${open} open**`);
+		columns.push(["Open", `**${open}**`]);
 	}
 	if (input.dismissed.length > 0) {
-		parts.push(`${input.dismissed.length} dismissed`);
+		columns.push(["Dismissed", String(input.dismissed.length)]);
 	}
 	if (input.lowAdvisory.length > 0) {
-		parts.push(`${input.lowAdvisory.length} left as low/advisory`);
+		columns.push(["Low / advisory", String(input.lowAdvisory.length)]);
 	}
-	return parts.join(" · ");
+	return [
+		`| ${columns.map(([name]) => name).join(" | ")} |`,
+		`|${columns.map(() => "---").join("|")}|`,
+		`| ${columns.map(([, value]) => value).join(" | ")} |`,
+	];
 }
 
 /** The range, then a link to the review and to each verify that has one. */
@@ -258,11 +265,16 @@ function orderItems(items: readonly CloseoutItem[]): CloseoutItem[] {
 	});
 }
 
-/** One card row: id, severity (or `regression`), title, what it undoes, label. */
-function itemRow(item: CloseoutItem): string {
+/** The header of a findings table. */
+const ITEM_TABLE = ["| | Severity | Finding | Status |", "|---|---|---|---|"];
+
+/** One table row: id, severity (or `regression`), title, what it undoes, status. */
+function itemRow(item: CloseoutItem, status: string): string {
 	const undoes =
-		item.undoes === undefined ? "" : ` (undoes ${postedCode(item.undoes, 40)})`;
-	return `- **${postedText(item.id, 40)} [${postedText(item.severity ?? "regression", 20)}]** ${postedText(item.title)}${undoes}${item.label === undefined ? "" : ` · ${item.label}`}`;
+		item.undoes === undefined
+			? ""
+			: ` (undoes ${postedCellCode(item.undoes, 40)})`;
+	return `| **${postedText(item.id, 40)}** | ${postedText(item.severity ?? "regression", 20)} | ${postedText(item.title)}${undoes} | ${item.label ?? status} |`;
 }
 
 /** One close-out card as its head lines and its list rows. */
@@ -311,45 +323,64 @@ export function closeoutCardParts(
 	const head = [
 		CLOSEOUT_HEADING,
 		"",
-		// The final check resolves nothing: it has its own line.
-		countsLine(input, rounds.filter((round) => round.final !== true).length),
-		`**Review seats:** ${seatGroups(input.seats) ?? "none"}`,
-		...(verifiedBy === undefined ? [] : [`**Verified by:** ${verifiedBy}`]),
+		rangeLine(input),
 		...(finalCheck === undefined ? [] : [finalCheck]),
 		...(lostNames.length === 0 ? [] : [`**Lost:** ${lostNames.join(", ")}`]),
-		rangeLine(input),
+		"",
+		// The final check resolves nothing: it has its own line.
+		...countsTable(
+			input,
+			rounds.filter((round) => round.final !== true).length,
+		),
 	];
 	const rows: string[][] = [];
-	const section = (title: string | undefined, items: string[]) => {
+	// A section's heading (and a table's header) goes with its first row,
+	// so a cut never leaves either alone.
+	const table = (heading: string[], items: string[]) => {
 		for (const [index, item] of items.entries()) {
-			rows.push(
-				index !== 0
-					? [item]
-					: title === undefined
-						? ["", item]
-						: ["", title, item],
-			);
+			rows.push(index === 0 ? ["", ...heading, ...ITEM_TABLE, item] : [item]);
 		}
 	};
-	section(undefined, orderItems(input.resolved).map(itemRow));
-	section("### Open (not resolved)", orderItems(input.open ?? []).map(itemRow));
-	section(
-		"### Dismissed",
-		input.dismissed.map(
-			(row) =>
-				`- **${postedText(row.id, 40)}** ${postedText(row.title)} — ${postedText(row.reason, 1_000)}`,
-		),
+	table(
+		[],
+		orderItems(input.resolved).map((item) => itemRow(item, "resolved")),
 	);
-	section(
-		"### Low / advisory (not kept)",
-		input.lowAdvisory.map(
-			(row) => `- **${postedText(row.id, 40)}** ${postedText(row.title)}`,
-		),
+	table(
+		["### Open (not resolved)"],
+		orderItems(input.open ?? []).map((item) => itemRow(item, "open")),
 	);
+	for (const [index, row] of input.dismissed.entries()) {
+		rows.push([
+			"",
+			...(index === 0 ? ["### Dismissed"] : []),
+			`**${postedText(row.id, 40)}** ${postedText(row.title)}`,
+			`> ${postedText(row.reason, 1_000)}`,
+		]);
+	}
+	if (input.lowAdvisory.length > 0) {
+		// One row: a toggle cut in half would swallow the rest of the body.
+		rows.push([
+			"",
+			`<details><summary>Low / advisory, not kept (${input.lowAdvisory.length})</summary>`,
+			"",
+			...input.lowAdvisory.map(
+				(row) => `- **${postedText(row.id, 40)}** ${postedText(row.title)}`,
+			),
+			"</details>",
+		]);
+	}
+	const who = [
+		`Review seats: ${seatGroups(input.seats) ?? "none"}`,
+		...(verifiedBy === undefined ? [] : [`Verified by: ${verifiedBy}`]),
+	];
 	return {
 		head,
 		rows,
-		tail: input.runIds === undefined ? [] : markerTail(input.runIds),
+		tail: [
+			"",
+			`<sub>${who.join(" · ")}</sub>`,
+			...(input.runIds === undefined ? [] : markerTail(input.runIds)),
+		],
 	};
 }
 

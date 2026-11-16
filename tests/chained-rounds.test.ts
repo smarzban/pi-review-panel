@@ -413,16 +413,23 @@ async function round2(v1: string, extra: Record<string, unknown> = {}) {
 describe("three chained verify rounds on one PR", () => {
 	it("each round checks only what is open and posts a delta; the close-out posts once, at the end, when asked", async () => {
 		const v1 = await round1();
-		expect(v1.body.split("\n").slice(0, 6)).toEqual([
+		expect(v1.body.split("\n").slice(0, 10)).toEqual([
 			"## Review panel · verify 1",
-			`\`${commits[1]?.slice(0, 7)}\` → \`${commits[2]?.slice(0, 7)}\``,
-			"1/1 voted · F-1 resolved, F-2 still present, F-3 resolved, F-5 still present · 1 regression",
-			"**Seats:** fix-verification (terra)",
-			"**Open after this round:** F-2, F-5, V1-R1",
 			"",
+			`\`${commits[1]?.slice(0, 7)}\` → \`${commits[2]?.slice(0, 7)}\` · **Open after this round:** F-2, F-5, V1-R1 · 1 regression`,
+			"",
+			"| | Finding | Seats said |",
+			"|---|---|---|",
+			"| **F-1** | cache key misses the tenant | resolved |",
+			"| **F-2** | token compared with === | still present |",
+			"| **F-3** | retry loop never backs off | resolved |",
+			"| **F-5** | log line prints the request body | still present |",
 		]);
 		expect(v1.body).toContain(
-			"- **V1-R1** the new key builder drops the null check (`src/cache.ts:9`)",
+			"<sub>1/1 voted · Seats: fix-verification (terra)</sub>",
+		);
+		expect(v1.body).toContain(
+			"**V1-R1** the new key builder drops the null check\n<sub>`src/cache.ts:9`</sub>",
 		);
 
 		// Verify 2 names no kept ids: it checks the open set, less F-5,
@@ -430,15 +437,18 @@ describe("three chained verify rounds on one PR", () => {
 		const v2 = await round2(v1.runId);
 		expect(specs[1]?.expectedIds).toEqual(["F-2", "V1-R1"]);
 		expect(specs[1]?.baseRef).toBe(commits[2]);
-		expect(v2.body.split("\n").slice(0, 5)).toEqual([
+		expect(v2.body.split("\n").slice(0, 8)).toEqual([
 			"## Review panel · verify 2",
-			`\`${commits[2]?.slice(0, 7)}\` → \`${commits[3]?.slice(0, 7)}\``,
-			"1/1 voted · F-2 still present, V1-R1 resolved · no regressions",
-			"**Seats:** fix-verification (terra)",
-			"**Open after this round:** F-2",
+			"",
+			`\`${commits[2]?.slice(0, 7)}\` → \`${commits[3]?.slice(0, 7)}\` · **Open after this round:** F-2 · no regressions`,
+			"",
+			"| | Finding | Seats said |",
+			"|---|---|---|",
+			"| **F-2** | token compared with === | still present |",
+			"| **V1-R1** | the new key builder drops the null check | resolved |",
 		]);
 		expect(v2.body).toContain(
-			"- **F-5** — log line prints the request body — the body is redacted upstream",
+			"### Dismissed\n**F-5** log line prints the request body\n> the body is redacted upstream",
 		);
 		// Nothing mid-way posts a close-out.
 		expect(closeouts()).toEqual([]);
@@ -452,17 +462,19 @@ describe("three chained verify rounds on one PR", () => {
 		expect(v3.reply).toMatch(/^PR close-out: posted to #12/mu);
 		expect(closeouts()).toHaveLength(1);
 		const card = closeouts()[0] as string;
-		const list = card.split("\n").filter((line) => line.startsWith("- "));
+		const list = card.split("\n").filter((line) => /^\| \*\*[FV]/u.test(line));
 		expect(list).toEqual([
-			"- **F-1 [high]** cache key misses the tenant · resolved in verify 1",
-			"- **F-2 [high]** token compared with === · resolved in verify 3",
-			"- **F-3 [medium]** retry loop never backs off · resolved in verify 1",
-			"- **V1-R1 [regression]** the new key builder drops the null check · resolved in verify 2",
-			"- **F-5** log line prints the request body — the body is redacted upstream",
-			"- **F-4** helper name is vague",
+			"| **F-1** | high | cache key misses the tenant | resolved in verify 1 |",
+			"| **F-2** | high | token compared with === | resolved in verify 3 |",
+			"| **F-3** | medium | retry loop never backs off | resolved in verify 1 |",
+			"| **V1-R1** | regression | the new key builder drops the null check | resolved in verify 2 |",
 		]);
 		expect(card).toContain(
-			"**5 findings** (2 high, 2 medium, 1 low) · **4 resolved** in 3 verify rounds · 1 dismissed · 1 left as low/advisory",
+			"**F-5** log line prints the request body\n> the body is redacted upstream",
+		);
+		expect(card).toContain("\n- **F-4** helper name is vague\n");
+		expect(card).toContain(
+			"| **5** (2 high, 2 medium, 1 low) | **4** in 3 verify rounds | 1 | 1 |",
 		);
 		expect(card).not.toMatch(/fixed|ready to merge/iu);
 		// The final check ran from verify 3; the card is for it.
@@ -523,7 +535,7 @@ describe("three chained verify rounds on one PR", () => {
 			},
 		);
 		expect(v1.body).toContain(
-			"### Low / advisory (not kept)\n- **F-4** — helper name is vague",
+			"<details><summary>Low / advisory, not kept (1)</summary>\n\n- **F-4** helper name is vague\n</details>",
 		);
 		const verification = JSON.parse(
 			readFileSync(
@@ -597,10 +609,10 @@ describe("one number per round (S-4)", () => {
 			},
 		);
 		expect(v2.body.split("\n")[0]).toBe("## Review panel · verify 2");
-		expect(v2.body).toContain("- **V2-R1** the new key builder");
+		expect(v2.body).toContain("\n**V2-R1** the new key builder");
 		const { body } = await stopWith({});
 		expect(body).toContain(
-			"- **F-1 [high]** cache key misses the tenant · resolved in verify 1",
+			"| **F-1** | high | cache key misses the tenant | resolved in verify 1 |",
 		);
 	});
 });
@@ -686,8 +698,8 @@ describe("a verify with nothing open (T510)", () => {
 		);
 		const headline = `1/1 voted · ${NOTHING_OPEN} · no regressions`;
 		expect(v1.reply.split("\n")[1]).toBe(headline);
-		expect(v1.body.split("\n")[2]).toBe(headline);
-		expect(`${v1.reply}\n${v1.body}`).not.toContain("no kept ids");
+		expect(v1.body.split("\n")[3]).toBe(NOTHING_OPEN);
+		expect(`${v1.reply}\n${v1.body}`).not.toMatch(/no kept ids/iu);
 	});
 
 	it("a round whose every seat was lost does not say it checked anything", async () => {
@@ -699,9 +711,8 @@ describe("a verify with nothing open (T510)", () => {
 		expect(v1.reply.split("\n")[1]).toBe(
 			"0/1 voted · no kept ids · no regressions",
 		);
-		expect(v1.body.split("\n")[2]).toBe(
-			"0/1 voted · no kept ids · no regressions",
-		);
+		expect(v1.body.split("\n")[3]).toBe("No kept ids");
+		expect(v1.body).toContain("<sub>0/1 voted · ");
 		expect(`${v1.reply}\n${v1.body}`).not.toContain(NOTHING_OPEN);
 	});
 
@@ -720,9 +731,7 @@ describe("a verify with nothing open (T510)", () => {
 		expect(v4.reply.split("\n")[1]).toBe(
 			`1/1 voted · ${NOTHING_OPEN} · no regressions`,
 		);
-		expect(v4.body.split("\n")[2]).toBe(
-			`1/1 voted · ${NOTHING_OPEN} · no regressions`,
-		);
+		expect(v4.body.split("\n")[3]).toBe(NOTHING_OPEN);
 	});
 
 	it("a round that names no ids while some are open keeps no kept ids", async () => {
@@ -801,7 +810,9 @@ describe("one close-out card per review, whichever path posts it (T510)", () => 
 		).toHaveLength(4);
 		const card = comments.find((row) => row.id === cardId)?.body ?? "";
 		expect(card.split("\n")[0]).toBe("## Review panel · close-out");
-		expect(card).toContain("3 verify rounds");
+		expect(card).toContain(
+			"| Findings | Verify rounds |\n|---|---|\n| none | 3 |",
+		);
 		for (const round of verifyComments()) {
 			expect(card).toContain(`(${round.html_url})`);
 		}
@@ -826,7 +837,9 @@ describe("one close-out card per review, whichever path posts it (T510)", () => 
 		);
 		expect(closeouts()).toHaveLength(1);
 		const card = comments.find((row) => row.id === cardId)?.body ?? "";
-		expect(card).toContain("2 verify rounds");
+		expect(card).toContain(
+			"| Findings | Verify rounds |\n|---|---|\n| none | 2 |",
+		);
 		expect(card).toContain(`(${v2.url})`);
 		expect(card).toContain(`verify=${v2.runId} -->`);
 		expect(
@@ -894,9 +907,12 @@ describe("why this round (T510)", () => {
 			{ items: [] },
 		);
 		const lines = v1.body.split("\n");
-		expect(lines[1]).toMatch(/^`[0-9a-f]{7}` → `[0-9a-f]{7}`$/u);
-		expect(lines[2]).toBe(`**Why this round:** ${postedText(note)}`);
-		expect(lines[2]).not.toContain("@team");
+		expect(lines[2]).toMatch(/^`[0-9a-f]{7}` → `[0-9a-f]{7}` · /u);
+		// Under the head lines, after a blank line, as one quoted line.
+		expect(lines[3]).toBe(NOTHING_OPEN);
+		expect(lines[4]).toBe("");
+		expect(lines[5]).toBe(`> **Why this round:** ${postedText(note)}`);
+		expect(lines[5]).not.toContain("@team");
 	});
 
 	it("no note, no line", async () => {
@@ -1093,7 +1109,7 @@ describe("the final check before the card (S-6)", () => {
 			"**Final check:** verify 4, from the reviewed head to the final head",
 		);
 		expect(card).toContain(
-			"- **F-1 [high]** cache key misses the tenant · resolved in verify 1",
+			"| **F-1** | high | cache key misses the tenant | resolved in verify 1 |",
 		);
 		expect(card.split("\n").at(-1)).toBe(
 			`<!-- review-panel review=${REVIEW} verify=${final} -->`,
@@ -1106,12 +1122,14 @@ describe("the final check before the card (S-6)", () => {
 		const check = posted().at(-1) as string;
 		expect(check.split("\n").slice(0, 5)).toEqual([
 			"## Review panel · verify 4",
-			`\`${commits[1]?.slice(0, 7)}\` → \`${commits[4]?.slice(0, 7)}\``,
-			"1/1 voted · no kept ids · 1 regression",
-			"**Seats:** fix-verification (terra)",
+			"",
+			`\`${commits[1]?.slice(0, 7)}\` → \`${commits[4]?.slice(0, 7)}\` · **Open after this round:** V4-R1 · 1 regression`,
+			"No kept ids",
 			"**Final check:** the whole change, from the reviewed head, for fixes that no longer hold or conflict",
 		]);
-		expect(check).toContain("**Open after this round:** V4-R1");
+		expect(check).toContain(
+			"<sub>1/1 voted · Seats: fix-verification (terra)</sub>",
+		);
 		expect(check).toContain("V4-R1");
 		expect(check).toContain("undoes");
 		expect(v3.reply).toContain("PR close-out: not posted (1 regression)");
@@ -1215,11 +1233,13 @@ describe("the final check before the card (S-6)", () => {
 		expect([...(specs[1]?.undoableIds ?? [])].sort()).toEqual(["F-1", "F-3"]);
 		const lines = card.body.split("\n");
 		const open = lines.indexOf("### Open (not resolved)");
-		expect(lines.slice(open + 1, open + 5)).toEqual([
-			"- **F-2 [high]** token compared with ===",
-			"- **F-5 [medium]** log line prints the request body",
-			"- **V1-R1 [regression]** the new key builder drops the null check",
-			"- **V2-R1 [regression]** the fix2 rename drops the tenant from the key again (undoes `F-1`)",
+		expect(lines.slice(open + 1, open + 7)).toEqual([
+			"| | Severity | Finding | Status |",
+			"|---|---|---|---|",
+			"| **F-2** | high | token compared with === | open |",
+			"| **F-5** | medium | log line prints the request body | open |",
+			"| **V1-R1** | regression | the new key builder drops the null check | open |",
+			"| **V2-R1** | regression | the fix2 rename drops the tenant from the key again (undoes `F-1`) | open |",
 		]);
 		expect(card.body).toContain("**Final check:** verify 2");
 		expect(v1.runId).not.toBe("");
@@ -1396,7 +1416,7 @@ describe("the undo guard on a PR", () => {
 		);
 		expect(specs[1]?.undoableIds).toEqual(["F-1", "F-3"]);
 		expect(v2.body).toContain(
-			"- **V2-R1** the key is built without the tenant again (`src/cache.ts:3`) · undoes `F-1`",
+			"**V2-R1** the key is built without the tenant again\n<sub>`src/cache.ts:3` · undoes `F-1`</sub>",
 		);
 		expect(v2.body).toContain("**Open after this round:** V2-R1");
 	});
@@ -1441,13 +1461,15 @@ describe("comment when the owner stops the rounds", () => {
 		expect(head).toBe(commits[3]);
 		const lines = body.split("\n");
 		expect(lines).toContain(
-			"**5 findings** (2 high, 2 medium, 1 low) · **3 resolved** in 2 verify rounds · **1 open** · 1 dismissed · 1 left as low/advisory",
+			"| **5** (2 high, 2 medium, 1 low) | **3** in 2 verify rounds | **1** | 1 | 1 |",
 		);
 		const open = lines.indexOf("### Open (not resolved)");
 		expect(open).toBeGreaterThan(0);
-		expect(lines[open + 1]).toBe("- **F-2 [high]** token compared with ===");
+		expect(lines[open + 3]).toBe(
+			"| **F-2** | high | token compared with === | open |",
+		);
 		expect(lines).toContain(
-			"- **V1-R1 [regression]** the new key builder drops the null check · resolved in verify 2",
+			"| **V1-R1** | regression | the new key builder drops the null check | resolved in verify 2 |",
 		);
 		expect(body).not.toMatch(/fixed|ready to merge/iu);
 		// The final check comment ran from verify 2 is the card's verify.
@@ -1471,7 +1493,7 @@ describe("comment when the owner stops the rounds", () => {
 
 	it("the card's Open section and each verify's Open line name the same ids", async () => {
 		const openLine = (body: string) =>
-			/^\*\*Open after this round:\*\* (.*)$/mu.exec(body)?.[1] ?? "";
+			/\*\*Open after this round:\*\* (.*?)(?: · |$)/mu.exec(body)?.[1] ?? "";
 		const openSection = (body: string) => {
 			const lines = body.split("\n");
 			const at = lines.indexOf("### Open (not resolved)");
@@ -1479,8 +1501,9 @@ describe("comment when the owner stops the rounds", () => {
 				return "none";
 			}
 			const rows: string[] = [];
-			for (const line of lines.slice(at + 1)) {
-				const id = /^- \*\*([^ *]+)/u.exec(line)?.[1];
+			// The table header, then one row per open id.
+			for (const line of lines.slice(at + 3)) {
+				const id = /^\| \*\*([^ *]+)\*\* \|/u.exec(line)?.[1];
 				if (id === undefined) {
 					break;
 				}
@@ -1505,11 +1528,11 @@ describe("comment when the owner stops the rounds", () => {
 		});
 		expect(body).not.toContain("### Open");
 		expect(body).toContain(
-			"- **F-2** token compared with === — the owner accepts the risk",
+			"**F-2** token compared with ===\n> the owner accepts the risk",
 		);
 		// F-5 keeps the reason verify 2 recorded.
 		expect(body).toContain(
-			"- **F-5** log line prints the request body — the body is redacted upstream",
+			"**F-5** log line prints the request body\n> the body is redacted upstream",
 		);
 	});
 

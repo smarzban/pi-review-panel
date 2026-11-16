@@ -620,13 +620,13 @@ describe("comment takes G-ids as well as F-ids", () => {
 			);
 			const body = bodies[0] ?? "";
 			expect(
-				body.split("\n").filter((line) => line.includes("· resolved")),
+				body.split("\n").filter((line) => line.includes("| resolved")),
 			).toEqual([
-				"- **F-1 [high]** F-1 title · resolved in verify 1",
-				"- **F-3 [medium]** F-3 title · resolved in verify 1",
+				"| **F-1** | high | F-1 title | resolved in verify 1 |",
+				"| **F-3** | medium | F-3 title | resolved in verify 1 |",
 			]);
-			expect(body).toContain("**2 resolved** in 1 verify round");
-			expect(body).toContain("**Verified by:** fix-verification (terra)");
+			expect(body).toContain("| **2** in 1 verify round |");
+			expect(body).toContain("Verified by: fix-verification (terra)</sub>");
 			expect(body).not.toMatch(/G-\d/);
 		});
 	});

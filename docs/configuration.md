@@ -518,13 +518,21 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
 
   ```
   ## Review panel · review
-  `origin/main` (`b89f012`) → `0a68179`
-  6/6 voted · 8 findings · 1m 58s · $1.1017
-  **Seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus)
 
-  - **F-1 [high]** Escape the Seats line (`src/tool/review-presentation.ts:511`) — sol/holistic
-    **Evidence:** renderSeatsLine joins roster ids without escaping …
+  `origin/main` (`b89f012`) → `0a68179` · **8 findings** · 1 high · 5 medium · 2 low
+
+  ### High
+  **F-1 [high]** The Seats line posts roster ids unescaped, so a name can inject markup
+  <sub>`src/tool/review-presentation.ts:511` · sol/holistic</sub>
+  <details><summary>Evidence</summary>
+
+  renderSeatsLine joins roster ids without escaping …
+  </details>
   ```
+
+  Findings sit under `### High`, `### Medium` and `### Low` headings by the severity a seat gave
+  (a group under the highest a seat stated), each with its place and seat in small text and its
+  evidence folded. The vote count, time, cost and seats close the comment in small text.
 - Each verify posts `## Review panel · verify N`. N is the verify's place in its review's chain
   (see [Verify rounds chain](#verify-rounds-chain)): the same number as its regression ids
   (`V<N>-R<k>`) and as "resolved in verify N" on the card. A round that did not post keeps its
@@ -552,16 +560,22 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     across a sync. A claim with unreadable content is judged by its age on disk.
   - One case is set aside: when `gh` reports a POST as failed (it timed out or was interrupted)
     after GitHub had already accepted it, the claim is given back and no marker is written.
-  It is a short delta: under the commit range, `**Why this round:**` and the caller's
-  `scopingNote` as one line of inert plain text (cut at 1,000 characters, escaped like seat text;
-  no note, no line, and the final check shows none), then an `Open after this round:` line naming every id still open after this
-  verify (or `none`), each kept id as resolved, still present or inconclusive with the panel's
-  one-line evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept,
-  and the regressions as new findings, by their `V<link>-R<n>` id, with `· undoes F-1` when
-  one undoes an earlier fix. When nothing was open before the verify (no open id, and no
-  finding left to place) and at least one seat voted, its headline, in the comment and the
-  reply, says `Nothing was open; this round checked the new commits for regressions only`
-  (`… for regressions and new problems` when it ran `--recheck`) instead of `no kept ids`. Verify checks `dismissed` and `lowAdvisory` against the review
+  It is a short delta. Its first line is the commit range, `Open after this round:` naming every
+  id still open after this verify (or `none`), and the regression count. Lost seats, the final
+  check and a nothing-open line follow when they apply, then `> **Why this round:**` with the
+  caller's `scopingNote` as one line of inert plain text (cut at 1,000 characters, escaped like
+  seat text; no note, no line, and the final check shows none). A table lists each checked id
+  with its title and what the seats said (`resolved`, `still present`, `inconclusive` or
+  `no answer`). `### Not fixed` gives each id a seat did not call resolved, with that seat's
+  reason as a quote. `### Dismissed` gives each `dismissed` id with its reason as a quote; the
+  `lowAdvisory` ids not kept sit in a folded `Low / advisory, not kept` list. Regressions follow
+  as new findings, by their `V<link>-R<n>` id, with `undoes F-1` when one undoes an earlier fix,
+  their evidence folded. The vote count (`1/1 voted`, or `verify 1/1 · recheck 2/2` with a
+  recheck) and the seats close the comment in small text. When nothing was open before the
+  verify (no open id, and no finding left to place) and at least one seat voted, a line in the
+  comment, and the reply's headline, say `Nothing was open; this round checked the new commits
+  for regressions only` (`… for regressions and new problems` when it ran `--recheck`) instead
+  of `No kept ids`. Verify checks `dismissed` and `lowAdvisory` against the review
   record and the chain before any seat runs.
 - A verify never posts the close-out card by itself. With `closeOut: true` (CLI `--close-out`),
   it posts the card as a separate comment, `## Review panel · close-out`, only when every verify
@@ -718,38 +732,43 @@ Both cards, the `--close-out` card and the manual `comment` card, read like this
 ```
 ## Review panel · close-out
 
-**4 findings** (4 medium) · **4 resolved** in 1 verify round
-**Review seats:** holistic (sol, opus), tests (sol, opus), security (sol, opus), correctness (sol, opus)
-**Verified by:** fix-verification (sol)
-**Final check:** verify 2, from the reviewed head to the final head
 `origin/main` (`5852b7e`) → `baf4d30` · [review](…) · [verify 1](…)
+**Final check:** verify 2, from the reviewed head to the final head
 
-- **F-1 [medium]** <title> · resolved in verify 1
-- …
+| Findings | Resolved |
+|---|---|
+| **4** (4 medium) | **4** in 1 verify round |
+
+| | Severity | Finding | Status |
+|---|---|---|---|
+| **F-1** | medium | <title> | resolved in verify 1 |
+| … |
+
+<sub>Review seats: holistic (sol, opus), tests (sol, opus) · Verified by: fix-verification (sol)</sub>
 
 <!-- review-panel review=… verify=… -->
 ```
 
-- The counts line names the findings submitted with their counts by severity (high, medium,
+- The counts table names the findings submitted with their counts by severity (high, medium,
   low), the ids resolved and in how many verify rounds, the ids still open, and then the
-  dismissed and low/advisory counts. A count of zero is left out.
+  dismissed and low/advisory counts. A count of zero has no column.
 - `Review seats:` is the review's seats grouped by lens, in the reply's format. `Verified by:` is
   the seats that voted in each verify of the chain, each once, grouped the same way; a verify
-  seat that was lost is not named there.
+  seat that was lost is not named there. Both are in small text at the end.
 - `Final check:` names the final check (see [Verify rounds chain](#verify-rounds-chain)) when
   the card's last round is one, or says it lost its seat, so nothing was checked; it is not
   counted among the verify rounds, and the hidden marker's `verify=` names it.
 - `Lost:` appears only when a seat was lost: review seats first, then verify seats of the chain,
-  each marked `(verify)`. The `### Open (not resolved)` section, the `### Dismissed` section
-  (each id with its title and reason) and the `### Low / advisory (not kept)` section appear
-  only when they have ids.
+  each marked `(verify)`. The `### Open (not resolved)` table, the `### Dismissed` section
+  (each id with its title, and its reason as a quote) and the folded `Low / advisory, not kept`
+  list appear only when they have ids.
 - The range shows the base ref only when it is not itself a commit id (a full or abbreviated SHA
   of the base); the head is one short SHA: the commit the chain's latest verify checked, or with
   no verify, the review's head. `comment` reads the review's whole chain; a `verifyRunId`, when
   given, is checked and must be the latest verify (an older one is refused, naming the latest).
   `comment`'s `head` (`--head`) is still accepted and no longer shown.
-- Each resolved id is listed, review findings by severity and then regressions (tagged
-  `[regression]`, with `(undoes F-1)` when one undid an earlier fix), as
+- Each resolved id is a table row, review findings by severity and then regressions (severity
+  `regression`, with `(undoes F-1)` when one undid an earlier fix), with the status
   `resolved in verify N`: N is the round of the chain that resolved it, its place in the chain,
   whether or not its comment posted. Its voting seats and dispositions come from its own signed
   verify record.
