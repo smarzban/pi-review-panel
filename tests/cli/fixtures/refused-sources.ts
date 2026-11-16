@@ -81,4 +81,11 @@ export const REFUSED = [
 	`git:${S}%40example.com/o/r`,
 	`git:git@example.com:o/r@ref?${S}=1`,
 	`git:example.com/o/r@ref:${S}@x`,
+	// A # anywhere in a git source: Pi keeps it in the clone URL and folder
+	// (R-1), and splits it off as a ref only for a hosted source.
+	`git:h.invalid/o/r#${S}$`,
+	`https://h.invalid/o/r@v1#${S}`,
+	`git:git@h.invalid:o/r#${S}`,
+	`ssh://git@h.invalid/o/r#${S}`,
+	"git:github.com/o/r#v1.2.0",
 ];

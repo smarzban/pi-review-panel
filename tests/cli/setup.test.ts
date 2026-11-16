@@ -1167,11 +1167,13 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 	const CREDENTIAL =
 		"The source carries a credential (a user name, password or token), so review-panel does not install it and does not repeat it here: Pi would keep the credential in settings.json and in the clone folder's name, and git would print it. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.";
 	const QUERY =
-		"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).";
+		"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> instead, and give git any token through a credential helper (git config credential.helper).";
 	const PERCENT_HOST =
 		"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.";
 	const REF =
-		"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref> or #<ref>, such as git:host/owner/repo@release/1.0.";
+		"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref>, such as git:host/owner/repo@release/1.0.";
+	const FRAGMENT =
+		"The source has a #, which Pi does not read as a ref for every host and would keep in the clone URL and the clone folder's name, so review-panel does not install it and does not repeat it here, in case it holds a token. Pin a ref with @<ref> instead, such as git:host/owner/repo@release/1.0.";
 	const NPM =
 		"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).";
 	const UNREADABLE =
@@ -1218,6 +1220,12 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 		// A percent-encoded host, and a ref that is not a plain name.
 		[`git:${S}%40example.com/o/r`, PERCENT_HOST],
 		[`git:example.com/o/r@ref:${S}@x`, REF],
+		// A # in a git source, which Pi does not take as a ref (R-1).
+		[`git:h.invalid/o/r#${S}$`, FRAGMENT],
+		[`https://h.invalid/o/r@v1#${S}`, FRAGMENT],
+		[`git:git@h.invalid:o/r#${S}`, FRAGMENT],
+		[`ssh://git@h.invalid/o/r#${S}`, FRAGMENT],
+		[`git:github.com/o/r#${S}`, FRAGMENT],
 		// npm: URL, git+, file, alias and other specs holding a token.
 		[`npm:https://${S}@example.com/x.tgz`, NPM],
 		[`npm:foo@git+https://${S}@host.com/x.git`, NPM],
@@ -1247,9 +1255,15 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 			expect(result.code).toBe(EXIT_FAILED);
 			expect(result.installs).toEqual([]);
 			expect(result.out).toBe("");
-			expect([CREDENTIAL, QUERY, PERCENT_HOST, REF, NPM, UNREADABLE]).toContain(
-				result.err.replace(/^review-panel: /, "").trimEnd(),
-			);
+			expect([
+				CREDENTIAL,
+				QUERY,
+				PERCENT_HOST,
+				REF,
+				FRAGMENT,
+				NPM,
+				UNREADABLE,
+			]).toContain(result.err.replace(/^review-panel: /, "").trimEnd());
 			expect(result.out + result.err).not.toContain(S);
 		},
 	);

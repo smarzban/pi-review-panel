@@ -463,8 +463,6 @@ describe("which sources install refuses, decided on Pi's own parse (N2-1, N2-2, 
 		"git:ssh://git@example.com/o/r",
 		"git:bitbucket.org/o/r",
 		"git:gitlab.com/g/s/r",
-		// A #fragment is a ref.
-		"git:github.com/o/r#v1.2.0",
 		// Branch refs with a slash (N2-2).
 		"git:host.com/o/r@release/1.0",
 		"git:git@host.com:o/r@feature/x",

@@ -752,6 +752,25 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 		120_000,
 	);
 
+	it("install refuses a # in a git source: no clone, nothing in settings.json (R-1)", () => {
+		const home = tempHome();
+		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-hash-")));
+		writeExtensionPackage(repo, { git: true });
+		const agent = path.join(home, "agent");
+		const result = cli(
+			home,
+			["extension", "install", `${FIXTURE_GIT_SOURCE}#${SECRET}`],
+			{ env: { ...gitSourceEnv(repo), PI_CODING_AGENT_DIR: agent } },
+		);
+		expect(result.code).toBe(1);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe(
+			"review-panel: The source has a #, which Pi does not read as a ref for every host and would keep in the clone URL and the clone folder's name, so review-panel does not install it and does not repeat it here, in case it holds a token. Pin a ref with @<ref> instead, such as git:host/owner/repo@release/1.0.\n",
+		);
+		expect(existsSync(path.join(agent, "git"))).toBe(false);
+		expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+	}, 120_000);
+
 	it("a branch ref with a slash installs (N2-2)", () => {
 		const home = tempHome();
 		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-ref-")));

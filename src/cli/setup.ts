@@ -158,9 +158,10 @@ function urlParts(
  *   an `http(s)://` URL (a token often sits there alone), any other SSH user,
  *   or an `@` anywhere else in its host; or a percent sign in its host;
  * - a git source has a query string anywhere, its ref included (it can carry
- *   a token, and Pi keeps it in the folder name), or a ref that is not a plain
- *   branch, tag or commit name. A `#ref` or `@ref` such as `@release/1.0` is
- *   allowed;
+ *   a token, and Pi keeps it in the folder name), a `#` anywhere (Pi reads
+ *   `#ref` as a ref only for a hosted source and keeps the `#` in the clone
+ *   URL), or a ref that is not a plain branch, tag or commit name. An `@ref`
+ *   such as `@release/1.0` is allowed;
  * - an `npm:` source that is not a registry package (`isRegistryPackage`);
  * - Pi reads it as a local path although it starts with a scheme (`HTTPS://`,
  *   `git+https://`, `github:`, a `git:` form its parser rejects): Pi would
@@ -251,11 +252,13 @@ export function hideParts(text: string, parts: readonly string[]): string {
 const REFUSED_CREDENTIAL =
 	"The source carries a credential (a user name, password or token), so review-panel does not install it and does not repeat it here: Pi would keep the credential in settings.json and in the clone folder's name, and git would print it. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.";
 const REFUSED_QUERY =
-	"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).";
+	"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> instead, and give git any token through a credential helper (git config credential.helper).";
 const REFUSED_PERCENT_HOST =
 	"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.";
 const REFUSED_REF =
-	"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref> or #<ref>, such as git:host/owner/repo@release/1.0.";
+	"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref>, such as git:host/owner/repo@release/1.0.";
+const REFUSED_FRAGMENT =
+	"The source has a #, which Pi does not read as a ref for every host and would keep in the clone URL and the clone folder's name, so review-panel does not install it and does not repeat it here, in case it holds a token. Pin a ref with @<ref> instead, such as git:host/owner/repo@release/1.0.";
 const REFUSED_NPM =
 	"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).";
 const REFUSED_UNREADABLE =
@@ -284,6 +287,15 @@ export function sourceProblem(
 				ref.includes("?")
 			) {
 				return REFUSED_QUERY;
+			}
+			// Pi splits a #ref off only for a hosted source (github.com and the
+			// like), and keeps the # in the clone URL even then.
+			if (
+				parsed.repo.includes("#") ||
+				parsed.path.includes("#") ||
+				ref.includes("#")
+			) {
+				return REFUSED_FRAGMENT;
 			}
 			if (parsed.host.includes("@")) {
 				return REFUSED_CREDENTIAL;

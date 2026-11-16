@@ -292,9 +292,11 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
     `ssh://git@host/owner/repo` and `git:ssh://git@host/...` install), or a scheme-less
     `git:user:token@host/...` / `git:token@host/...` however it is spaced, cased or ported;
   - a git source with a percent sign in its host;
-  - a git source with any query string (`?...`), its ref included, or a pinned ref that is not
-    a plain branch, tag or commit name (letters, digits, `.`, `_`, `/`, `+`, `-`); pin a ref
-    with `@<ref>` or `#<ref>` (`git:host/owner/repo@release/1.0` installs);
+  - a git source with any query string (`?...`), its ref included, any `#` (Pi reads `#<ref>`
+    as a ref only for a hosted source such as github.com, and keeps the `#` in the clone URL
+    and folder), or a pinned ref that is not a plain branch, tag or commit name (letters,
+    digits, `.`, `_`, `/`, `+`, `-`); pin a ref with `@<ref>`
+    (`git:host/owner/repo@release/1.0` installs);
   - an `npm:` source that is not a registry package. Only `npm:<name>` and
     `npm:<name>@<version, range or tag>` install (`npm:pi-foo`, `npm:@scope/pkg@^1.2.0`,
     `npm:pkg@latest`); a URL, `git+…`, `git:`, `github:`, `file:`, alias or path spec is refused,
