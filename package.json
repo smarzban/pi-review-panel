@@ -1,6 +1,6 @@
 {
 	"name": "pi-review-panel",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Multi-model code review panel: the review-panel command and its agent skill",
 	"license": "MIT",
 	"author": "Saeed Marzban",
