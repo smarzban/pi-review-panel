@@ -165,7 +165,7 @@ verify exists, or a verify that is not the tip, naming the tip. `chainState` wal
 dismissals and low/advisory first, then each kept id resolved (every voting seat that answered
 said resolved, `resolvedIdsOf`, in a round that lost no seat) or open, then the link's regressions, open, with ids
 `V<link>-R<n>` numbered across its voting seats in order (`regressionsOf`; `runVerify` stamps the
-same ids into the record). A resolved, dismissed or low/advisory id is not judged again. The diff
+same ids into the record). A resolved, dismissed or low/advisory id is not judged again. Omitted kept ids (`defaultKeptIds`) are every open id on a chained verify and none on the first verify of a review with no findings; the first verify of a review with findings refuses without them. The diff
 base is the prior link's head, checked to be a commit here. The undo guard passes every resolved
 id to the seat (`undoableIds`, by closure like `expectedIds`, and in the replay spec); its title,
 file and the verifier's note go only in the data appendix through `inertLine` with caps, and a

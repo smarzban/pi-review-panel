@@ -412,7 +412,7 @@ Verify rounds form a chain. Each verify checks only what is still open after the
 it, against the diff from that verify's head:
 
 1. The first verify takes the review's run id as `priorRunId` and needs `keptFindingIds`
-   (`""` for none). It places every review finding: kept, dismissed with a reason, or left as
+   (`""` for none), except after a review with no findings, where it defaults to none. It places every review finding: kept, dismissed with a reason, or left as
    low/advisory. A high or medium it leaves out is refused before any seat runs, naming the
    ids; a low it leaves out is left as low/advisory and recorded so. It checks the kept ids
    against `<review head>...<head>`.

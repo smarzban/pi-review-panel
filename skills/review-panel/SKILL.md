@@ -141,7 +141,8 @@ Give the owner each finding with keep or skip and the reason, plus coverage and 
    places every other finding: dismiss each high or medium you skip with a reason (it is
    refused otherwise); a low you leave out is recorded as low/advisory. `<run>` is the review's
    run id: the last folder of the report's `Record:` line. The full record path on that line
-   also works; a relative path does not.
+   also works; a relative path does not. After a review with no findings, leave out
+   `--kept-finding-ids`.
 
 ```bash
 review-panel verify --prior-run-id <review run> --head <new head> --kept-finding-ids F-1,F-2 \

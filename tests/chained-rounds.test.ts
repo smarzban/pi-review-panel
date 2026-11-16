@@ -118,12 +118,21 @@ beforeEach(() => {
 		commits.push(git(repo, ["rev-parse", "HEAD"]));
 	}
 	repo = realpathSync(repo);
-	const recordPath = path.join(repo, ".review-panel", "runs", REVIEW);
+	writeReview(REVIEW, FINDINGS);
+	specs = [];
+	answers = [];
+	calls = [];
+	comments = [];
+});
+
+/** A signed, complete review record at commits[1]. */
+function writeReview(runId: string, findings: StampedFinding[]): void {
+	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
 	writeFileSync(
 		path.join(recordPath, "meta.json"),
 		JSON.stringify({
-			runId: REVIEW,
+			runId: runId,
 			baseRef: "main",
 			baseOid: commits[0],
 			headOid: commits[1],
@@ -132,7 +141,7 @@ beforeEach(() => {
 	writeFileSync(
 		path.join(recordPath, "panel.json"),
 		JSON.stringify({
-			runId: REVIEW,
+			runId: runId,
 			baseRef: "main",
 			seats: [
 				{
@@ -146,15 +155,11 @@ beforeEach(() => {
 	);
 	writeFileSync(
 		path.join(recordPath, "findings.json"),
-		JSON.stringify(FINDINGS),
+		JSON.stringify(findings),
 	);
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	signReviewRecord(recordPath);
-	specs = [];
-	answers = [];
-	calls = [];
-	comments = [];
-});
+}
 
 afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
@@ -557,6 +562,23 @@ describe("one number per round (S-4)", () => {
 		expect(body).toContain(
 			"- **F-1 [high]** cache key misses the tenant · resolved in verify 1",
 		);
+	});
+});
+
+const CLEAN = "2026-11-15T10-00-00-000Z-main-clean";
+describe("a review with no findings (T510)", () => {
+	beforeEach(() => {
+		writeReview(CLEAN, []);
+	});
+
+	it("the first verify needs no kept ids", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [] },
+		);
+		expect(path.basename(v1.runId)).toMatch(/verify/u);
+		expect(specs).toHaveLength(1);
+		expect(specs[0]?.model).toBe("gpt-5.6-terra");
 	});
 });
 

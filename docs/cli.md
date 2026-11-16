@@ -229,7 +229,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 | `review-panel diagnose` | `{"action":"diagnose"}` |
 | `review-panel suggest --base main --head HEAD` | `base`, `head` |
 | `review-panel review --base main --head HEAD [--seats a,b] [--lenses tests,security] [--scoping-note <text>] [--no-pr-comment] [--pr 22] [--owner-approved]` | `base`, `head`, `seats`, `lenses`, `scopingNote`, `prComment: false`, `pr`, `ownerApproved` |
-| `review-panel verify --prior-run-id <run> --head HEAD [--kept-finding-ids F-1,G-2] [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--close-out] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none; leave it out on a chained verify for every open id), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `closeOut`, `prComment: false`, `pr`, `ownerApproved` |
+| `review-panel verify --prior-run-id <run> --head HEAD [--kept-finding-ids F-1,G-2] [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--close-out] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none; leave it out on a chained verify for every open id, or on the first verify of a review with no findings), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `closeOut`, `prComment: false`, `pr`, `ownerApproved` |
 | `review-panel resume --prior-run-id <run>` | `priorRunId` |
 | `review-panel comment --prior-run-id <run> --owner-approved [--pr 22] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -]` | `priorRunId`, `ownerApproved`, `pr`, `verifyRunId`, `head`, `lowAdvisory`, `dismissed` |
 | `review-panel call '<json>'` | One action's whole argument object, for example `'{"action":"review","base":"main","head":"HEAD"}'`. `-` reads it from stdin. |
@@ -239,7 +239,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
 - `verify` chains. The first verify of a review takes the review's run id as
-  `--prior-run-id` and needs `--kept-finding-ids`; it must place every finding (a high or
+  `--prior-run-id` and needs `--kept-finding-ids` (not when the review had no findings); it must place every finding (a high or
   medium it neither keeps nor dismisses is refused; a low it leaves out is low/advisory). Every later verify takes the latest
   verify's run id, checks only what is still open after it (its still-present ids and its
   regressions, which get ids such as `V1-R1`) from that verify's head, and with no
