@@ -638,6 +638,15 @@ export function dispositionLabel(facts: VerifyFacts, id: string): string {
 export const NOTHING_OPEN =
 	"Nothing was open; this round checked the new commits for regressions only";
 
+/** The same headline when the round also ran recheck seats. */
+export const NOTHING_OPEN_RECHECKED =
+	"Nothing was open; this round checked the new commits for regressions and new problems";
+
+/** The headline for a round with nothing open: with or without a recheck. */
+export function nothingOpenLine(result: RunVerifyResult): string {
+	return result.recheck === undefined ? NOTHING_OPEN : NOTHING_OPEN_RECHECKED;
+}
+
 export function renderVerifyResult(
 	result: RunVerifyResult,
 	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
@@ -657,7 +666,7 @@ export function renderVerifyResult(
 		keptSummary.length > 0
 			? keptSummary.join(", ")
 			: result.nothingOpen === true && voted.length > 0
-				? NOTHING_OPEN
+				? nothingOpenLine(result)
 				: "no kept ids",
 		regressions.length === 0
 			? "no regressions"

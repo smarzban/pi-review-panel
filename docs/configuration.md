@@ -559,7 +559,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   one undoes an earlier fix. When nothing was open before the verify (no open id, and no
   finding left to place) and at least one seat voted, its headline, in the comment and the
   reply, says `Nothing was open; this round checked the new commits for regressions only`
-  instead of `no kept ids`. Verify checks `dismissed` and `lowAdvisory` against the review
+  (`… for regressions and new problems` when it ran `--recheck`) instead of `no kept ids`. Verify checks `dismissed` and `lowAdvisory` against the review
   record and the chain before any seat runs.
 - A verify never posts the close-out card by itself. With `closeOut: true` (CLI `--close-out`),
   it posts the card as a separate comment, `## Review panel · close-out`, only when every verify

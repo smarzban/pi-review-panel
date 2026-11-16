@@ -88,7 +88,7 @@ import {
 	formatSuggestion,
 	formatSuggestionsUnavailable,
 	inert,
-	NOTHING_OPEN,
+	nothingOpenLine,
 	orderFindings,
 	recheckView,
 	reviewHeadLines,
@@ -800,7 +800,7 @@ export function renderVerifyRound(
 	const keptSummary =
 		seen.keptIds.length === 0
 			? result.nothingOpen === true && seen.voted > 0
-				? NOTHING_OPEN
+				? nothingOpenLine(result)
 				: "no kept ids"
 			: seen.keptIds
 					.map((id) => githubSafe(dispositionLabel(seen, id), 80))

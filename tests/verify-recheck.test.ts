@@ -695,6 +695,26 @@ describe("verify --recheck", () => {
 		expect(v2.body).toContain("**Open after this round:** none");
 	});
 
+	it("with nothing open, the headline says the round also checked for new problems only when it rechecked", async () => {
+		const v1 = await first();
+		const v2 = await verify({ priorRunId: v1.runId, head: commits[3] });
+		const only =
+			"Nothing was open; this round checked the new commits for regressions only";
+		expect(v2.body).toContain(`1/1 voted · ${only} · no regressions`);
+		expect(v2.reply).toContain(only);
+		const v3 = await verify({
+			priorRunId: v2.runId,
+			head: commits[4],
+			recheck: ["security"],
+		});
+		const both =
+			"Nothing was open; this round checked the new commits for regressions and new problems";
+		expect(v3.body).toContain(`1/1 voted · ${both} · no regressions`);
+		expect(v3.reply).toContain(both);
+		expect(v3.body).not.toContain("regressions only");
+		expect(v3.reply).not.toContain("regressions only");
+	});
+
 	it("nothing found: the round says nothing new", async () => {
 		const v1 = await first({ recheck: ["tests", "security"] });
 		expect(v1.body).toContain("**Recheck (tests, security):** nothing new");
