@@ -459,12 +459,19 @@ describe("verify --recheck", () => {
 	});
 
 	it("plans one seat per lens on the owner's default seats, specialists on the first two like review, never the caller's seats", () => {
-		const seats = planRecheckSeats(CONFIG, ["security", "holistic"]);
+		// Three default seats: a specialist runs on the first two only,
+		// holistic on all three.
+		const three: Config = {
+			...CONFIG,
+			defaults: { seats: ["terra", "opus", "luna"] },
+		};
+		const seats = planRecheckSeats(three, ["security", "holistic"]);
 		expect(seats.map((row) => `${row.rosterId}/${row.lens}`)).toEqual([
 			"terra/security",
 			"opus/security",
 			"terra/holistic",
 			"opus/holistic",
+			"luna/holistic",
 		]);
 		expect(() => planRecheckSeats(CONFIG, ["vibes"])).toThrow(
 			'Verify refused: unknown recheck lens "vibes"',
