@@ -224,7 +224,7 @@ The close-out card is posted once, at the end, as soon as nothing is open:
   otherwise the `PR close-out:` line says why.
 - If a verify left nothing open without `--close-out` (it cannot run again at the same head),
   post the card straight away with `review-panel comment --prior-run-id <review run> --owner-approved`,
-  the command its `PR close-out:` line names: that is the owner's standing rule; do not ask.
+  the command its `PR close-out:` line names: the card posts once everything is done; do not ask.
 - Ask the owner only to stop the rounds with items still open. After a yes, post the card; it
   lists them as open:
 

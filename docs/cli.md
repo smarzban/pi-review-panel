@@ -265,7 +265,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   finds as open; when nothing was open before it, what it finds (or a lost seat) refuses the card
   and says what to run next. `--verify-run-id`, when given,
   must be the latest verify. It is refused
-  without `--owner-approved`: pass that flag when nothing is open (the owner's standing rule,
+  without `--owner-approved`: pass that flag when nothing is open (the default: a card posts once everything is done,
   unless the owner config sets `defaults.prComment: "ownerApproved"`) or after the owner said to
   stop the rounds with ids open. It posts only to an
   open pull request whose head is the commit the card is about (the latest verify's, or else the review's):

@@ -229,7 +229,9 @@ describe("review-panel skill", () => {
 		expect(body).toContain(
 			"post the card straight away with `review-panel comment --prior-run-id <review run> --owner-approved`",
 		);
-		expect(body).toContain("that is the owner's standing rule; do not ask");
+		expect(body).toContain(
+			"the card posts once everything is done; do not ask",
+		);
 		expect(body).toContain(
 			"Ask the owner only to stop the rounds with items still open",
 		);

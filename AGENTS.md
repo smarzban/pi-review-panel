@@ -66,7 +66,7 @@ Before touching these, read the matching section of `docs/internals.md`:
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR at the run's head by default, always as a new
   comment (a final check posts its round only when it blocks the `--close-out` card; the card
-  names it otherwise); resume never posts; `comment` is the manual, owner-approved card and posts only to an
+  names it otherwise); resume never posts; `comment` posts the card (`--owner-approved`) when nothing is open or the owner stops the rounds, and posts only to an
   open PR at the card's head. A post that cannot be made is one reply line, never a run failure.
 - The close-out card is never posted automatically: only by `verify --close-out` when nothing is
   open after a verify with no lost seat, or by `comment`, which lists what is still open. Both
