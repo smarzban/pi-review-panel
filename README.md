@@ -190,7 +190,7 @@ or dispositions, and lost seats. The tool computes no merge decision.
 
 ## Status
 
-1.0.0: one `review-panel` command and one skill, published from the
+1.1.0: one `review-panel` command and one skill, published from the
 `pi-review-panel` npm package. Diagnose,
 suggest, review, verify, resume, and comment are the public path. The
 package ships a built `dist/` (built at pack time, never committed) and depends
