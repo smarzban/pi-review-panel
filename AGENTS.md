@@ -103,10 +103,8 @@ Before touching these, read the matching section of `docs/internals.md`:
 
 ## Release
 
-- `0.3.0` is on npm (the old Pi tool). Bump `package.json` before the next `npm publish`; that
-  version cannot be overwritten. The next release is breaking: Pi users run
-  `pi remove npm:pi-review-panel`, then `npm install -g pi-review-panel` and
-  `review-panel skill install`.
+- `1.0.0` is on npm (the first release as the `review-panel` command). A published version
+  cannot be overwritten: bump `package.json` before the next release.
 - Bump `package.json`, add a `## [x.y.z]` CHANGELOG section, merge, then push tag `vx.y.z`.
   `publish.yml` checks the tag matches the version and its commit is on `main`, runs verify and
   the installed-package smoke check, publishes to npm (`prepack` builds `dist/`), and creates the
