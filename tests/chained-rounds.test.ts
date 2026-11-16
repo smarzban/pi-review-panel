@@ -911,13 +911,13 @@ describe("why this round (T510)", () => {
 		// Under the head lines, after a blank line, as one quoted line.
 		expect(lines[3]).toBe(NOTHING_OPEN);
 		expect(lines[4]).toBe("");
-		expect(lines[5]).toBe(`> **Why this round:** ${postedText(note)}`);
+		expect(lines[5]).toBe(`> **This round:** ${postedText(note)}`);
 		expect(lines[5]).not.toContain("@team");
 	});
 
 	it("no note, no line", async () => {
 		const v1 = await round1();
-		expect(v1.body).not.toContain("Why this round");
+		expect(v1.body).not.toContain("This round:");
 	});
 });
 

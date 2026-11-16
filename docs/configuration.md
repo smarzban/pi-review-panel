@@ -562,7 +562,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     after GitHub had already accepted it, the claim is given back and no marker is written.
   It is a short delta. Its first line is the commit range, `Open after this round:` naming every
   id still open after this verify (or `none`), and the regression count. Lost seats, the final
-  check and a nothing-open line follow when they apply, then `> **Why this round:**` with the
+  check and a nothing-open line follow when they apply, then `> **This round:**` with the
   caller's `scopingNote` as one line of inert plain text (cut at 1,000 characters, escaped like
   seat text; no note, no line, and the final check shows none). A table lists each checked id
   with its title and what the seats said (`resolved`, `still present`, `inconclusive` or

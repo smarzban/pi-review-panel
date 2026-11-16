@@ -239,7 +239,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
 - `verify --scoping-note` says why the round ran (where each change came from); the verify
-  comment shows it under the commit range as `Why this round:`, and the seats read it too.
+  comment shows it under the commit range as `This round:`, and the seats read it too.
 - `verify --recheck tests,security` also hunts for new problems in this round's commits: one
   seat per named review lens on the owner's `defaults.seats` (holistic on each, a specialist on
   the first two, as in review; holistic only when named; `--seats` never applies to them) runs

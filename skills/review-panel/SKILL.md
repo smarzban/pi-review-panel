@@ -168,7 +168,7 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
 5. Pass `--scoping-note` on a verify only when it says something the comment does not: a
    change that came from outside the panel (`"owner found X; outside re-check found Y"`) or
    why you chose each `--recheck` lens. Leave it out for a plain round of fixes: the comment
-   already names every id checked. The verify comment shows it as `Why this round:`; the
+   already names every id checked. The verify comment shows it as `This round:`; the
    seats read it too.
 6. A verify checks only open ids and regressions. To have the panel hunt for new problems in
    this round's commits too, add `--recheck <lenses>`: one seat per lens on the owner's

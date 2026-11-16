@@ -921,7 +921,7 @@ export function renderVerifyRound(
 			? []
 			: [
 					"",
-					`> **Why this round:** ${githubSafe(result.scopingNote, EVIDENCE_CHARS)}`,
+					`> **This round:** ${githubSafe(result.scopingNote, EVIDENCE_CHARS)}`,
 				]),
 	];
 	const rows: string[][] = [];

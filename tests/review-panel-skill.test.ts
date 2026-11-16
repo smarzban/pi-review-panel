@@ -262,7 +262,7 @@ describe("review-panel skill", () => {
 		expect(body).not.toContain("Pass `--scoping-note` on each verify");
 		expect(at).toBeGreaterThan(body.indexOf("## 6. Fix and verify"));
 		expect(at).toBeLessThan(body.indexOf("## 7. Resume"));
-		expect(body).toContain("`Why this round:`");
+		expect(body).toContain("`This round:`");
 	});
 
 	it("never treats an exit code as a pass", () => {
