@@ -282,7 +282,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
   appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   any value in a `call` object, such as `repository` or `priorRunId`, and the source of
-  `extension install` or `remove`. `extension install` decides on what Pi's own package
+  `extension install` or `remove` (a source that `install` refuses is never repeated; one it
+  accepts can be). `extension install` decides on what Pi's own package
   manager parses from the source (the same parse `pi install` runs) and refuses, before
   anything is cloned or recorded:
   - a git source with any user info other than the SSH user `git`: a password, any user name
@@ -301,6 +302,11 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
     in `.npmrc`, or use a git source (`git:git@host:owner/repo`) instead;
   - a source with a scheme that Pi cannot read as git or npm (`HTTPS://...`, `git+https://...`,
     `github:...`): Pi would look for a local folder of that name and print it.
+
+  A refusal names no part of the source, since any part of it can hold a token: it says why the
+  source was refused and what to write instead. The same holds for an scp-style source written
+  without the `git:` prefix (`git@host:owner/repo`) and a `file:` URL that names no local path,
+  which `extension install` and `remove` refuse before Pi parses them.
 
   Pi would store such a source in `settings.json`, name the clone folder after the credential,
   and git would print that folder, so the refusal is what keeps a credential out of git's and

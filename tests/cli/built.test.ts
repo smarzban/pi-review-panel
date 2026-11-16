@@ -726,6 +726,32 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 		expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
 	}, 120_000);
 
+	it.each([
+		[
+			`npm:${SECRET}@example.invalid/a.tgz`,
+			"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).",
+		],
+		[
+			`git:${SECRET}%40example.invalid/fixture/pi-ext`,
+			"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.",
+		],
+	])(
+		"the refusal of %s repeats no part of the source (N4-1)",
+		(source, message) => {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			const result = cli(home, ["extension", "install", source], {
+				env: { PI_CODING_AGENT_DIR: agent },
+			});
+			expect(result.code).toBe(1);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toBe(`review-panel: ${message}\n`);
+			expect(result.stdout + result.stderr).not.toContain(SECRET);
+			expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+		},
+		120_000,
+	);
+
 	it("a branch ref with a slash installs (N2-2)", () => {
 		const home = tempHome();
 		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-ref-")));

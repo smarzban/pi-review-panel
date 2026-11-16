@@ -243,22 +243,39 @@ export function hideParts(text: string, parts: readonly string[]): string {
 	return result;
 }
 
+/*
+ * Every refusal is fixed text: no part of the source is ever repeated, since
+ * any part of it (user info, host, path, ref, npm name or version) can hold a
+ * token, and no redaction can tell which.
+ */
+const REFUSED_CREDENTIAL =
+	"The source carries a credential (a user name, password or token), so review-panel does not install it and does not repeat it here: Pi would keep the credential in settings.json and in the clone folder's name, and git would print it. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.";
+const REFUSED_QUERY =
+	"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).";
+const REFUSED_PERCENT_HOST =
+	"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.";
+const REFUSED_REF =
+	"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref> or #<ref>, such as git:host/owner/repo@release/1.0.";
+const REFUSED_NPM =
+	"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).";
+const REFUSED_UNREADABLE =
+	"Pi cannot read the source as git or npm: it would look for a local folder of that name and print it, so review-panel does not install it and does not repeat it here, in case it holds a token. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.";
+const REFUSED_SCP =
+	"The source looks like an SSH Git source without the git: prefix, which Pi would take for a local folder, so review-panel does not use it and does not repeat it here, in case it holds a token. Write it with the prefix, as git:git@host:owner/repo.";
+const REFUSED_FILE_URL =
+	"The source is a file: URL that names no local path, so review-panel does not use it and does not repeat it here, in case it holds a token. Write the folder as a path (./ext, ~/ext or /full/path) or as file:///full/path.";
+
 export function sourceProblem(
 	raw: string,
 	parsed: ParsedSource,
 ): string | undefined {
-	const shown = redactSecrets(hideParts(raw.trim(), credentialParts(parsed)));
-	const credential = `${shown} carries a credential (a user name, password or token in the source). review-panel does not install it, so the credential never lands in settings.json, a folder name or the output. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.`;
-	const query = `${shown} has a query string, which can carry a token and which Pi would keep in the clone folder's name; review-panel does not install it. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).`;
 	switch (parsed.type) {
 		case "local":
 			return /^\s*[a-z][a-z0-9+.-]+:/i.test(raw)
-				? `${shown} is not a source Pi can read: it would look for a local folder of that name. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.`
+				? REFUSED_UNREADABLE
 				: undefined;
 		case "npm":
-			return isRegistryPackage(parsed)
-				? undefined
-				: `${shown} is not a registry package. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).`;
+			return isRegistryPackage(parsed) ? undefined : REFUSED_NPM;
 		case "git": {
 			const ref = parsed.ref ?? "";
 			if (
@@ -266,16 +283,16 @@ export function sourceProblem(
 				parsed.path.includes("?") ||
 				ref.includes("?")
 			) {
-				return query;
+				return REFUSED_QUERY;
 			}
 			if (parsed.host.includes("@")) {
-				return credential;
+				return REFUSED_CREDENTIAL;
 			}
 			if (parsed.host.includes("%")) {
-				return `${shown} has a percent-encoded host, which can hide user info; review-panel does not install it. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.`;
+				return REFUSED_PERCENT_HOST;
 			}
 			if (ref !== "" && !GIT_REF.test(ref)) {
-				return `${shown} pins the ref "${redactSecrets(ref)}", which is not a plain branch, tag or commit name (letters, digits, . _ / + -); review-panel does not install it.`;
+				return REFUSED_REF;
 			}
 			const url = urlParts(parsed.repo);
 			if (url !== undefined) {
@@ -285,14 +302,14 @@ export function sourceProblem(
 				// The only SSH user allowed is git; any other may be a token.
 				return SSH_SCHEMES.has(url.scheme) && url.userinfo === "git"
 					? undefined
-					: credential;
+					: REFUSED_CREDENTIAL;
 			}
 			// scp-style SSH (user@host:path): only the user git.
 			const scp = /^([^@\s/:]+)@[^@\s/:]+:/.exec(parsed.repo);
 			if (scp !== null) {
-				return scp[1] === "git" ? undefined : credential;
+				return scp[1] === "git" ? undefined : REFUSED_CREDENTIAL;
 			}
-			return parsed.repo.includes("@") ? credential : undefined;
+			return parsed.repo.includes("@") ? REFUSED_CREDENTIAL : undefined;
 		}
 	}
 }
@@ -526,17 +543,13 @@ export function absoluteSource(
 		return trimmed;
 	}
 	if (/^[^\s/:@]+@[^\s/:]+:/.test(trimmed)) {
-		throw new SetupError(
-			`${redactSecrets(trimmed)} looks like an SSH Git source; write it with the git: prefix: git:${redactSecrets(trimmed)}`,
-		);
+		throw new SetupError(REFUSED_SCP);
 	}
 	if (trimmed.startsWith("file:")) {
 		try {
 			return fileURLToPath(trimmed);
-		} catch (error) {
-			throw new SetupError(
-				`${redactSecrets(trimmed)} is not a usable file: URL (${error instanceof Error ? error.message : String(error)})`,
-			);
+		} catch {
+			throw new SetupError(REFUSED_FILE_URL);
 		}
 	}
 	if (trimmed === "~") {

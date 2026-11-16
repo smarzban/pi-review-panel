@@ -23,6 +23,7 @@ import {
 	redactSecrets,
 	type SetupSdk,
 } from "../../src/cli/setup.js";
+import { REFUSED, TOKEN } from "./fixtures/refused-sources.js";
 
 const HOME = "/home/user";
 const PI_FOLDER: AgentDirChoice = {
@@ -902,7 +903,9 @@ describe("local sources (R-3)", () => {
 		expect(await h.run(["extension", "install", "git@github.com:o/r"])).toBe(
 			EXIT_FAILED,
 		);
-		expect(h.err()).toContain("git:git@github.com:o/r");
+		// It shows the form to write, never the source itself (N4-1).
+		expect(h.err()).toContain("git:git@host:owner/repo");
+		expect(h.err()).not.toContain("github.com");
 		expect(installs).toEqual([]);
 	});
 });
@@ -1157,4 +1160,97 @@ describe("models problem lines use the recorded source's own redaction (F-2)", (
 		expect(h.err()).toContain("did not finish loading");
 		expect(h.out() + h.err()).not.toContain(SECRET);
 	});
+});
+
+describe("an install refusal never repeats the source (N4-1)", () => {
+	const S = TOKEN;
+	const CREDENTIAL =
+		"The source carries a credential (a user name, password or token), so review-panel does not install it and does not repeat it here: Pi would keep the credential in settings.json and in the clone folder's name, and git would print it. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.";
+	const QUERY =
+		"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).";
+	const PERCENT_HOST =
+		"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.";
+	const REF =
+		"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref> or #<ref>, such as git:host/owner/repo@release/1.0.";
+	const NPM =
+		"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).";
+	const UNREADABLE =
+		"Pi cannot read the source as git or npm: it would look for a local folder of that name and print it, so review-panel does not install it and does not repeat it here, in case it holds a token. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.";
+	const SCP =
+		"The source looks like an SSH Git source without the git: prefix, which Pi would take for a local folder, so review-panel does not use it and does not repeat it here, in case it holds a token. Write it with the prefix, as git:git@host:owner/repo.";
+	const FILE_URL =
+		"The source is a file: URL that names no local path, so review-panel does not use it and does not repeat it here, in case it holds a token. Write the folder as a path (./ext, ~/ext or /full/path) or as file:///full/path.";
+
+	async function refusal(source: string) {
+		const { sdk, installs } = fakeSdk();
+		const h = harness({ sdk });
+		const code = await h.run(["extension", "install", source]);
+		return { code, installs, out: h.out(), err: h.err() };
+	}
+
+	it.each([
+		// http(s) user info, with or without a password.
+		[`https://${S}@host.com/o/r`, CREDENTIAL],
+		[`https://user:${S}@host.com/o/r`, CREDENTIAL],
+		// An SSH user other than git.
+		[`ssh://${S}@example.com/o/r`, CREDENTIAL],
+		[`ssh://user:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:ssh://${S}@example.com/o/r`, CREDENTIAL],
+		// Scheme-less git: user info, however spaced or ported.
+		[`git:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:user:${S}@host.com/o/r`, CREDENTIAL],
+		[`git: user:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:\tuser:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:${S}@host.com:8443/o/r`, CREDENTIAL],
+		[`git:user%3A${S}@host.com/o/r`, CREDENTIAL],
+		[`git:git@${S}@host.com/o/r`, CREDENTIAL],
+		// ... or cased and ported so that Pi reads it as a local folder.
+		[`git:${S}@localhost:8080/o/r`, UNREADABLE],
+		[`git:HTTPS://${S}@host.com/o/r`, UNREADABLE],
+		[`HTTPS://${S}@host.com/o/r`, UNREADABLE],
+		[`git+https://${S}@host.com/o/r`, UNREADABLE],
+		[`git+ssh://${S}@example.com/o/r`, UNREADABLE],
+		[`git:host/o/r@${S}`, UNREADABLE],
+		// A query on a git source, in its path or its ref.
+		[`git:host.com/o/r?pat=${S}`, QUERY],
+		[`git:host.com/o/r?private_to%6Ben=${S}`, QUERY],
+		[`git:git@example.com:o/r@ref?${S}=1`, QUERY],
+		// A percent-encoded host, and a ref that is not a plain name.
+		[`git:${S}%40example.com/o/r`, PERCENT_HOST],
+		[`git:example.com/o/r@ref:${S}@x`, REF],
+		// npm: URL, git+, file, alias and other specs holding a token.
+		[`npm:https://${S}@example.com/x.tgz`, NPM],
+		[`npm:foo@git+https://${S}@host.com/x.git`, NPM],
+		[`npm:git+ssh://${S}@github.com/o/r.git`, NPM],
+		[`npm:pkg@npm:other@https://${S}@x.com/a.tgz`, NPM],
+		[`npm:pkg@http://x.com/a.tgz#${S}`, NPM],
+		[`npm:pkg@file:../${S}`, NPM],
+		[`npm:${S}@x.com/a.tgz`, NPM],
+		[`npm://${S}@x.com/a.tgz`, NPM],
+		[`npm:@${S}:pass@x/y`, NPM],
+		// Before Pi parses it: an scp-style source without git:, a bad file: URL.
+		[`${S}@host.com:o/r`, SCP],
+		[`file://${S}@host.example/x`, FILE_URL],
+	])("%s is refused with a fixed message", async (source, message) => {
+		const result = await refusal(source);
+		expect(result.code).toBe(EXIT_FAILED);
+		expect(result.installs).toEqual([]);
+		expect(result.out).toBe("");
+		expect(result.err).toBe(`review-panel: ${message}\n`);
+		expect(result.out + result.err).not.toContain(S);
+	});
+
+	it.each(REFUSED)(
+		"%s is refused with one of the fixed messages",
+		async (source) => {
+			const result = await refusal(source);
+			expect(result.code).toBe(EXIT_FAILED);
+			expect(result.installs).toEqual([]);
+			expect(result.out).toBe("");
+			expect([CREDENTIAL, QUERY, PERCENT_HOST, REF, NPM, UNREADABLE]).toContain(
+				result.err.replace(/^review-panel: /, "").trimEnd(),
+			);
+			expect(result.out + result.err).not.toContain(S);
+		},
+	);
 });
