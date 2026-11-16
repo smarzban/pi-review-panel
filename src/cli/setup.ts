@@ -158,9 +158,10 @@ function urlParts(
  *   an `http(s)://` URL (a token often sits there alone), any other SSH user,
  *   or an `@` anywhere else in its host; or a percent sign in its host;
  * - a git source has a query string anywhere, its ref included (it can carry
- *   a token, and Pi keeps it in the folder name), or a ref that is not a plain
- *   branch, tag or commit name. A `#ref` or `@ref` such as `@release/1.0` is
- *   allowed;
+ *   a token, and Pi keeps it in the folder name), a `#` anywhere (Pi reads
+ *   `#ref` as a ref only for a hosted source and keeps the `#` in the clone
+ *   URL), or a ref that is not a plain branch, tag or commit name. An `@ref`
+ *   such as `@release/1.0` is allowed;
  * - an `npm:` source that is not a registry package (`isRegistryPackage`);
  * - Pi reads it as a local path although it starts with a scheme (`HTTPS://`,
  *   `git+https://`, `github:`, a `git:` form its parser rejects): Pi would
@@ -193,12 +194,27 @@ function isRegistryPackage(
 }
 
 /**
- * The exact credential text in a parsed source: user info that can hold a
- * secret (with its `@`) and query strings (with their `?`). Printing a source,
- * or a folder Pi named after it, hides these.
+ * The exact credential text in a source and Pi's parse of it: user info that
+ * can hold a secret (with its `@`), and, for any source that is not a local
+ * path, everything after the first `?` and everything after the first `#` of
+ * the source string, whichever field Pi's parser put it in (a ref, a version,
+ * a path), plus the query and fragment of the fields Pi derives a clone URL
+ * and folder from. Printing a source, or a folder Pi named after it, hides
+ * these. A local path is never changed.
  */
-export function credentialParts(parsed: ParsedSource): string[] {
+export function credentialParts(
+	source: string,
+	parsed: ParsedSource,
+): string[] {
 	const parts: string[] = [];
+	if (parsed.type !== "local") {
+		for (const mark of ["?", "#"]) {
+			const at = source.indexOf(mark);
+			if (at !== -1) {
+				parts.push(source.slice(at));
+			}
+		}
+	}
 	const fromUrl = (url: string, allowSshUser: boolean) => {
 		const found = urlParts(url);
 		if (
@@ -226,11 +242,17 @@ export function credentialParts(parsed: ParsedSource): string[] {
 		if (query !== null) {
 			parts.push(query[0]);
 		}
+		for (const text of [parsed.repo, parsed.path]) {
+			const fragment = /#[^\s]*/.exec(text);
+			if (fragment !== null) {
+				parts.push(fragment[0]);
+			}
+		}
 	} else if (parsed.type === "npm") {
 		fromUrl(parsed.version ?? "", false);
 	}
 	return [...new Set(parts)]
-		.filter((part) => part !== "@" && part !== "?")
+		.filter((part) => part !== "@" && part !== "?" && part !== "#")
 		.sort((a, b) => b.length - a.length);
 }
 
@@ -238,27 +260,49 @@ export function credentialParts(parsed: ParsedSource): string[] {
 export function hideParts(text: string, parts: readonly string[]): string {
 	let result = text;
 	for (const part of parts) {
-		result = result.replaceAll(part, part.startsWith("?") ? "?***" : "***@");
+		result = result.replaceAll(
+			part,
+			part.startsWith("?") ? "?***" : part.startsWith("#") ? "#***" : "***@",
+		);
 	}
 	return result;
 }
+
+/*
+ * Every refusal is fixed text: no part of the source is ever repeated, since
+ * any part of it (user info, host, path, ref, npm name or version) can hold a
+ * token, and no redaction can tell which.
+ */
+const REFUSED_CREDENTIAL =
+	"The source carries a credential (a user name, password or token), so review-panel does not install it and does not repeat it here: Pi would keep the credential in settings.json and in the clone folder's name, and git would print it. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.";
+const REFUSED_QUERY =
+	"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> instead, and give git any token through a credential helper (git config credential.helper).";
+const REFUSED_PERCENT_HOST =
+	"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.";
+const REFUSED_REF =
+	"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref>, such as git:host/owner/repo@release/1.0.";
+const REFUSED_FRAGMENT =
+	"The source has a #, which Pi does not read as a ref for every host and would keep in the clone URL and the clone folder's name, so review-panel does not install it and does not repeat it here, in case it holds a token. Pin a ref with @<ref> instead, such as git:host/owner/repo@release/1.0.";
+const REFUSED_NPM =
+	"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).";
+const REFUSED_UNREADABLE =
+	"Pi cannot read the source as git or npm: it would look for a local folder of that name and print it, so review-panel does not install it and does not repeat it here, in case it holds a token. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.";
+const REFUSED_SCP =
+	"The source looks like an SSH Git source without the git: prefix, which Pi would take for a local folder, so review-panel does not use it and does not repeat it here, in case it holds a token. Write it with the prefix, as git:git@host:owner/repo.";
+const REFUSED_FILE_URL =
+	"The source is a file: URL that names no local path, so review-panel does not use it and does not repeat it here, in case it holds a token. Write the folder as a path (./ext, ~/ext or /full/path) or as file:///full/path.";
 
 export function sourceProblem(
 	raw: string,
 	parsed: ParsedSource,
 ): string | undefined {
-	const shown = redactSecrets(hideParts(raw.trim(), credentialParts(parsed)));
-	const credential = `${shown} carries a credential (a user name, password or token in the source). review-panel does not install it, so the credential never lands in settings.json, a folder name or the output. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.`;
-	const query = `${shown} has a query string, which can carry a token and which Pi would keep in the clone folder's name; review-panel does not install it. Pin a ref with @<ref> or #<ref> instead, and give git any token through a credential helper (git config credential.helper).`;
 	switch (parsed.type) {
 		case "local":
 			return /^\s*[a-z][a-z0-9+.-]+:/i.test(raw)
-				? `${shown} is not a source Pi can read: it would look for a local folder of that name. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.`
+				? REFUSED_UNREADABLE
 				: undefined;
 		case "npm":
-			return isRegistryPackage(parsed)
-				? undefined
-				: `${shown} is not a registry package. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).`;
+			return isRegistryPackage(parsed) ? undefined : REFUSED_NPM;
 		case "git": {
 			const ref = parsed.ref ?? "";
 			if (
@@ -266,16 +310,25 @@ export function sourceProblem(
 				parsed.path.includes("?") ||
 				ref.includes("?")
 			) {
-				return query;
+				return REFUSED_QUERY;
+			}
+			// Pi splits a #ref off only for a hosted source (github.com and the
+			// like), and keeps the # in the clone URL even then.
+			if (
+				parsed.repo.includes("#") ||
+				parsed.path.includes("#") ||
+				ref.includes("#")
+			) {
+				return REFUSED_FRAGMENT;
 			}
 			if (parsed.host.includes("@")) {
-				return credential;
+				return REFUSED_CREDENTIAL;
 			}
 			if (parsed.host.includes("%")) {
-				return `${shown} has a percent-encoded host, which can hide user info; review-panel does not install it. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.`;
+				return REFUSED_PERCENT_HOST;
 			}
 			if (ref !== "" && !GIT_REF.test(ref)) {
-				return `${shown} pins the ref "${redactSecrets(ref)}", which is not a plain branch, tag or commit name (letters, digits, . _ / + -); review-panel does not install it.`;
+				return REFUSED_REF;
 			}
 			const url = urlParts(parsed.repo);
 			if (url !== undefined) {
@@ -285,14 +338,14 @@ export function sourceProblem(
 				// The only SSH user allowed is git; any other may be a token.
 				return SSH_SCHEMES.has(url.scheme) && url.userinfo === "git"
 					? undefined
-					: credential;
+					: REFUSED_CREDENTIAL;
 			}
 			// scp-style SSH (user@host:path): only the user git.
 			const scp = /^([^@\s/:]+)@[^@\s/:]+:/.exec(parsed.repo);
 			if (scp !== null) {
-				return scp[1] === "git" ? undefined : credential;
+				return scp[1] === "git" ? undefined : REFUSED_CREDENTIAL;
 			}
-			return parsed.repo.includes("@") ? credential : undefined;
+			return parsed.repo.includes("@") ? REFUSED_CREDENTIAL : undefined;
 		}
 	}
 }
@@ -308,7 +361,7 @@ async function redactorFor(
 ): Promise<(text: string) => string> {
 	let parts: string[] = [];
 	try {
-		parts = credentialParts(await sdk.parseSource(source));
+		parts = credentialParts(source, await sdk.parseSource(source));
 	} catch {
 		// Unparseable: the source-string rules still apply.
 	}
@@ -508,7 +561,8 @@ function withinBound<T>(
 
 /**
  * A local source (anything that is not `npm:`, `git:` or a URL) as an
- * absolute path: a leading `~` is the home folder, a `file:` URL is decoded,
+ * absolute path: a leading `~` is the home folder, a `file:` URL with a path
+ * (any case) is decoded,
  * and anything else is resolved from `cwd`, as Pi resolves one from the folder
  * it runs in. Other sources pass through. An SSH source written the scp way
  * (`git@host:owner/repo`) is refused: Pi would take it for a local path, and
@@ -526,17 +580,18 @@ export function absoluteSource(
 		return trimmed;
 	}
 	if (/^[^\s/:@]+@[^\s/:]+:/.test(trimmed)) {
-		throw new SetupError(
-			`${redactSecrets(trimmed)} looks like an SSH Git source; write it with the git: prefix: git:${redactSecrets(trimmed)}`,
-		);
+		throw new SetupError(REFUSED_SCP);
 	}
-	if (trimmed.startsWith("file:")) {
+	if (/^file:/i.test(trimmed)) {
+		// Only a URL with a path (file:/..., file:///...) names a folder:
+		// `file:name` would become /name.
+		if (!/^file:\//i.test(trimmed)) {
+			throw new SetupError(REFUSED_FILE_URL);
+		}
 		try {
 			return fileURLToPath(trimmed);
-		} catch (error) {
-			throw new SetupError(
-				`${redactSecrets(trimmed)} is not a usable file: URL (${error instanceof Error ? error.message : String(error)})`,
-			);
+		} catch {
+			throw new SetupError(REFUSED_FILE_URL);
 		}
 	}
 	if (trimmed === "~") {
@@ -1042,16 +1097,29 @@ export async function removeExtension(input: {
 		);
 	} else {
 		source = absoluteSource(input.source, input.cwd, input.home);
+		// A source install would refuse names nothing recorded as given, and
+		// any part of it may be a token: neither the package manager's progress
+		// nor the answer repeats it.
+		if (
+			sourceProblem(source, await input.sdk.parseSource(source)) !== undefined
+		) {
+			throw new SetupError(
+				`No installed extension matches the source in ${input.agentDir.dir}. review-panel does not repeat it here, since install would refuse it and it may hold a token. review-panel extension list prints the installed sources; remove one by the form it prints.`,
+			);
+		}
 	}
+	// The source's own credential parts are hidden, as list prints it: the
+	// source may be the full recorded one the printed form matched.
+	const redact = await redactorFor(input.sdk, source);
 	const removed = await untilAborted(
 		input.sdk.removeExtension({
 			agentDir: input.agentDir.dir,
 			source,
-			progress: (line) => input.progress(redactSecrets(line)),
+			progress: (line) => input.progress(redact(line)),
 		}),
 		input.signal,
 	);
-	const shownSource = redactSecrets(source);
+	const shownSource = redact(source);
 	if (!removed) {
 		throw new SetupError(
 			`No installed extension matches ${shownSource} in ${input.agentDir.dir}. review-panel extension list prints the installed sources.`,

@@ -726,6 +726,51 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 		expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
 	}, 120_000);
 
+	it.each([
+		[
+			`npm:${SECRET}@example.invalid/a.tgz`,
+			"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).",
+		],
+		[
+			`git:${SECRET}%40example.invalid/fixture/pi-ext`,
+			"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.",
+		],
+	])(
+		"the refusal of %s repeats no part of the source (N4-1)",
+		(source, message) => {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			const result = cli(home, ["extension", "install", source], {
+				env: { PI_CODING_AGENT_DIR: agent },
+			});
+			expect(result.code).toBe(1);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toBe(`review-panel: ${message}\n`);
+			expect(result.stdout + result.stderr).not.toContain(SECRET);
+			expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+		},
+		120_000,
+	);
+
+	it("install refuses a # in a git source: no clone, nothing in settings.json (R-1)", () => {
+		const home = tempHome();
+		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-hash-")));
+		writeExtensionPackage(repo, { git: true });
+		const agent = path.join(home, "agent");
+		const result = cli(
+			home,
+			["extension", "install", `${FIXTURE_GIT_SOURCE}#${SECRET}`],
+			{ env: { ...gitSourceEnv(repo), PI_CODING_AGENT_DIR: agent } },
+		);
+		expect(result.code).toBe(1);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe(
+			"review-panel: The source has a #, which Pi does not read as a ref for every host and would keep in the clone URL and the clone folder's name, so review-panel does not install it and does not repeat it here, in case it holds a token. Pin a ref with @<ref> instead, such as git:host/owner/repo@release/1.0.\n",
+		);
+		expect(existsSync(path.join(agent, "git"))).toBe(false);
+		expect(existsSync(path.join(agent, "settings.json"))).toBe(false);
+	}, 120_000);
+
 	it("a branch ref with a slash installs (N2-2)", () => {
 		const home = tempHome();
 		const repo = realpathSync(mkdtempSync(path.join(tmpdir(), "rp-ext-ref-")));
@@ -797,6 +842,76 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 				.packages,
 		).toEqual([]);
 	}, 120_000);
+
+	it.each([
+		["the printed form", "git:h.invalid/o/r?***"],
+		["the exact source", `git:h.invalid/o/r?t=${SECRET}`],
+	])(
+		"a recorded source with a query token, removed by %s, shows only the printed form (R-4)",
+		(_how, argument) => {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			mkdirSync(agent, { recursive: true });
+			writeFileSync(
+				path.join(agent, "settings.json"),
+				JSON.stringify({ packages: [`git:h.invalid/o/r?t=${SECRET}`] }),
+			);
+			const env = { PI_CODING_AGENT_DIR: agent };
+			const listed = cli(home, ["extension", "list"], { env });
+			expect(listed.code).toBe(0);
+			expect(listed.stdout).toContain("git:h.invalid/o/r?***");
+			expect(listed.stdout + listed.stderr).not.toContain(SECRET);
+
+			const removed = cli(home, ["extension", "remove", argument], { env });
+			expect(removed.code).toBe(0);
+			expect(removed.stdout).toContain(
+				`Removed git:h.invalid/o/r?*** from ${agent}.`,
+			);
+			expect(removed.stdout + removed.stderr).not.toContain(SECRET);
+			expect(
+				JSON.parse(readFileSync(path.join(agent, "settings.json"), "utf8"))
+					.packages,
+			).toEqual([]);
+		},
+		120_000,
+	);
+	it.each([
+		[`git:h.invalid/o/r@v1?t=${SECRET}`, "git:h.invalid/o/r@v1?***"],
+		[
+			`npm:pkg@https://h.invalid/x.tgz#${SECRET}`,
+			"npm:pkg@https://h.invalid/x.tgz#***",
+		],
+	])(
+		"a recorded %s is listed and removed as %s (R-6, R-7)",
+		(source, printed) => {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			mkdirSync(agent, { recursive: true });
+			writeFileSync(
+				path.join(agent, "settings.json"),
+				JSON.stringify({ packages: [source] }),
+			);
+			const env = { PI_CODING_AGENT_DIR: agent };
+			const listed = cli(home, ["extension", "list", "--json"], { env });
+			expect(listed.code).toBe(0);
+			expect(JSON.parse(listed.stdout).extensions[0].source).toBe(printed);
+			const text = cli(home, ["extension", "list"], { env });
+			expect(text.stdout).toContain(printed);
+			expect(
+				listed.stdout + listed.stderr + text.stdout + text.stderr,
+			).not.toContain(SECRET);
+
+			const removed = cli(home, ["extension", "remove", printed], { env });
+			expect(removed.code).toBe(0);
+			expect(removed.stdout).toContain(`Removed ${printed} from ${agent}.`);
+			expect(removed.stdout + removed.stderr).not.toContain(SECRET);
+			expect(
+				JSON.parse(readFileSync(path.join(agent, "settings.json"), "utf8"))
+					.packages,
+			).toEqual([]);
+		},
+		120_000,
+	);
 });
 
 describe("an install stopped by Ctrl-C (N-3)", () => {

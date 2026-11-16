@@ -118,10 +118,10 @@ runs, because Pi's generic Git parser keeps a scheme-less source's user info in 
 folder's host segment and a query in its path, stores the source in `settings.json`, and git
 prints the folder. Refused: a git source with user info other than the SSH user `git` (a password,
 any user name on `http(s)://`, any other SSH user, an `@` in the parsed host), a `%` in the
-host, any query on a git source (its ref included) or a ref that is not a plain name, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
+host, any query or `#` on a git source (its ref included) or a ref that is not a plain name, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
 tag>]` only; Pi splits `npm:https://tok@host/x.tgz` into the name `https://tok` and a version,
-so the name is checked too), and a source with a scheme that Pi parses as a local path. Printed text goes through `redactSecrets` (source strings only) and,
-for a recorded source, `hideParts` with the credential parts of its parse; the package manager
+so the name is checked too), and a source with a scheme that Pi parses as a local path. Each refusal (and `absoluteSource`'s for an scp-style source without `git:` or an unusable `file:` URL) is a fixed message that repeats no part of the source: any part (user info, host, path, ref, npm name or version) can hold a token, and no redaction can tell which. `extension remove` runs `sourceProblem` too on a source that is neither recorded exactly nor the printed form of one, and answers with a fixed message without calling the package manager, whose progress would print it. Other printed text goes through `redactSecrets` (source strings only) and,
+for a recorded source, `hideParts` with the credential parts of its parse (user info; for a source that is not a local path, everything after the first `?` and the first `#` of the source string, whichever parsed field holds it, plus the query and fragment of the parsed repo and path that Pi derives a clone URL and folder from); the package manager
 gets the source as given.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
@@ -306,7 +306,9 @@ Verified against the bundled 1.5.2 SDK.
 - `DefaultPackageManager.parseSource` (not exported; reached on a manager built over an
   in-memory settings manager) trims after `git:`, falls back to a local path for anything its
   npm and git parsers reject (uppercase `HTTPS://`, `git+https://`, `github:`, some `git:` forms),
-  splits a trailing `@ref` or `#ref` off `repo`, and for a scheme-less non-hosted source builds
+  splits a trailing `@ref` off `repo` (a `#ref` only for a hosted source such as github.com,
+  which leaves the `#` in `repo`; elsewhere the `#` stays in `repo` and `path`, with no ref),
+  and for a scheme-less non-hosted source builds
   `https://<rest>` with the user info and port in `host`.
 - An extension path given to the resource loader as a `git:` or `npm:` source is a temporary
   package that is refreshed from the network on every load, so a roster row names the

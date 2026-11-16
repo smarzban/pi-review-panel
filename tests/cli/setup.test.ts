@@ -23,6 +23,7 @@ import {
 	redactSecrets,
 	type SetupSdk,
 } from "../../src/cli/setup.js";
+import { REFUSED, TOKEN } from "./fixtures/refused-sources.js";
 
 const HOME = "/home/user";
 const PI_FOLDER: AgentDirChoice = {
@@ -902,7 +903,9 @@ describe("local sources (R-3)", () => {
 		expect(await h.run(["extension", "install", "git@github.com:o/r"])).toBe(
 			EXIT_FAILED,
 		);
-		expect(h.err()).toContain("git:git@github.com:o/r");
+		// It shows the form to write, never the source itself (N4-1).
+		expect(h.err()).toContain("git:git@host:owner/repo");
+		expect(h.err()).not.toContain("github.com");
 		expect(installs).toEqual([]);
 	});
 });
@@ -1156,5 +1159,299 @@ describe("models problem lines use the recorded source's own redaction (F-2)", (
 		expect(await h.run(["models", "claude-code"])).toBe(EXIT_FAILED);
 		expect(h.err()).toContain("did not finish loading");
 		expect(h.out() + h.err()).not.toContain(SECRET);
+	});
+});
+
+describe("an install refusal never repeats the source (N4-1)", () => {
+	const S = TOKEN;
+	const CREDENTIAL =
+		"The source carries a credential (a user name, password or token), so review-panel does not install it and does not repeat it here: Pi would keep the credential in settings.json and in the clone folder's name, and git would print it. Give git the token through a credential helper (git config credential.helper), use an SSH source (git:git@host:owner/repo), or put an npm token in .npmrc, then install the source without it.";
+	const QUERY =
+		"The source has a query string, which can carry a token and which Pi would keep in the clone folder's name, so review-panel does not install it and does not repeat it here. Pin a ref with @<ref> instead, and give git any token through a credential helper (git config credential.helper).";
+	const PERCENT_HOST =
+		"The source has a percent-encoded host, which can hide user info, so review-panel does not install it and does not repeat it here. Write the host plainly, as git:host/owner/repo or git:git@host:owner/repo.";
+	const REF =
+		"The source pins a ref that is not a plain branch, tag or commit name (letters, digits, . _ / + -), so review-panel does not install it and does not repeat it here, in case the ref holds a token. Pin a plain ref with @<ref>, such as git:host/owner/repo@release/1.0.";
+	const FRAGMENT =
+		"The source has a #, which Pi does not read as a ref for every host and would keep in the clone URL and the clone folder's name, so review-panel does not install it and does not repeat it here, in case it holds a token. Pin a ref with @<ref> instead, such as git:host/owner/repo@release/1.0.";
+	const NPM =
+		"The source is not a registry package, so review-panel does not install it and does not repeat it here, in case it holds a token. review-panel installs npm:<name> or npm:<name>@<version, range or tag> only, never a URL, git, file or alias spec. Install a private package from your registry with a token in .npmrc, or use a git: source (git:git@host:owner/repo).";
+	const UNREADABLE =
+		"Pi cannot read the source as git or npm: it would look for a local folder of that name and print it, so review-panel does not install it and does not repeat it here, in case it holds a token. Write a git source as git:host/owner/repo, git:git@host:owner/repo or https://host/owner/repo, and an npm package as npm:<name>.";
+	const SCP =
+		"The source looks like an SSH Git source without the git: prefix, which Pi would take for a local folder, so review-panel does not use it and does not repeat it here, in case it holds a token. Write it with the prefix, as git:git@host:owner/repo.";
+	const FILE_URL =
+		"The source is a file: URL that names no local path, so review-panel does not use it and does not repeat it here, in case it holds a token. Write the folder as a path (./ext, ~/ext or /full/path) or as file:///full/path.";
+
+	async function refusal(source: string) {
+		const { sdk, installs } = fakeSdk();
+		const h = harness({ sdk });
+		const code = await h.run(["extension", "install", source]);
+		return { code, installs, out: h.out(), err: h.err() };
+	}
+
+	it.each([
+		// http(s) user info, with or without a password.
+		[`https://${S}@host.com/o/r`, CREDENTIAL],
+		[`https://user:${S}@host.com/o/r`, CREDENTIAL],
+		// An SSH user other than git.
+		[`ssh://${S}@example.com/o/r`, CREDENTIAL],
+		[`ssh://user:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:ssh://${S}@example.com/o/r`, CREDENTIAL],
+		// Scheme-less git: user info, however spaced or ported.
+		[`git:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:user:${S}@host.com/o/r`, CREDENTIAL],
+		[`git: user:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:\tuser:${S}@host.com/o/r`, CREDENTIAL],
+		[`git:${S}@host.com:8443/o/r`, CREDENTIAL],
+		[`git:user%3A${S}@host.com/o/r`, CREDENTIAL],
+		[`git:git@${S}@host.com/o/r`, CREDENTIAL],
+		// ... or cased and ported so that Pi reads it as a local folder.
+		[`git:${S}@localhost:8080/o/r`, UNREADABLE],
+		[`git:HTTPS://${S}@host.com/o/r`, UNREADABLE],
+		[`HTTPS://${S}@host.com/o/r`, UNREADABLE],
+		[`git+https://${S}@host.com/o/r`, UNREADABLE],
+		[`git+ssh://${S}@example.com/o/r`, UNREADABLE],
+		[`git:host/o/r@${S}`, UNREADABLE],
+		// A query on a git source, in its path or its ref.
+		[`git:host.com/o/r?pat=${S}`, QUERY],
+		[`git:host.com/o/r?private_to%6Ben=${S}`, QUERY],
+		[`git:git@example.com:o/r@ref?${S}=1`, QUERY],
+		// A percent-encoded host, and a ref that is not a plain name.
+		[`git:${S}%40example.com/o/r`, PERCENT_HOST],
+		[`git:example.com/o/r@ref:${S}@x`, REF],
+		// A # in a git source, which Pi does not take as a ref (R-1).
+		[`git:h.invalid/o/r#${S}$`, FRAGMENT],
+		[`https://h.invalid/o/r@v1#${S}`, FRAGMENT],
+		[`git:git@h.invalid:o/r#${S}`, FRAGMENT],
+		[`ssh://git@h.invalid/o/r#${S}`, FRAGMENT],
+		[`git:github.com/o/r#${S}`, FRAGMENT],
+		// npm: URL, git+, file, alias and other specs holding a token.
+		[`npm:https://${S}@example.com/x.tgz`, NPM],
+		[`npm:foo@git+https://${S}@host.com/x.git`, NPM],
+		[`npm:git+ssh://${S}@github.com/o/r.git`, NPM],
+		[`npm:pkg@npm:other@https://${S}@x.com/a.tgz`, NPM],
+		[`npm:pkg@http://x.com/a.tgz#${S}`, NPM],
+		[`npm:pkg@file:../${S}`, NPM],
+		[`npm:${S}@x.com/a.tgz`, NPM],
+		[`npm://${S}@x.com/a.tgz`, NPM],
+		[`npm:@${S}:pass@x/y`, NPM],
+		// Before Pi parses it: an scp-style source without git:, a bad file: URL.
+		[`${S}@host.com:o/r`, SCP],
+		[`file://${S}@host.example/x`, FILE_URL],
+	])("%s is refused with a fixed message", async (source, message) => {
+		const result = await refusal(source);
+		expect(result.code).toBe(EXIT_FAILED);
+		expect(result.installs).toEqual([]);
+		expect(result.out).toBe("");
+		expect(result.err).toBe(`review-panel: ${message}\n`);
+		expect(result.out + result.err).not.toContain(S);
+	});
+
+	async function removal(source: string) {
+		const removals: string[] = [];
+		const { sdk } = fakeSdk({
+			removeExtension: async (input) => {
+				removals.push(input.source);
+				input.progress(`Removing ${input.source}...`);
+				return false;
+			},
+		});
+		const h = harness({ sdk });
+		const code = await h.run(["extension", "remove", source]);
+		return { code, removals, out: h.out(), err: h.err() };
+	}
+
+	// The refusals made before Pi parses a source are shared with remove (F-1,
+	// F-2), and take the file: scheme in any case (R-2).
+	it.each([
+		[`${S}@host.com:o/r`, SCP],
+		[`file://${S}@host.example/x`, FILE_URL],
+		[`FILE://${S}@host.example/x`, FILE_URL],
+		[`File://user:${S}@host.example/x`, FILE_URL],
+		[`File:${S}`, FILE_URL],
+		[`file:${S}/x`, FILE_URL],
+	])(
+		"install and remove refuse %s with a fixed message",
+		async (source, message) => {
+			const installed = await refusal(source);
+			expect(installed.code).toBe(EXIT_FAILED);
+			expect(installed.installs).toEqual([]);
+			expect(installed.out).toBe("");
+			expect(installed.err).toBe(`review-panel: ${message}\n`);
+			const removed = await removal(source);
+			expect(removed.code).toBe(EXIT_FAILED);
+			expect(removed.removals).toEqual([]);
+			expect(removed.out).toBe("");
+			expect(removed.err).toBe(`review-panel: ${message}\n`);
+			expect(
+				installed.out + installed.err + removed.out + removed.err,
+			).not.toContain(S);
+		},
+	);
+
+	it("a file: URL in any case names the same folder (R-2)", async () => {
+		const { sdk, installs } = fakeSdk();
+		const h = harness({ sdk });
+		expect(
+			await h.run(["extension", "install", "FILE:///home/user/my-ext"]),
+		).toBe(EXIT_OK);
+		expect(installs.map((entry) => entry.source)).toEqual([
+			"/home/user/my-ext",
+		]);
+	});
+
+	// A source install would refuse is not repeated by remove either, unless it
+	// is recorded exactly (R-3).
+	it.each([
+		`git:h.invalid/o/r?t=${S}`,
+		`git:h.invalid/o/r#${S}`,
+		`git:user:${S}@h.invalid/o/r`,
+		`npm:${S}@h.invalid/a.tgz`,
+		`HTTPS://${S}@h.invalid/o/r`,
+	])(
+		"remove repeats no part of %s, which matches nothing installed",
+		async (source) => {
+			const removed = await removal(source);
+			expect(removed.code).toBe(EXIT_FAILED);
+			expect(removed.removals).toEqual([]);
+			expect(removed.out).toBe("");
+			expect(removed.err).toBe(
+				`review-panel: No installed extension matches the source in ${OWN_FOLDER.dir}. review-panel does not repeat it here, since install would refuse it and it may hold a token. review-panel extension list prints the installed sources; remove one by the form it prints.\n`,
+			);
+			expect(removed.out + removed.err).not.toContain(S);
+		},
+	);
+
+	it.each(REFUSED)(
+		"%s is refused with one of the fixed messages",
+		async (source) => {
+			const result = await refusal(source);
+			expect(result.code).toBe(EXIT_FAILED);
+			expect(result.installs).toEqual([]);
+			expect(result.out).toBe("");
+			expect([
+				CREDENTIAL,
+				QUERY,
+				PERCENT_HOST,
+				REF,
+				FRAGMENT,
+				NPM,
+				UNREADABLE,
+			]).toContain(result.err.replace(/^review-panel: /, "").trimEnd());
+			expect(result.out + result.err).not.toContain(S);
+		},
+	);
+});
+
+describe("a recorded source's credential never shows in list, models or remove (R-4, R-5, R-6, R-7)", () => {
+	const S = TOKEN;
+
+	function recorded(source: string) {
+		const removed: string[] = [];
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{
+					source,
+					installedPath: `/agent/git/${source.replace(/^[a-z]+:(\/\/)?/i, "")}`,
+					filtered: false,
+					entries: [`/agent/git/${source.length}/extensions/index.ts`],
+				},
+			],
+			removeExtension: async (input) => {
+				removed.push(input.source);
+				input.progress(`Removing ${input.source}...`);
+				return input.source === source;
+			},
+			// Each extension package hangs, so models names it as not loaded.
+			models: async (input) =>
+				input.extensionPaths.length === 0
+					? BASE
+					: new Promise<ModelGroup>(() => {}),
+		});
+		return { sdk, removed };
+	}
+
+	// Every recorded source that is not a local path, as list prints it:
+	// user info hidden, and everything after the first ? and after the first #
+	// of the source string, whichever field Pi's parser put it in.
+	const RECORDED: [string, string][] = [
+		// R-4, R-5: a query, user info, another SSH user, a fragment.
+		[`git:h.invalid/o/r?t=${S}`, "git:h.invalid/o/r?***"],
+		[`git:user:${S}@h.invalid/o/r`, "git:***@h.invalid/o/r"],
+		[`ssh://${S}@h.invalid/o/r`, "ssh://***@h.invalid/o/r"],
+		[`git:h.invalid/o/r#${S}`, "git:h.invalid/o/r#***"],
+		[`https://h.invalid/o/r@v1#${S}`, "https://h.invalid/o/r@v1#***"],
+		// R-6: a query or fragment after an @ref, which Pi puts in the ref.
+		[`git:h.invalid/o/r@v1?t=${S}`, "git:h.invalid/o/r@v1?***"],
+		[`git:h.invalid/o/q@v1#${S}`, "git:h.invalid/o/q@v1#***"],
+		[`git:git@h.invalid:o/r@v1?t=${S}`, "git:git@h.invalid:o/r@v1?***"],
+		[`git:git@h.invalid:o/r#${S}`, "git:git@h.invalid:o/r#***"],
+		[`ssh://git@h.invalid/o/r@v1?t=${S}`, "ssh://git@h.invalid/o/r@v1?***"],
+		[`https://h.invalid/o/r@v1?x=1#${S}`, "https://h.invalid/o/r@v1?***"],
+		[`https://h.invalid/o/r@v1#a?t=${S}`, "https://h.invalid/o/r@v1#***"],
+		// R-7: an npm URL spec with a query or a fragment.
+		[
+			`npm:pkg@https://h.invalid/x.tgz#${S}`,
+			"npm:pkg@https://h.invalid/x.tgz#***",
+		],
+		[
+			`npm:pkg@https://h.invalid/x.tgz?t=${S}`,
+			"npm:pkg@https://h.invalid/x.tgz?***",
+		],
+	];
+
+	it.each(RECORDED)(
+		"list, list --json and models show %s as %s",
+		async (source, printed) => {
+			const { sdk } = recorded(source);
+			for (const argv of [
+				["extension", "list"],
+				["extension", "list", "--json"],
+				["models"],
+			]) {
+				const h = harness({ sdk, extensionTimeoutMs: 20 });
+				expect(await h.run(argv)).toBe(EXIT_OK);
+				expect(h.out(), argv.join(" ")).toContain(printed);
+				expect(h.out() + h.err(), argv.join(" ")).not.toContain(S);
+			}
+		},
+	);
+
+	// Remove by the printed form or the exact source shows the printed form,
+	// in Pi's progress line and the answer.
+	describe.each(RECORDED)("remove of the recorded %s", (source, printed) => {
+		it.each([
+			["the printed form", printed],
+			["the exact source", source],
+		])("by %s shows only the printed form", async (_how, argument) => {
+			const { sdk, removed } = recorded(source);
+			const h = harness({ sdk });
+			expect(await h.run(["extension", "remove", argument])).toBe(EXIT_OK);
+			expect(removed).toEqual([source]);
+			expect(h.err()).toBe(`Removing ${printed}...\n`);
+			expect(h.out()).toContain(`Removed ${printed} from ${OWN_FOLDER.dir}.`);
+			expect(h.out() + h.err()).not.toContain(S);
+		});
+	});
+
+	it("remove of a recorded source with another SSH user does not name the user (R-4)", async () => {
+		const source = "ssh://deploy@h.invalid/o/r";
+		const { sdk, removed } = recorded(source);
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "remove", source])).toBe(EXIT_OK);
+		expect(removed).toEqual([source]);
+		expect(h.out() + h.err()).not.toContain("deploy");
+	});
+
+	it.each([
+		"/Users/me/ext#1@v2/src",
+		"/home/u/.pnpm/pi-foo@1.2.0/node_modules/pi-foo",
+		"../ext?draft#2",
+	])("a local source %s prints unchanged", async (source) => {
+		const { sdk } = recorded(source);
+		const h = harness({ sdk });
+		expect(await h.run(["extension", "list", "--json"])).toBe(EXIT_OK);
+		expect(JSON.parse(h.out()).extensions[0].source).toBe(source);
 	});
 });

@@ -182,7 +182,7 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   `<agent folder>/git/<host>/<owner>/<repo>`, then `npm install` there), `npm:name` (a registry
   package only, into
   `<agent folder>/npm`), or a local folder (recorded, not copied; a leading `~` and a `file:`
-  URL work, and a relative path is taken from the working folder). An SSH source needs the
+  URL with a path (`file:///full/path`, any case) work, and a relative path is taken from the working folder). An SSH source needs the
   prefix: `git:git@github.com:owner/repo`; without it the command refuses and says so. It records the source in the
   agent folder's `settings.json` `packages`, keeping every other setting. It needs `git` (and
   `npm` for a package with dependencies) on PATH, and the network for a remote source. Their
@@ -208,9 +208,12 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   `.pi/` folder in the working folder, so a repository cannot add a package to the list.
 - `extension remove <source>` takes the source as `extension list` prints it (a local folder is
   recorded relative to the agent folder, and a source with a credential is printed redacted:
-  that form removes the one recorded source it matches), or a local path from the working
+  that form removes the one recorded source it matches, and the output, Pi's progress line
+  included, shows only that form), or a local path from the working
   folder. It deletes a
-  git clone or npm install, keeps a local folder, and exits 1 when nothing matches. Remove the
+  git clone or npm install, keeps a local folder, and exits 1 when nothing matches. A source
+  that `install` would refuse and that is not recorded exactly as given is not looked up and
+  not repeated: the command says nothing matches and points to `extension list`. Remove the
   path from every roster row too.
 
 ## Commands
@@ -282,7 +285,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
   appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   any value in a `call` object, such as `repository` or `priorRunId`, and the source of
-  `extension install` or `remove`. `extension install` decides on what Pi's own package
+  `extension install` or `remove` (a source that `install` refuses is never repeated, by
+  `install` or by `remove`; one it accepts can be). `extension install` decides on what Pi's own package
   manager parses from the source (the same parse `pi install` runs) and refuses, before
   anything is cloned or recorded:
   - a git source with any user info other than the SSH user `git`: a password, any user name
@@ -291,9 +295,11 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
     `ssh://git@host/owner/repo` and `git:ssh://git@host/...` install), or a scheme-less
     `git:user:token@host/...` / `git:token@host/...` however it is spaced, cased or ported;
   - a git source with a percent sign in its host;
-  - a git source with any query string (`?...`), its ref included, or a pinned ref that is not
-    a plain branch, tag or commit name (letters, digits, `.`, `_`, `/`, `+`, `-`); pin a ref
-    with `@<ref>` or `#<ref>` (`git:host/owner/repo@release/1.0` installs);
+  - a git source with any query string (`?...`), its ref included, any `#` (Pi reads `#<ref>`
+    as a ref only for a hosted source such as github.com, and keeps the `#` in the clone URL
+    and folder), or a pinned ref that is not a plain branch, tag or commit name (letters,
+    digits, `.`, `_`, `/`, `+`, `-`); pin a ref with `@<ref>`
+    (`git:host/owner/repo@release/1.0` installs);
   - an `npm:` source that is not a registry package. Only `npm:<name>` and
     `npm:<name>@<version, range or tag>` install (`npm:pi-foo`, `npm:@scope/pkg@^1.2.0`,
     `npm:pkg@latest`); a URL, `git+…`, `git:`, `github:`, `file:`, alias or path spec is refused,
@@ -302,13 +308,20 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   - a source with a scheme that Pi cannot read as git or npm (`HTTPS://...`, `git+https://...`,
     `github:...`): Pi would look for a local folder of that name and print it.
 
+  A refusal names no part of the source, since any part of it can hold a token: it says why the
+  source was refused and what to write instead. The same holds for an scp-style source written
+  without the `git:` prefix (`git@host:owner/repo`) and a `file:` URL (in any case) that names no local path, such as
+  `file://user@host/x` or `file:name`, which `extension install` and `remove` refuse before Pi parses them.
+
   Pi would store such a source in `settings.json`, name the clone folder after the credential,
   and git would print that folder, so the refusal is what keeps a credential out of git's and
   npm's own output, which passes through unchanged. Give git the token through a credential
   helper, use an SSH source, or put an npm token in `.npmrc`. review-panel's own lines
   (progress, result, list, `models`, errors and `--json`) also show a credential as `***`, for
   a source that Pi or an earlier version recorded, in the source and in the folder Pi named
-  after it. Such a path cannot be copied into a roster row, and the output says so; remove the
+  after it: its user info and, for any source that is not a local path, everything after the
+  first `?` and after the first `#`, wherever it sits (after an `@ref` too). A local path
+  prints unchanged. Such a path cannot be copied into a roster row, and the output says so; remove the
   source and install it again without the credential. Any other `@` in a path (a folder
   named `ext@v2`, a `.pnpm/name@1.2.0` folder) prints as it is.
 
