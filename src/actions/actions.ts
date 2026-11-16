@@ -73,6 +73,7 @@ import {
 	runReview,
 } from "../run/run-review.js";
 import {
+	planRecheckSeats,
 	planVerifySeats,
 	type RunVerifyInput,
 	type RunVerifyOptions,
@@ -342,6 +343,11 @@ export type VerifyInput = RoundInput & {
 	closeOut?: boolean;
 	seats?: string[];
 	scopingNote?: string;
+	/**
+	 * Review lenses that recheck this round's diff for new problems, on the
+	 * owner's default seats. What they find opens as `V<N>-F<k>`.
+	 */
+	recheck?: string[];
 	/** Kept-out findings with the reason, shown in the verify comment and the close-out. */
 	dismissed?: CloseoutJudgmentRow[];
 	/** Low findings left as advisory, shown the same way. */
@@ -415,6 +421,7 @@ export function parseVerifyArguments(
 		"dismissed",
 		"lowAdvisory",
 		"closeOut",
+		"recheck",
 		...ROUND_KEYS,
 	]);
 	return validateVerifyInput(args);
@@ -439,9 +446,11 @@ function validateVerifyInput(
 	const dismissed = parseDismissed(args.dismissed);
 	const lowAdvisory = parseLowAdvisory(args.lowAdvisory);
 	const closeOut = optionalBoolean(args.closeOut, "closeOut");
+	const recheck = optionalStringArray(args.recheck, "recheck");
 	return {
 		priorRunId,
 		head,
+		...(recheck === undefined ? {} : { recheck }),
 		...(keptFindingIds === undefined ? {} : { keptFindingIds }),
 		...(closeOut === undefined ? {} : { closeOut }),
 		...(seats === undefined ? {} : { seats }),
@@ -886,7 +895,7 @@ export async function verifyAction(
 	const { elapsed, emit } = progress(context);
 	const repoDir = canonicalizeRepository(input.repoDir);
 	const valid = validateVerifyInput(input);
-	const { priorRunId, head, seats, scopingNote } = valid;
+	const { priorRunId, head, seats, scopingNote, recheck } = valid;
 	await requireReady(resolved, repoDir);
 	const config = loadOwnerConfig(resolved, repoDir);
 	// The review record lives in the reviewed repository: it is taken only
@@ -926,13 +935,16 @@ export async function verifyAction(
 	);
 	const headRevision = resolved.oidOf(repoDir, head);
 	const panel = planVerifySeats(config, seats);
+	// Checked here too, before any seat runs: from the owner's seats only.
+	const recheckSeats =
+		recheck === undefined ? [] : planRecheckSeats(config, recheck);
 	const reviewFindings = prior.findings;
-	const roster = compactPanelRoster(panel);
+	const roster = compactPanelRoster([...panel, ...recheckSeats]);
 	emit({
 		phase: "verify",
 		event: "started",
 		elapsedMs: elapsed(),
-		total: panel.length,
+		total: panel.length + recheckSeats.length,
 		completed: 0,
 		active: 0,
 		roster,
@@ -948,6 +960,7 @@ export async function verifyAction(
 			lowAdvisory,
 			...(seats === undefined ? {} : { seats }),
 			...(scopingNote === undefined ? {} : { scopingNote }),
+			...(recheck === undefined ? {} : { recheck }),
 			...(config.defaults.seatBudgetMs === undefined
 				? {}
 				: { seatBudgetMs: config.defaults.seatBudgetMs }),

@@ -176,7 +176,7 @@ export function progressFromVerifyEvent(
 		event: event.kind.replace("seat-", ""),
 		elapsedMs,
 		seat: `${event.seat.rosterId}/${event.seat.lens}`,
-		active: event.kind === "seat-finished" ? 0 : 1,
+		active: event.activeSeats ?? (event.kind === "seat-finished" ? 0 : 1),
 		completed: event.completedSeats,
 		total: event.totalSeats,
 		...(event.cost === undefined ? {} : { cost: event.cost }),
@@ -638,6 +638,15 @@ export function dispositionLabel(facts: VerifyFacts, id: string): string {
 export const NOTHING_OPEN =
 	"Nothing was open; this round checked the new commits for regressions only";
 
+/** The same headline when the round also ran recheck seats. */
+export const NOTHING_OPEN_RECHECKED =
+	"Nothing was open; this round checked the new commits for regressions and new problems";
+
+/** The headline for a round with nothing open: with or without a recheck. */
+export function nothingOpenLine(result: RunVerifyResult): string {
+	return result.recheck === undefined ? NOTHING_OPEN : NOTHING_OPEN_RECHECKED;
+}
+
 export function renderVerifyResult(
 	result: RunVerifyResult,
 	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
@@ -657,21 +666,25 @@ export function renderVerifyResult(
 		keptSummary.length > 0
 			? keptSummary.join(", ")
 			: result.nothingOpen === true && voted.length > 0
-				? NOTHING_OPEN
+				? nothingOpenLine(result)
 				: "no kept ids",
 		regressions.length === 0
 			? "no regressions"
 			: `${regressions.length} regression${regressions.length === 1 ? "" : "s"}`,
 	];
+	const recheck = recheckView(result);
+	const seats = [...panel, ...(result.recheck?.seats ?? [])];
+	const lost = [
+		...failed.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`),
+		...(recheck?.lost ?? []),
+	];
 	const lines = [
 		"# Review panel verify",
 		summary.join(" · "),
-		...(panel.length === 0 ? [] : [renderSeatsLine(panel)]),
+		...(seats.length === 0 ? [] : [renderSeatsLine(seats)]),
 	];
-	if (failed.length > 0) {
-		lines.push(
-			`Lost: ${failed.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`).join(", ")}`,
-		);
+	if (lost.length > 0) {
+		lines.push(`Lost: ${lost.join(", ")}`);
 	}
 	lines.push(`Record: \`${result.recordPath}\``);
 	if (regressions.length > 0) {
@@ -686,8 +699,85 @@ export function renderVerifyResult(
 			}
 		}
 	}
+	if (recheck !== undefined) {
+		lines.push("");
+		if (recheck.findings.length > 0) {
+			lines.push(`New in this round (recheck: ${recheck.lenses.join(", ")}):`);
+			for (const entry of orderFindings(recheck.findings)) {
+				lines.push(...findingReplyRows(entry, recheck.seats));
+			}
+		} else {
+			lines.push(
+				`Recheck (${recheck.summaryLenses.join(", ")}): ${recheck.nothing}`,
+			);
+		}
+	}
 	if (result.cleanupError !== undefined) {
 		lines.push("", result.cleanupError);
 	}
 	return fitPresentation(lines, reserveBytes);
+}
+
+/** A round's recheck as the reply and the comment show it. */
+export type RecheckView = {
+	/** The lenses asked for. */
+	lenses: string[];
+	seats: PlannedSeat[];
+	findings: StampedFinding[];
+	/** Lost recheck seats, as `rosterId/lens`. */
+	lost: string[];
+	/**
+	 * With no findings: the lenses a seat voted for, then what that means.
+	 * "Nothing new" names every lost seat by lens count (`nothing new (1
+	 * tests seat lost)`), so lost coverage never reads as a clean check;
+	 * with every seat lost, the line says nothing was checked.
+	 */
+	summaryLenses: string[];
+	nothing: string;
+};
+
+export const RECHECK_ALL_LOST =
+	"every recheck seat was lost, so nothing was checked";
+
+/** The recheck of a verify result, or undefined when it asked for none. */
+export function recheckView(result: RunVerifyResult): RecheckView | undefined {
+	const recheck = result.recheck;
+	if (recheck === undefined) {
+		return undefined;
+	}
+	const voted = new Set(
+		recheck.outcomes
+			.filter((facts) => facts.outcome.kind === "voted")
+			.map((facts) => facts.seat.lens),
+	);
+	const votedLenses = recheck.lenses.filter((lens) => voted.has(lens));
+	// A lost seat is lost coverage: "nothing new" says how many were lost,
+	// by lens, so a partly lost lens never reads as fully checked.
+	const lostBy = new Map<string, number>();
+	for (const facts of recheck.outcomes) {
+		if (facts.outcome.kind === "failed") {
+			lostBy.set(facts.seat.lens, (lostBy.get(facts.seat.lens) ?? 0) + 1);
+		}
+	}
+	const lostNote =
+		lostBy.size === 0
+			? ""
+			: ` (${recheck.lenses
+					.filter((lens) => lostBy.has(lens))
+					.map((lens) => {
+						const count = lostBy.get(lens) ?? 0;
+						return `${count} ${lens} seat${count === 1 ? "" : "s"} lost`;
+					})
+					.join(", ")})`;
+	return {
+		lenses: recheck.lenses,
+		seats: recheck.seats,
+		findings: recheck.findings,
+		lost: recheck.outcomes
+			.filter((facts) => facts.outcome.kind === "failed")
+			.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`),
+		summaryLenses: votedLenses.length === 0 ? recheck.lenses : votedLenses,
+		nothing:
+			votedLenses.length === 0 ? RECHECK_ALL_LOST : `nothing new${lostNote}`,
+	};
 }

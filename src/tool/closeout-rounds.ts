@@ -33,6 +33,9 @@ export function chainRounds(
 		seats: link.seats,
 		resolved: link.resolved,
 		lost: link.lost,
+		...(link.recheck === undefined || link.recheck.lost.length === 0
+			? {}
+			: { recheckLost: link.recheck.lost }),
 		...(link.final === true ? { final: true as const } : {}),
 	}));
 }

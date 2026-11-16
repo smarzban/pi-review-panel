@@ -88,7 +88,13 @@ export function coerceCallArguments(
 	args: Record<string, unknown>,
 ): Record<string, unknown> {
 	const next: Record<string, unknown> = { ...args };
-	for (const key of ["seats", "lenses", "keptFindingIds", "lowAdvisory"]) {
+	for (const key of [
+		"seats",
+		"lenses",
+		"keptFindingIds",
+		"lowAdvisory",
+		"recheck",
+	]) {
 		if (Object.hasOwn(next, key)) {
 			next[key] = coerceStringList(next[key]);
 		}

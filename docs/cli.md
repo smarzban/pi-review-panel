@@ -229,7 +229,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 | `review-panel diagnose` | `{"action":"diagnose"}` |
 | `review-panel suggest --base main --head HEAD` | `base`, `head` |
 | `review-panel review --base main --head HEAD [--seats a,b] [--lenses tests,security] [--scoping-note <text>] [--no-pr-comment] [--pr 22] [--owner-approved]` | `base`, `head`, `seats`, `lenses`, `scopingNote`, `prComment: false`, `pr`, `ownerApproved` |
-| `review-panel verify --prior-run-id <run> --head HEAD [--kept-finding-ids F-1,G-2] [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--close-out] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none; leave it out on a chained verify for every open id, or on the first verify of a review with no findings), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `closeOut`, `prComment: false`, `pr`, `ownerApproved` |
+| `review-panel verify --prior-run-id <run> --head HEAD [--kept-finding-ids F-1,G-2] [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--recheck tests,security] [--close-out] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none; leave it out on a chained verify for every open id, or on the first verify of a review with no findings), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `recheck`, `closeOut`, `prComment: false`, `pr`, `ownerApproved` |
 | `review-panel resume --prior-run-id <run>` | `priorRunId` |
 | `review-panel comment --prior-run-id <run> --owner-approved [--pr 22] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -]` | `priorRunId`, `ownerApproved`, `pr`, `verifyRunId`, `head`, `lowAdvisory`, `dismissed` |
 | `review-panel call '<json>'` | One action's whole argument object, for example `'{"action":"review","base":"main","head":"HEAD"}'`. `-` reads it from stdin. |
@@ -240,6 +240,16 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   already on. You choose the lenses and pass them to `review --lenses`.
 - `verify --scoping-note` says why the round ran (where each change came from); the verify
   comment shows it under the commit range as `Why this round:`, and the seats read it too.
+- `verify --recheck tests,security` also hunts for new problems in this round's commits: one
+  seat per named review lens on the owner's `defaults.seats` (holistic on each, a specialist on
+  the first two, as in review; holistic only when named; `--seats` never applies to them) runs
+  alongside the verify seat over the round's diff only, told every id already open or settled
+  and asked for what is not listed. What they find gets ids `V<N>-F<k>` and is open like any
+  id. The verify comment lists it under `New in this round (recheck: …):`, or says
+  `Recheck (…): nothing new`; a lost recheck seat is named on `Lost:`, counted on that line
+  (`nothing new (1 tests seat lost)`), and blocks `--close-out`. It costs a review's worth of seats: use it for a round that touches security,
+  posting, parsing or other risky code, not for a small fix. The final check never rechecks.
+  See [Verify rounds chain](../docs/configuration.md#verify-rounds-chain).
 - `verify` chains. The first verify of a review takes the review's run id as
   `--prior-run-id` and needs `--kept-finding-ids` (not when the review had no findings); it must place every finding (a high or
   medium it neither keeps nor dismisses is refused; a low it leaves out is low/advisory). Every later verify takes the latest

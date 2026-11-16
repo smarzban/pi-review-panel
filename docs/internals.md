@@ -191,6 +191,31 @@ chain goes on. The fork refusal in `loadVerifyChain` stays as a backstop for the
 left: two verifies that both pass that check before either signs. `comment` reads no claim; it
 takes one only through the final check it runs, and a live one refuses it with the holder named.
 
+`verify --recheck <lenses>` (`RunVerifyInput.recheck`) adds review-lens seats to a round:
+`planRecheckSeats` plans them from `config.defaults.seats` only (holistic on every default seat,
+a specialist on the first `SPECIALIST_SEAT_CAP`, as `resolvePanel` does; holistic only when
+named; never the caller's `seats`), before the claim. They run through `scheduleSeats` with the
+findings profile (`submit_findings`), concurrently with the verify loop, on the same snapshot,
+with `baseRef` the round's diff base, the package-owned `buildRecheckScope` note and
+`buildRecheckFindingData` (every id in the chain state, with this round's dismissals and
+low/advisory applied, through `inertLine` with caps) as the data appendix; both settle before
+the snapshot is released. `verification.json` gains `recheck: { lenses, outcomes }` (each
+`SeatOutcomeFacts`, with replay and lifecycle) only when asked, so a verify without it writes the
+same bytes. `recheckOf` derives the findings and their ids `V<link>-F<k>` from the signed
+outcomes' order (voting seats in planned order, then rows), as `regressionsOf` does, and
+`runVerify` stamps the same ids; `chainWithOwn` in `round-post.ts` rebuilds the link from the same
+shape. `chainState` adds them after the link's regressions, open, with their stated severity, so
+`judgeRound`, `defaultKeptIds`, the undo guard and the card treat them as any id. Recheck seats
+are kept apart from `outcomes`: a lost one is not a lost verify seat (`ChainLink.lost`, which
+empties `resolved`), but it is named on `Lost:`, on the card as `(recheck)`
+(`CloseoutVerifyRound.recheckLost`), and in `closeoutBlocker`, so it blocks `--close-out` for
+that round. The comment's `**Recheck (<lenses>):** nothing new` names only lenses that had a
+voting seat and appends the lost seats by lens (`nothing new (1 tests seat lost)`, from
+`recheckView`); with none voting, it says every recheck seat was lost. Not grouped: G-ids expand only from
+the review's signed `execution.json`, and a per-round grouping would need its own id space in
+every id argument. The final check refuses `recheck`. Resume still refuses a verify run: an
+interrupted verify is never signed, so a new verify from the same tip runs every seat again.
+
 A verify's `scopingNote` goes to its seats in the scope note and back on `RunVerifyResult`
 (never on the final check), and the verify comment shows it under the range as
 `**Why this round:**` through `githubSafe` (one line, `EVIDENCE_CHARS`). It is not in the signed

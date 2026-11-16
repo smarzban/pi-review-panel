@@ -88,8 +88,9 @@ import {
 	formatSuggestion,
 	formatSuggestionsUnavailable,
 	inert,
-	NOTHING_OPEN,
+	nothingOpenLine,
 	orderFindings,
+	recheckView,
 	reviewHeadLines,
 	reviewLostLine,
 	truncateCodePoints,
@@ -751,6 +752,15 @@ function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
 			dismissed: facts.dismissed,
 			lowAdvisory: facts.lowAdvisory,
 			outcomes: result.outcomes,
+			// The same record shape runVerify signs, so the ids match.
+			...(result.recheck === undefined
+				? {}
+				: {
+						recheck: {
+							lenses: result.recheck.lenses,
+							outcomes: result.recheck.outcomes,
+						},
+					}),
 			...(result.final === true ? { final: true as const } : {}),
 		}),
 	];
@@ -781,10 +791,16 @@ export function renderVerifyRound(
 		return title === undefined ? "" : ` — ${githubSafe(title)}`;
 	};
 	const failed = result.outcomes.filter((row) => row.outcome.kind === "failed");
+	const recheck = recheckView(result);
+	const lost = [
+		...failed.map((row) => `${row.seat.rosterId}/${row.seat.lens}`),
+		...(recheck?.lost ?? []),
+	];
+	const seats = [...facts.panel, ...(recheck?.seats ?? [])];
 	const keptSummary =
 		seen.keptIds.length === 0
 			? result.nothingOpen === true && seen.voted > 0
-				? NOTHING_OPEN
+				? nothingOpenLine(result)
 				: "no kept ids"
 			: seen.keptIds
 					.map((id) => githubSafe(dispositionLabel(seen, id), 80))
@@ -807,19 +823,15 @@ export function renderVerifyRound(
 				? "no regressions"
 				: `${seen.regressions.length} regression${seen.regressions.length === 1 ? "" : "s"}`,
 		].join(" · "),
-		...(facts.panel.length === 0
-			? []
-			: [boldLabel(ownLine(renderSeatsLine([...facts.panel])))]),
+		...(seats.length === 0 ? [] : [boldLabel(ownLine(renderSeatsLine(seats)))]),
 		...(result.final === true
 			? [
 					"**Final check:** the whole change, from the reviewed head, for fixes that no longer hold or conflict",
 				]
 			: []),
-		...(failed.length === 0
+		...(lost.length === 0
 			? []
-			: [
-					`**Lost:** ${failed.map((row) => githubSafe(`${row.seat.rosterId}/${row.seat.lens}`, 120)).join(", ")}`,
-				]),
+			: [`**Lost:** ${lost.map((name) => githubSafe(name, 120)).join(", ")}`]),
 		`**Open after this round:** ${
 			state.open.length === 0
 				? "none"
@@ -871,6 +883,23 @@ export function renderVerifyRound(
 			return lines;
 		}),
 	);
+	if (recheck !== undefined) {
+		const lenses = (names: readonly string[]) =>
+			names.map((name) => githubSafe(name, 40)).join(", ");
+		if (recheck.findings.length > 0) {
+			section(
+				`**New in this round (recheck: ${lenses(recheck.lenses)}):**`,
+				orderFindings(recheck.findings).map((entry) =>
+					findingRow(entry, recheck.seats),
+				),
+			);
+		} else {
+			rows.push([
+				"",
+				`**Recheck (${lenses(recheck.summaryLenses)}):** ${recheck.nothing}`,
+			]);
+		}
+	}
 	return fitCommentBody(
 		head,
 		rows,
@@ -933,6 +962,18 @@ export function closeoutBlocker(result: RunVerifyResult): string | undefined {
 	if (seen.regressions.length > 0) {
 		reasons.push(
 			`${seen.regressions.length} regression${seen.regressions.length === 1 ? "" : "s"}`,
+		);
+	}
+	// A recheck seat lost is lost coverage like any seat; what the recheck
+	// found is open.
+	const recheck = recheckView(result);
+	if (recheck !== undefined && recheck.lost.length > 0) {
+		reasons.push(`lost recheck coverage: ${recheck.lost.join(", ")}`);
+	}
+	if (recheck !== undefined && recheck.findings.length > 0) {
+		const count = recheck.findings.length;
+		reasons.push(
+			`${count} new finding${count === 1 ? "" : "s"} in this round's recheck`,
 		);
 	}
 	return reasons.length === 0

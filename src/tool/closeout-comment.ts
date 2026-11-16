@@ -49,6 +49,8 @@ export type CloseoutVerifyRound = {
 	resolved: ReadonlySet<string>;
 	/** Its verify seats that were lost, as `rosterId/lens`. */
 	lost?: readonly string[];
+	/** Its recheck seats that were lost (`verify --recheck`), as `rosterId/lens`. */
+	recheckLost?: readonly string[];
 	/** The final check before the card: the review head to the final head. */
 	final?: true;
 };
@@ -292,6 +294,9 @@ export function closeoutCardParts(
 		...input.lost.map((name) => postedText(name)),
 		...[...new Set(input.verifyLost ?? [])].map(
 			(name) => `${postedText(name)} (verify)`,
+		),
+		...[...new Set(rounds.flatMap((round) => round.recheckLost ?? []))].map(
+			(name) => `${postedText(name)} (recheck)`,
 		),
 	];
 	const verifiedBy = seatGroups(rounds.flatMap((round) => round.seats));
