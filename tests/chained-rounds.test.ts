@@ -583,7 +583,7 @@ describe("--close-out", () => {
 		expect(closeouts()).toEqual([]);
 	});
 
-	it("without it, a verify that leaves nothing open posts no card and says how to ask for one", async () => {
+	it("without it, a verify that leaves nothing open posts no card, names the command that posts it now and says to pass --close-out next time", async () => {
 		const v1 = await round1();
 		const v2 = await round2(v1.runId);
 		const v3 = await verify(
@@ -592,8 +592,9 @@ describe("--close-out", () => {
 		);
 		expect(closeouts()).toEqual([]);
 		expect(v3.reply).toContain(
-			`PR close-out: not posted (not asked for; nothing is open: once the owner says the rounds are done, post it with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`)`,
+			`PR close-out: not posted (not asked for; nothing is open: post it now at this head with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`, and pass \`--close-out\` on the last verify next time)`,
 		);
+		expect(v3.reply).not.toContain("once the owner says");
 		// The hinted step works as written (R-6).
 		const hinted = /`(review-panel comment [^`]+)`/u.exec(v3.reply)?.[1] ?? "";
 		const command = parseCommand(hinted.split(" ").slice(1));

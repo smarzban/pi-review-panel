@@ -1123,12 +1123,13 @@ export async function postVerifyRound(
 	}
 	const blocker = closeoutBlocker(result);
 	if (facts.closeOut !== true) {
-		// Never automatic: say so only when it could have been asked for.
+		// Never automatic: say so only when it could have been asked for, with
+		// the command that posts it now (this verify cannot run again here).
 		if (blocker === undefined && stateAfter(facts).open.length === 0) {
 			lines.push(
 				notPosted(
 					"PR close-out",
-					`not asked for; nothing is open: once the owner says the rounds are done, post it with ${commentCommand(facts)}`,
+					`not asked for; nothing is open: post it now at this head with ${commentCommand(facts)}, and pass \`--close-out\` on the last verify next time`,
 				),
 			);
 		}
