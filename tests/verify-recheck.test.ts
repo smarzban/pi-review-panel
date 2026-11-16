@@ -101,6 +101,12 @@ let refusals: string[];
 
 let root: string;
 let repo: string;
+/** The pinned snapshot folder every seat must run in. */
+let pinned: string;
+/** The head each pin was asked for. */
+let pins: string[];
+/** The session count when each snapshot was released. */
+let releases: number[];
 let commits: string[];
 let comments: Array<{
 	id: number;
@@ -124,6 +130,10 @@ beforeEach(() => {
 		commits.push(git(repo, ["rev-parse", "HEAD"]));
 	}
 	repo = realpathSync(repo);
+	pinned = path.join(root, "pinned");
+	mkdirSync(pinned);
+	pins = [];
+	releases = [];
 	const recordPath = path.join(repo, ".review-panel", "runs", REVIEW);
 	mkdirSync(recordPath, { recursive: true });
 	writeFileSync(
@@ -319,10 +329,18 @@ function deps(): ActionDependencies {
 			runVerify(input, {
 				...options,
 				sessionFactory: factory,
-				pinSnapshot: () => ({
-					worktreePath: repo,
-					release: () => ({ ok: true }),
-				}),
+				// A pinned snapshot apart from the repository, so a seat run in
+				// the host checkout instead is seen.
+				pinSnapshot: (_repoDir: string, head?: string) => {
+					pins.push(head ?? "");
+					return {
+						worktreePath: pinned,
+						release: () => {
+							releases.push(sessions.length);
+							return { ok: true };
+						},
+					};
+				},
 			}),
 	};
 }
@@ -495,6 +513,14 @@ describe("verify --recheck", () => {
 			"claude-opus-5-5/tests",
 			"gemini-luna/fix-verification",
 			"gpt-5.6-terra/tests",
+		]);
+		// Every seat, recheck seats included, ran in the snapshot pinned at
+		// the verify's head, never in the host checkout.
+		expect(pins).toEqual([commits[2]]);
+		expect(v1.seats.map((row) => row.spec.worktree)).toEqual([
+			pinned,
+			pinned,
+			pinned,
 		]);
 		// Two seats, one finding each: numbered across seats in order.
 		const lines = v1.body.split("\n");
