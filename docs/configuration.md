@@ -566,11 +566,11 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   caller's `scopingNote` as one line of inert plain text (cut at 1,000 characters, escaped like
   seat text; no note, no line, and the final check shows none). A table lists each checked id
   with its title and what the seats said (`resolved`, `still present`, `inconclusive` or
-  `no answer`). `### Not fixed` gives each id a seat did not call resolved, with that seat's
-  reason as a quote. `### Dismissed` gives each `dismissed` id with its reason as a quote; the
-  `lowAdvisory` ids not kept sit in a folded `Low / advisory, not kept` list. Regressions follow
-  as new findings, by their `V<link>-R<n>` id, with `undoes F-1` when one undoes an earlier fix,
-  their evidence folded. The vote count (`1/1 voted`, or `verify 1/1 · recheck 2/2` with a
+  `no answer`). `### Not resolved` gives each id a seat did not call resolved, with that seat's
+  reason as a quote. `### Dismissed` gives each `dismissed` id with its reason as a quote.
+  Regressions follow as new findings, by their `V<link>-R<n>` id, with `undoes F-1` when one
+  undoes an earlier fix, their evidence folded, then the recheck. The `lowAdvisory` ids not kept
+  come last, in a folded `Low / advisory, not kept` list. The vote count (`1/1 voted`, or `verify 1/1 · recheck 2/2` with a
   recheck) and the seats close the comment in small text. When nothing was open before the
   verify (no open id, and no finding left to place) and at least one seat voted, a line in the
   comment, and the reply's headline, say `Nothing was open; this round checked the new commits

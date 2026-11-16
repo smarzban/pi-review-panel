@@ -245,7 +245,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   the first two, as in review; holistic only when named; `--seats` never applies to them) runs
   alongside the verify seat over the round's diff only, told every id already open or settled
   and asked for what is not listed. What they find gets ids `V<N>-F<k>` and is open like any
-  id. The verify comment lists it under `New in this round (recheck: …):`, or says
+  id. The verify comment lists it under the heading `### New in this round (recheck: …)`, or says
   `Recheck (…): nothing new`; a lost recheck seat is named on `Lost:`, counted on that line
   (`nothing new (1 tests seat lost)`), and blocks `--close-out`. It costs a review's worth of seats: use it for a round that touches security,
   posting, parsing or other risky code, not for a small fix. The final check never rechecks.

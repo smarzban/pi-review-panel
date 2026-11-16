@@ -210,9 +210,11 @@ function isGroupRow(row: CommentRow): row is CommentGroupRow {
 	return !Array.isArray(row);
 }
 
-/** The line that ends a group posted in part. */
+/** The line that ends a group posted in part, after a blank line. */
 export function groupCutLine(count: number): string {
-	return `  - ${count} more finding(s) in this group cut to fit GitHub's comment limit; the full group is in the run record's report.md.`;
+	// A blank line ends the last member's toggle; the item is a sibling of
+	// the members, not nested under the last one.
+	return `\n- ${count} more finding(s) in this group cut to fit GitHub's comment limit; the full group is in the run record's report.md.`;
 }
 
 /**

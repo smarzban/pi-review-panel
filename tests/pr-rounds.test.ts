@@ -45,6 +45,7 @@ import {
 	type RoundGhRunner as GhRunner,
 	GITHUB_COMMENT_LIMIT,
 	githubSafe,
+	postedSeatsLine,
 	ROUND_DEADLINE_MS,
 } from "../src/tool/round-post.js";
 import {
@@ -903,7 +904,7 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 			// Only what was not resolved gets a reason, quoted on its own.
 			expect(body).toContain(
 				[
-					"### Not fixed",
+					"### Not resolved",
 					"**F-2 · still present** — `src/r.ts`",
 					"> the loop still retries at once",
 					"",
@@ -911,17 +912,17 @@ describe("a verify round posts what was fixed, not fixed and new", () => {
 					"**F-3** F-3 title",
 					"> by design, see ADR 4",
 					"",
-					"<details><summary>Low / advisory, not kept (1)</summary>",
-					"",
-					"- **F-4** F-4 title",
-					"</details>",
-					"",
 					"### New findings (regressions)",
 					"**R-1** new crash on empty input",
 					"<sub>`src/b.ts:9`</sub>",
 					"<details><summary>Evidence</summary>",
 					"",
 					"regression evidence",
+					"</details>",
+					"",
+					"<details><summary>Low / advisory, not kept (1)</summary>",
+					"",
+					"- **F-4** F-4 title",
 					"</details>",
 				].join("\n"),
 			);
@@ -3251,7 +3252,7 @@ describe("fix round 2: posted text (M1, L3, L4, L7)", () => {
 			);
 			const verifyBody = bodyOf(posts(gh.calls)[0]);
 			expectInert(verifyBody);
-			// The Not fixed reasons are quoted lines the tool starts; what the
+			// The Not resolved reasons are quoted lines the tool starts; what the
 			// seat wrote after `> ` is escaped, so it nests no second quote.
 			expect(verifyBody).toContain("\n> \\===\n");
 			expect(verifyBody).toContain("\n> \\> q\n");
@@ -4435,5 +4436,120 @@ describe("T505: the close-out card numbers, counts and links rounds from signed 
 				expect(body).not.toMatch(/fixed/i);
 			});
 		});
+	});
+});
+
+describe("review fixes for PR 48", () => {
+	it("owner-config seat names in the small text are escaped like seat text", () => {
+		const seat = {
+			rosterId: "a*b</sub><img src=x>",
+			provider: "p",
+			model: "m",
+			lens: "holi_stic",
+			lensPrompt: "",
+		} as PlannedSeat;
+		const line = postedSeatsLine([seat]);
+		expect(line).toBe("Seats: holi\\_stic (a\\*b\\</sub\\>\\<img src=x\\>)");
+		expect(line).not.toContain("</sub>");
+	});
+
+	const twoSeats = async (
+		votes: SeatVote[],
+		rows: Row[] = [
+			{ id: "F-1", severity: "high" },
+			{ id: "F-2", severity: "medium" },
+		],
+		input: { lowAdvisory?: string[] } = {},
+	): Promise<string> => {
+		let body = "";
+		await withRepository(async (repo, head) => {
+			writeReviewRecord(repo, REVIEW_ID, rows);
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			await verifyAction(
+				{
+					repoDir: repo,
+					priorRunId: latest(repo, REVIEW_ID),
+					head: "HEAD",
+					keptFindingIds: ["F-1", "F-2"],
+					...input,
+				},
+				{
+					deps: deps(gh.runGh, {
+						runVerify: verifyRunSeats(
+							repo,
+							"v-1",
+							REVIEW_ID,
+							rows.slice(0, 2),
+							votes,
+						),
+					}),
+				},
+			);
+			body = bodyOf(posts(gh.calls)[0]);
+		});
+		return body;
+	};
+
+	it("Not resolved quotes the seat that did not say resolved, never the one that did", async () => {
+		const body = await twoSeats([
+			{
+				rosterId: "terra",
+				items: [
+					resolved("F-1"),
+					{
+						id: "F-2",
+						disposition: "resolved",
+						evidence: { file: "src/ok.ts", explanation: "looks resolved" },
+					},
+				],
+			},
+			{
+				rosterId: "terra",
+				items: [
+					resolved("F-1"),
+					{
+						id: "F-2",
+						disposition: "still present",
+						evidence: { file: "src/r.ts", explanation: "still retries" },
+					},
+				],
+			},
+		]);
+		expect(body).toContain("| **F-2** | F-2 title | resolved, still present |");
+		expect(body).toContain(
+			"### Not resolved\n**F-2 · still present** — `src/r.ts`\n> still retries",
+		);
+		expect(body).not.toContain("looks resolved");
+		expect(body).not.toContain("Not fixed");
+	});
+
+	it("an id no seat answered says no answer, in the table and under Not resolved", async () => {
+		const body = await twoSeats([
+			{ rosterId: "terra", items: [resolved("F-1")] },
+		]);
+		expect(body).toContain("| **F-2** | F-2 title | no answer |");
+		expect(body).toContain("### Not resolved\n**F-2 · no answer**");
+	});
+
+	it("the folded low/advisory list comes after the regressions, so a cut drops it first", async () => {
+		const body = await twoSeats(
+			[
+				{
+					rosterId: "terra",
+					items: [resolved("F-1"), resolved("F-2")],
+					regressions: 1,
+				},
+			],
+			[
+				{ id: "F-1", severity: "high" },
+				{ id: "F-2", severity: "medium" },
+				{ id: "F-3", severity: "low" },
+			],
+			{ lowAdvisory: ["F-3"] },
+		);
+		const regressions = body.indexOf("### New findings (regressions)");
+		const lows = body.indexOf("<details><summary>Low / advisory");
+		expect(regressions).toBeGreaterThan(0);
+		expect(lows).toBeGreaterThan(regressions);
 	});
 });

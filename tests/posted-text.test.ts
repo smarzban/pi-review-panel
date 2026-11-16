@@ -363,3 +363,10 @@ describe("a code span inside a table cell", () => {
 		expect(postedCellCode("")).toBe("(empty)");
 	});
 });
+
+describe("a group's cut line", () => {
+	it("is its own list item after a blank line, so it closes the last member's toggle and is not nested under it", () => {
+		const line = groupCutLine(2);
+		expect(line.startsWith("\n- 2 more finding(s) in this group")).toBe(true);
+	});
+});

@@ -454,18 +454,20 @@ describe("the grouped review PR comment", () => {
 		expect(shown.length).toBeLessThan(120);
 		const more = lines
 			.map((line) =>
-				/^ {2}- (\d+) more finding\(s\) in this group cut to fit GitHub's comment limit; the full group is in the run record's report\.md\.$/.exec(
+				/^- (\d+) more finding\(s\) in this group cut to fit GitHub's comment limit; the full group is in the run record's report\.md\.$/.exec(
 					line,
 				),
 			)
 			.find((match) => match !== null);
 		expect(more).toBeDefined();
 		expect(shown.length + Number(more?.[1])).toBe(120);
-		// The marker follows the last shown member, inside the group.
+		// The marker is the group's own list item after the last shown
+		// member: a blank line closes that member's toggle first.
 		const markerAt = lines.findIndex((line) =>
 			line.includes("more finding(s) in this group"),
 		);
-		expect(lines[markerAt - 1]).toBe("  </details>");
+		expect(lines[markerAt - 1]).toBe("");
+		expect(lines[markerAt - 2]).toBe("  </details>");
 		// The row after the big group still posts, and nothing is cut whole.
 		expect(body).toContain(
 			"### Low\n**G-2 · F-121 [low]** Typo after the big group\n<sub>`src/log.ts:1`",

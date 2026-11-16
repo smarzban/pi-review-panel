@@ -210,6 +210,20 @@ function safeCode(text: string, maxChars = FILE_CHARS): string {
 	return postedCode(text, maxChars);
 }
 
+/**
+ * `Seats: lens (id, id), …` with every owner-config name escaped like seat
+ * text, so a roster id cannot close the small text it sits in.
+ */
+export function postedSeatsLine(seats: readonly PlannedSeat[]): string {
+	return renderSeatsLine(
+		seats.map((seat) => ({
+			...seat,
+			rosterId: githubSafe(seat.rosterId, 60),
+			lens: githubSafe(seat.lens, 60),
+		})),
+	);
+}
+
 /** A line of tool-owned text that carries owner-config names. */
 function ownLine(text: string): string {
 	return inert(text).replace(/[@\uFF20#]/gu, "$&\u200D");
@@ -652,7 +666,7 @@ export const NO_CLOSEOUT_NEEDED = "No findings · no close-out needed";
 
 /** The review comment: the reply's content without the local record path. */
 export function renderReviewRound(facts: ReviewRoundFacts): string {
-	const [, summary, seats] = reviewHeadLines("", facts);
+	const [, summary] = reviewHeadLines("", facts);
 	// `2/2 voted · 3 findings in 2 groups · 1m 2s · $0.12`: the findings go
 	// up top, the rest in small text at the end.
 	const [votes, found, ...totals] = (summary as string).split(" · ");
@@ -738,7 +752,11 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 		small([
 			ownLine(votes ?? ""),
 			...totals.map((part) => ownLine(part)),
-			ownLine(seats as string),
+			postedSeatsLine(
+				facts.result.grouping === undefined
+					? facts.panel
+					: [...facts.panel, facts.result.grouping.seat],
+			),
 		]),
 		...markerTail({ review: facts.runId }),
 	);
@@ -935,7 +953,7 @@ export function renderVerifyRound(
 	// A kept id that no voting seat called resolved, with the reason the
 	// first such seat gave; a resolved id has its table row only.
 	section(
-		["### Not fixed"],
+		["### Not resolved"],
 		seen.keptIds
 			.filter((id) => {
 				const states = said(id);
@@ -966,17 +984,6 @@ export function renderVerifyRound(
 			`> ${githubSafe(row.reason, EVIDENCE_CHARS)}`,
 		]),
 	);
-	const lows = facts.lowAdvisory.filter((id) => !keptSet.has(id));
-	if (lows.length > 0) {
-		// One row: a toggle cut in half would swallow the rest of the body.
-		rows.push([
-			"",
-			`<details><summary>Low / advisory, not kept (${lows.length})</summary>`,
-			"",
-			...lows.map((id) => `- **${githubSafe(id, 40)}** ${title(id)}`),
-			"</details>",
-		]);
-	}
 	section(
 		["### New findings (regressions)"],
 		seen.regressions.map((row) => {
@@ -1008,6 +1015,18 @@ export function renderVerifyRound(
 			]);
 		}
 	}
+	const lows = facts.lowAdvisory.filter((id) => !keptSet.has(id));
+	if (lows.length > 0) {
+		// One row: a toggle cut in half would swallow the rest of the body.
+		// Last, so a cut drops it before any regression or new finding.
+		rows.push([
+			"",
+			`<details><summary>Low / advisory, not kept (${lows.length})</summary>`,
+			"",
+			...lows.map((id) => `- **${githubSafe(id, 40)}** ${title(id)}`),
+			"</details>",
+		]);
+	}
 	return fitCommentBody(
 		head,
 		rows,
@@ -1015,7 +1034,7 @@ export function renderVerifyRound(
 			"",
 			small([
 				votedCountLine(result),
-				...(seats.length === 0 ? [] : [ownLine(renderSeatsLine(seats))]),
+				...(seats.length === 0 ? [] : [postedSeatsLine(seats)]),
 			]),
 			...markerTail({
 				review: result.priorRunId,

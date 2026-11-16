@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - The review, verify and close-out comments are easier to read. Results and findings are tables, evidence is folded under a toggle, reasons stand on their own as quotes, review findings sit under High, Medium and Low headings, and seat names, vote counts, time and cost move to small text at the end.
-- The verify comment gives a table row for each checked id with what the seats said, and a `### Not fixed` section with the seat's reason for each id that was not resolved, instead of listing every id with its evidence.
+- The verify comment gives a table row for each checked id with what the seats said, and a `### Not resolved` section with the seat's reason for each id that was not resolved, instead of listing every id with its evidence.
 - A verify with `--recheck` counts its seats apart, `verify 1/1 · recheck 2/2`, instead of `1/1 voted`, which left the recheck seats out.
 - Seats now get a writing rule: the title names the problem, not the fix, and the evidence says what goes wrong first, in plain words. The submit tools refuse a title over 120 characters, evidence over 800 or a verify explanation over 500, and the seat writes it again.
 - The skill passes `--scoping-note` on a verify only when it adds something (a change from outside the panel, or why each recheck lens), not on every round.

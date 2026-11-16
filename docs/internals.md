@@ -223,7 +223,7 @@ every id argument. The final check refuses `recheck`. Resume still refuses a ver
 interrupted verify is never signed, so a new verify from the same tip runs every seat again.
 
 The verify comment's first line is the range, the open ids and the regression count. A table
-gives each checked id what the seats said. `### Not fixed` lists each kept id that a voting seat
+gives each checked id what the seats said. `### Not resolved` lists each kept id that a voting seat
 did not call resolved (or no seat answered), with the first such seat's evidence
 (`VerifyFacts.openEvidence`) as a quote; a resolved id has its table row only. Then
 `### Dismissed`, the folded low/advisory list, regressions and the recheck. The vote count, as
@@ -283,7 +283,7 @@ names and ids are code spans with a fence longer than any backtick run inside, w
 escaped or joined in them, and a value with nothing visible renders as `(empty)`. The caller's verify `scopingNote` posts like seat text, as one quoted line
 after `> **Why this round:**`; the review comment's `No findings · no close-out needed` is the
 tool's own line. Labels the
-tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in
+tool writes are bold (`**Lost:**`, `**F-1 [high]**`); seat text never is. No run id appears in
 visible text: each body ends with one hidden `<!-- review-panel review=<id> verify=<id> -->`
 marker holding only ids of the run-id character set (an id with `--`, from a base ref such as
 `HEAD^`, is safe: the marker is its own HTML block, which only `-->` ends), and the close-out
@@ -293,10 +293,13 @@ for a card posted before the marker, ``Review `<id>` `` on line 2.
 Layout the tool writes around that text: a findings or results table (a table's header
 goes with its first row, so a cut never leaves it alone; a code span in a cell goes through
 `postedCellCode`, which escapes `|`, because GitHub splits a row at every unescaped pipe, a code
-span's included; posted text already escapes `|`); a reason as a `> ` quote line after a blank
-line; evidence after a blank line inside `<details><summary>Evidence</summary>` … `</details>`;
-a folded low/advisory list, always one row, because a toggle cut in half would swallow the rest
-of the body; and `<sub>` small text holding only tool text and owner-config names. Each seat
+span's included; posted text already escapes `|`); a reason as a `> ` quote line right under its id
+line, each entry after a blank line; evidence after a blank line inside
+`<details><summary>Evidence</summary>` … `</details>`; a folded low/advisory list, always one
+row and the verify comment's last section, because a toggle cut in half would swallow the rest
+of the body and a cut should drop it before any regression; a group's cut line as its own list
+item after a blank line, so it closes the last member's toggle; and `<sub>` small text holding
+only tool text and owner-config names, those escaped like seat text (`postedSeatsLine`). Each seat
 field stays one line of posted text, so none of it can open or close these blocks.
 Bodies are cut by rows in order (`fitCommentBody`): a group that does not fit whole posts its
 header, first member and a cut line, later rows are still tried, and what is left then goes to
