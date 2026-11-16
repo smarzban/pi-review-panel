@@ -1343,3 +1343,44 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 		},
 	);
 });
+
+describe("a recorded source's credential never shows in list or remove (R-4, R-5)", () => {
+	const S = TOKEN;
+
+	function recorded(source: string) {
+		const removed: string[] = [];
+		const { sdk } = fakeSdk({
+			listExtensions: async () => [
+				{
+					source,
+					installedPath: `/agent/git/${source.replace(/^[a-z]+:(\/\/)?/i, "")}`,
+					filtered: false,
+					entries: [`/agent/git/${source.length}/extensions/index.ts`],
+				},
+			],
+			removeExtension: async (input) => {
+				removed.push(input.source);
+				input.progress(`Removing ${input.source}...`);
+				return input.source === source;
+			},
+		});
+		return { sdk, removed };
+	}
+
+	// A fragment is hidden like a query: Pi keeps it in the clone URL (R-5).
+	it.each([
+		[`git:h.invalid/o/r#${S}`, "git:h.invalid/o/r#***"],
+		[`https://h.invalid/o/r@v1#${S}`, "https://h.invalid/o/r@v1#***"],
+	])("list and list --json show %s as %s", async (source, printed) => {
+		const { sdk } = recorded(source);
+		for (const argv of [
+			["extension", "list"],
+			["extension", "list", "--json"],
+		]) {
+			const h = harness({ sdk });
+			expect(await h.run(argv)).toBe(EXIT_OK);
+			expect(h.out(), argv.join(" ")).toContain(printed);
+			expect(h.out() + h.err(), argv.join(" ")).not.toContain(S);
+		}
+	});
+});

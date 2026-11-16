@@ -195,8 +195,9 @@ function isRegistryPackage(
 
 /**
  * The exact credential text in a parsed source: user info that can hold a
- * secret (with its `@`) and query strings (with their `?`). Printing a source,
- * or a folder Pi named after it, hides these.
+ * secret (with its `@`), query strings (with their `?`) and, in a git source,
+ * fragments (with their `#`, which Pi keeps in the clone URL and folder).
+ * Printing a source, or a folder Pi named after it, hides these.
  */
 export function credentialParts(parsed: ParsedSource): string[] {
 	const parts: string[] = [];
@@ -227,11 +228,17 @@ export function credentialParts(parsed: ParsedSource): string[] {
 		if (query !== null) {
 			parts.push(query[0]);
 		}
+		for (const text of [parsed.repo, parsed.path]) {
+			const fragment = /#[^\s]*/.exec(text);
+			if (fragment !== null) {
+				parts.push(fragment[0]);
+			}
+		}
 	} else if (parsed.type === "npm") {
 		fromUrl(parsed.version ?? "", false);
 	}
 	return [...new Set(parts)]
-		.filter((part) => part !== "@" && part !== "?")
+		.filter((part) => part !== "@" && part !== "?" && part !== "#")
 		.sort((a, b) => b.length - a.length);
 }
 
@@ -239,7 +246,10 @@ export function credentialParts(parsed: ParsedSource): string[] {
 export function hideParts(text: string, parts: readonly string[]): string {
 	let result = text;
 	for (const part of parts) {
-		result = result.replaceAll(part, part.startsWith("?") ? "?***" : "***@");
+		result = result.replaceAll(
+			part,
+			part.startsWith("?") ? "?***" : part.startsWith("#") ? "#***" : "***@",
+		);
 	}
 	return result;
 }

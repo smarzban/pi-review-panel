@@ -121,7 +121,7 @@ any user name on `http(s)://`, any other SSH user, an `@` in the parsed host), a
 host, any query or `#` on a git source (its ref included) or a ref that is not a plain name, an `npm:` source that is not a registry package (`npm:<name>[@<version, range or
 tag>]` only; Pi splits `npm:https://tok@host/x.tgz` into the name `https://tok` and a version,
 so the name is checked too), and a source with a scheme that Pi parses as a local path. Each refusal (and `absoluteSource`'s for an scp-style source without `git:` or an unusable `file:` URL) is a fixed message that repeats no part of the source: any part (user info, host, path, ref, npm name or version) can hold a token, and no redaction can tell which. `extension remove` runs `sourceProblem` too on a source that is neither recorded exactly nor the printed form of one, and answers with a fixed message without calling the package manager, whose progress would print it. Other printed text goes through `redactSecrets` (source strings only) and,
-for a recorded source, `hideParts` with the credential parts of its parse; the package manager
+for a recorded source, `hideParts` with the credential parts of its parse (user info, query and a git fragment); the package manager
 gets the source as given.
 
 Prompt files under `prompts/` have no trailing newline (tests assert that). Extra lenses fire when
