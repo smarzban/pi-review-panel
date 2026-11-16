@@ -532,7 +532,9 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     across a sync. A claim with unreadable content is judged by its age on disk.
   - One case is set aside: when `gh` reports a POST as failed (it timed out or was interrupted)
     after GitHub had already accepted it, the claim is given back and no marker is written.
-  It is a short delta: an `Open after this round:` line naming every id still open after this
+  It is a short delta: under the commit range, `**Why this round:**` and the caller's
+  `scopingNote` as one line of inert plain text (cut at 1,000 characters, escaped like seat text;
+  no note, no line, and the final check shows none), then an `Open after this round:` line naming every id still open after this
   verify (or `none`), each kept id as resolved, still present or inconclusive with the panel's
   one-line evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept,
   and the regressions as new findings, by their `V<link>-R<n>` id, with `· undoes F-1` when

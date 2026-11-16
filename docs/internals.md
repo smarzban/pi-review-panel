@@ -188,6 +188,11 @@ chain goes on. The fork refusal in `loadVerifyChain` stays as a backstop for the
 left: two verifies that both pass that check before either signs. `comment` reads no claim; it
 takes one only through the final check it runs, and a live one refuses it with the holder named.
 
+A verify's `scopingNote` goes to its seats in the scope note and back on `RunVerifyResult`
+(never on the final check), and the verify comment shows it under the range as
+`**Why this round:**` through `githubSafe` (one line, `EVIDENCE_CHARS`). It is not in the signed
+record: verify has no resume, and the comment is posted by the run that took the note.
+
 The final check (S-6) is `runVerify` with `final: true`, from the tip at the tip's head: base is
 the review head, no kept ids, `undoableIds` = every resolved id, one seat
 (`planVerifySeats(config).slice(0, 1)`, never the caller's), the package-owned
@@ -233,7 +238,9 @@ so its posted size has a fixed cap. The only links the tool writes are the close
 links to this PR's own comments (`postedLink`), whose URL must be exactly
 `https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`. File
 names and ids are code spans with a fence longer than any backtick run inside, with nothing
-escaped or joined in them, and a value with nothing visible renders as `(empty)`. Labels the
+escaped or joined in them, and a value with nothing visible renders as `(empty)`. The caller's verify `scopingNote` posts like seat text, as one line
+after `**Why this round:**`; the review comment's `No findings · no close-out needed` is the
+tool's own line. Labels the
 tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in
 visible text: each body ends with one hidden `<!-- review-panel review=<id> verify=<id> -->`
 marker holding only ids of the run-id character set (an id with `--`, from a base ref such as

@@ -238,6 +238,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   reads for `defaults.lenses`. It prints each lens the diff's rules
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
+- `verify --scoping-note` says why the round ran (where each change came from); the verify
+  comment shows it under the commit range as `Why this round:`, and the seats read it too.
 - `verify` chains. The first verify of a review takes the review's run id as
   `--prior-run-id` and needs `--kept-finding-ids` (not when the review had no findings); it must place every finding (a high or
   medium it neither keeps nor dismisses is refused; a low it leaves out is low/advisory). Every later verify takes the latest

@@ -109,6 +109,11 @@ export type RunVerifyResult = {
 	 * place), so it checked the new commits for regressions only.
 	 */
 	nothingOpen?: true;
+	/**
+	 * The caller's scoping note, as given: the verify comment shows it as
+	 * why this round ran. Never set on the final check.
+	 */
+	scopingNote?: string;
 };
 
 export type VerifyProgressEvent = {
@@ -699,6 +704,9 @@ export async function runVerify(
 			...(cleanupError === undefined ? {} : { cleanupError }),
 			...(final ? { final: true as const } : {}),
 			...(nothingOpen ? { nothingOpen: true as const } : {}),
+			...(final || input.scopingNote === undefined
+				? {}
+				: { scopingNote: input.scopingNote }),
 		};
 	}
 }

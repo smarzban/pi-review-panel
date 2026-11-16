@@ -165,6 +165,9 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
 
 4. Add `--close-out` to any verify you expect to leave nothing open, the first included: it
    posts the close-out card once nothing is open (see section 8).
+5. Pass `--scoping-note` on each verify naming where each change came from, such as
+   `"fixes F-2; owner found X; outside re-check found Y"`. The verify comment shows it as
+   `Why this round:`, so a reader can tell why the round exists; the seats read it too.
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out

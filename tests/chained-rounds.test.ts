@@ -30,6 +30,7 @@ import {
 	findCloseoutPr,
 	type PostCloseoutInput,
 } from "../src/tool/closeout-post.js";
+import { postedText } from "../src/tool/posted-text.js";
 import type { RoundGhRunner } from "../src/tool/round-post.js";
 import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
@@ -685,6 +686,27 @@ describe("a verify with nothing open (T510)", () => {
 		expect(v2.reply.split("\n")[1]).toBe(
 			"1/1 voted · no kept ids · no regressions",
 		);
+	});
+});
+
+describe("why this round (T510)", () => {
+	it("the verify comment shows the caller's scoping note as one inert line under the range", async () => {
+		writeReview(CLEAN, []);
+		const note =
+			"fixes F-2; owner found @team's `bug`\nouter re-check found $x";
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], scopingNote: note },
+			{ items: [] },
+		);
+		const lines = v1.body.split("\n");
+		expect(lines[1]).toMatch(/^`[0-9a-f]{7}` → `[0-9a-f]{7}`$/u);
+		expect(lines[2]).toBe(`**Why this round:** ${postedText(note)}`);
+		expect(lines[2]).not.toContain("@team");
+	});
+
+	it("no note, no line", async () => {
+		const v1 = await round1();
+		expect(v1.body).not.toContain("Why this round");
 	});
 });
 

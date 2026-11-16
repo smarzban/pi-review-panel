@@ -253,6 +253,16 @@ describe("review-panel skill", () => {
 		expect(body).not.toMatch(/ready to merge\b(?! on the card)/i);
 	});
 
+	it("passes a verify scoping note that names where each change came from (T510)", () => {
+		const body = flat(splitFrontmatter(readSkill()).body);
+		const at = body.indexOf(
+			"Pass `--scoping-note` on each verify naming where each change came from",
+		);
+		expect(at).toBeGreaterThan(body.indexOf("## 6. Fix and verify"));
+		expect(at).toBeLessThan(body.indexOf("## 7. Resume"));
+		expect(body).toContain("`Why this round:`");
+	});
+
 	it("never treats an exit code as a pass", () => {
 		const raw = readSkill();
 		expect(flat(splitFrontmatter(raw).body)).toContain(

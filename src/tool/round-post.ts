@@ -761,6 +761,13 @@ export function renderVerifyRound(
 	const head = [
 		`## Review panel · verify ${round}`,
 		`\`${shortOid(result.priorHeadOid)}\` → \`${shortOid(result.headOid)}\``,
+		// The caller's own words, as one line of inert text; the tool adds
+		// nothing of its own.
+		...(result.scopingNote === undefined
+			? []
+			: [
+					`**Why this round:** ${githubSafe(result.scopingNote, EVIDENCE_CHARS)}`,
+				]),
 		[
 			`${seen.voted}/${result.outcomes.length} voted`,
 			keptSummary,
