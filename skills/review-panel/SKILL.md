@@ -162,6 +162,9 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
   --dismissed '[{"id":"V1-R1","reason":"..."}]'
 ```
 
+4. Add `--close-out` to any verify you expect to leave nothing open, the first included: it
+   posts the close-out card once nothing is open (see section 8).
+
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
 carry your reasons; each round records them, so name each id once. A regression has no
@@ -213,18 +216,26 @@ Recommend landing only when every kept item is resolved, there is no new high/me
 regression on the fix, and lost coverage is named; or when the discovery report had nothing
 you would keep. Name who voted, who failed, and what you kept or skipped.
 
-The close-out card is posted once, at the end, and only when asked:
+The close-out card is posted once, at the end, as soon as nothing is open:
 
-- When the owner says to finish and the next verify should leave nothing open, add
-  `--close-out` to that verify. It posts the card only when nothing is open after it and no
-  seat was lost; otherwise the `PR close-out:` line says why.
-- When the owner stops the rounds with items still open, or the rounds ended without
-  `--close-out`, ask whether to post the card. Do not post until they say yes. After a yes:
+- Pass `--close-out` on every verify you expect to leave nothing open: every kept id fixed,
+  every finding you chose not to fix in `--dismissed` with a reason, every advisory low in
+  `--low-advisory`. It posts the card only when nothing is open after it and no seat was lost;
+  otherwise the `PR close-out:` line says why.
+- If a verify left nothing open without `--close-out` (it cannot run again at the same head),
+  post the card straight away with `review-panel comment --prior-run-id <review run> --owner-approved`,
+  the command its `PR close-out:` line names: that is the owner's standing rule; do not ask.
+- Ask the owner only to stop the rounds with items still open. After a yes, post the card; it
+  lists them as open:
 
 ```bash
 review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \
   --dismissed '[{"id":"F-2","reason":"..."}]'
 ```
+
+- Post the card before the PR is merged: `comment` posts only to an open PR at the card's head.
+- When the owner config asks for approval first, every post needs a yes, the card's too: ask
+  before `--close-out` or `comment`.
 
 `comment` reads the whole verify chain itself and lists every id as resolved (with the round
 that resolved it), dismissed, low/advisory, or open. Before the card, `comment` and
