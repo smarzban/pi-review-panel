@@ -560,7 +560,8 @@ describe("the actions without Pi", () => {
 
 	it("comment runs from plain inputs", async () => {
 		await withRepository(async (repo) => {
-			writeReviewRecord(repo, "review-1", []);
+			// A review with no findings and no verify has no card (T510).
+			writeReviewRecord(repo, "review-1", [{ id: "F-1", severity: "low" }]);
 			const { bodies, postComment } = poster();
 			const result = await commentAction(
 				{
@@ -605,7 +606,7 @@ describe("comment refuses without the owner's approval, whoever builds its input
 				await expect(
 					commentAction(input, { deps: deps({ postComment }) }),
 				).rejects.toThrow(
-					/^comment refused: ownerApproved must be true after the owner asked to post$/,
+					/^comment refused: ownerApproved must be true: pass it once nothing is open, or when the owner stops the rounds with ids open; when the owner config asks for approval first, only after the owner's yes$/,
 				);
 				expect(bodies).toEqual([]);
 			});
@@ -768,7 +769,8 @@ describe("each action refuses a bad input itself, as an argument object is refus
 
 	it("comment drops an empty head the way an argument object does", async () => {
 		await withRepository(async (repo) => {
-			writeReviewRecord(repo, "review-1", []);
+			// A review with no findings and no verify has no card (T510).
+			writeReviewRecord(repo, "review-1", [{ id: "F-1", severity: "low" }]);
 			const viaCall = poster();
 			await createPanelCaller(
 				deps({ postComment: viaCall.postComment }),

@@ -46,7 +46,11 @@ import {
 	type CloseoutVerifyRound,
 } from "./closeout-comment.js";
 import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
-import { parseJsonPages } from "./closeout-post.js";
+import {
+	CLOSEOUT_HEADING,
+	isCloseoutCardFor,
+	parseJsonPages,
+} from "./closeout-post.js";
 import {
 	chainRounds,
 	REVIEW_ROUND_HEADING,
@@ -84,6 +88,7 @@ import {
 	formatSuggestion,
 	formatSuggestionsUnavailable,
 	inert,
+	NOTHING_OPEN,
 	orderFindings,
 	reviewHeadLines,
 	reviewLostLine,
@@ -105,7 +110,7 @@ const GH_TIMEOUT_MS = 30_000;
 /** Room for a paginated comment listing that holds several full round comments. */
 const GH_MAX_BUFFER = 64 * 1024 * 1024;
 
-export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
+export const CLOSEOUT_ROUND_HEADING = CLOSEOUT_HEADING;
 /**
  * Written exclusively in the review's run record once its close-out card is
  * on the PR; no verify posts a close-out after it. The card is claimed
@@ -409,6 +414,30 @@ async function createComment(
 	return typeof created?.html_url === "string" ? created.html_url : "";
 }
 
+/** Edits a comment in place; only ever this review's own close-out card. */
+async function updateComment(
+	gh: Gh,
+	target: PrTarget,
+	id: number,
+	body: string,
+): Promise<string> {
+	const updated = parseJson(
+		await gh(
+			[
+				"api",
+				"--method",
+				"PATCH",
+				`repos/${target.repo}/issues/comments/${id}`,
+				"--input",
+				"-",
+			],
+			JSON.stringify({ body }),
+		),
+		"the edited comment",
+	) as { html_url?: unknown } | null;
+	return typeof updated?.html_url === "string" ? updated.html_url : "";
+}
+
 /** Cuts whole code points until the text is at most `maxBytes` of UTF-8. */
 function truncateBytes(text: string, maxBytes: number): string {
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) {
@@ -579,6 +608,9 @@ export type ReviewRoundFacts = {
 	suggestions?: Suggestion[] | SuggestionsUnavailable;
 };
 
+/** A review comment's last line when the review had no findings. */
+export const NO_CLOSEOUT_NEEDED = "No findings · no close-out needed";
+
 /** The review comment: the reply's content without the local record path. */
 export function renderReviewRound(facts: ReviewRoundFacts): string {
 	const [, summary, seats] = reviewHeadLines("", facts);
@@ -602,8 +634,14 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 		groups === undefined
 			? orderFindings(findings).map((entry) => findingRow(entry, facts.panel))
 			: groups.map((group) => groupRow(group, facts.panel));
-	if (rows.length === 0) {
-		head.push("None submitted.");
+	const clean = rows.length === 0;
+	// No seat voted: nothing was checked, so it is lost coverage, never clean.
+	const checked = facts.result.outcomes.some(
+		(row) => row.outcome.kind === "voted",
+	);
+	if (clean) {
+		// The closing line below stands in for the empty list.
+		head.pop();
 	}
 	const ran = new Set(facts.panel.map((seat) => seat.lens));
 	const offered = facts.suggestions ?? [];
@@ -623,6 +661,11 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 				...shown.map((row) => ownLine(formatSuggestion(row))),
 			);
 		}
+	}
+	if (clean && checked) {
+		// No findings, so nothing for a close-out card to summarise; once a
+		// verify round follows, the card posts at the end as usual.
+		tail.push("", NO_CLOSEOUT_NEEDED);
 	}
 	tail.push(...markerTail({ review: facts.runId }));
 	return fitCommentBody(
@@ -740,7 +783,9 @@ export function renderVerifyRound(
 	const failed = result.outcomes.filter((row) => row.outcome.kind === "failed");
 	const keptSummary =
 		seen.keptIds.length === 0
-			? "no kept ids"
+			? result.nothingOpen === true && seen.voted > 0
+				? NOTHING_OPEN
+				: "no kept ids"
 			: seen.keptIds
 					.map((id) => githubSafe(dispositionLabel(seen, id), 80))
 					.join(", ");
@@ -748,6 +793,13 @@ export function renderVerifyRound(
 	const head = [
 		`## Review panel · verify ${round}`,
 		`\`${shortOid(result.priorHeadOid)}\` → \`${shortOid(result.headOid)}\``,
+		// The caller's own words, as one line of inert text; the tool adds
+		// nothing of its own.
+		...(result.scopingNote === undefined
+			? []
+			: [
+					`**Why this round:** ${githubSafe(result.scopingNote, EVIDENCE_CHARS)}`,
+				]),
 		[
 			`${seen.voted}/${result.outcomes.length} voted`,
 			keptSummary,
@@ -902,7 +954,11 @@ function commentRefusal(error: unknown): string {
 	);
 }
 
-type IssueComment = { user?: { login?: unknown }; body?: unknown };
+type IssueComment = {
+	id?: unknown;
+	user?: { login?: unknown };
+	body?: unknown;
+};
 
 type CloseoutCard = {
 	/** The card, linking the rounds whose comments were found. */
@@ -970,7 +1026,6 @@ function buildCloseout(
 			lost: review.lost,
 			verifyLost: rounds.flatMap((row) => row.lost ?? []),
 			meta: { ...review.run.meta, headOid: result.headOid },
-			heading: CLOSEOUT_ROUND_HEADING,
 			runIds: { review: review.run.runId, verify: verifyRunId },
 			...(links === undefined ? {} : { links }),
 		});
@@ -1005,29 +1060,32 @@ async function listComments(gh: Gh, target: PrTarget): Promise<unknown[]> {
 	return comments;
 }
 
+/** This review's close-out card among the comments, by this author. */
+function closeoutCardOf(
+	comments: readonly unknown[],
+	target: PrTarget,
+	reviewRunId: string,
+): IssueComment | undefined {
+	return (comments as ReadonlyArray<IssueComment | null>).find((raw) => {
+		const comment = raw as IssueComment | null;
+		if (comment?.user?.login !== target.author) {
+			return false;
+		}
+		// Either path's card: `comment`'s too, under its old heading.
+		return isCloseoutCardFor(
+			typeof comment.body === "string" ? comment.body : "",
+			reviewRunId,
+		);
+	}) as IssueComment | undefined;
+}
+
 /** Is a close-out for this review among the comments, by this author? */
 function hasCloseoutFor(
 	comments: readonly unknown[],
 	target: PrTarget,
 	reviewRunId: string,
 ): boolean {
-	return comments.some((raw) => {
-		const comment = raw as IssueComment | null;
-		if (comment?.user?.login !== target.author) {
-			return false;
-		}
-		const body = typeof comment.body === "string" ? comment.body : "";
-		const [first, second] = body.split(/\r?\n/, 2);
-		if (first?.trim() !== CLOSEOUT_ROUND_HEADING) {
-			return false;
-		}
-		// A card posted before the hidden marker named its review on line 2,
-		// which the tool writes and no seat text reaches.
-		const legacy = `Review ${postedCode(reviewRunId)} `;
-		return (
-			isRunMarkerFor(body, reviewRunId) || second?.startsWith(legacy) === true
-		);
-	});
+	return closeoutCardOf(comments, target, reviewRunId) !== undefined;
 }
 
 /** Is a close-out for this review already on the PR, by this author? */
@@ -1123,12 +1181,18 @@ export async function postVerifyRound(
 	}
 	const blocker = closeoutBlocker(result);
 	if (facts.closeOut !== true) {
-		// Never automatic: say so only when it could have been asked for.
+		// Never automatic: say so only when it could have been asked for, with
+		// the command that posts it at this head (this verify cannot run again
+		// here): now, or after a yes when the owner approves every post.
 		if (blocker === undefined && stateAfter(facts).open.length === 0) {
+			const when =
+				ctx.mode === "ownerApproved"
+					? "the owner config asks for approval first, so after the owner's yes post it"
+					: "post it now";
 			lines.push(
 				notPosted(
 					"PR close-out",
-					`not asked for; nothing is open: once the owner says the rounds are done, post it with ${commentCommand(facts)}`,
+					`not asked for; nothing is open: ${when} at this head with ${commentCommand(facts)}, and pass \`--close-out\` on the last verify next time`,
 				),
 			);
 		}
@@ -1305,18 +1369,29 @@ async function postCloseoutCard(
 	}
 	try {
 		const comments = await listComments(verify.gh, target);
-		if (hasCloseoutFor(comments, target, card.reviewRunId)) {
-			// An automatic close-out is there already (one whose marker a
-			// crash lost): record it, and post nothing.
-			settleCloseout(claim, true);
-			return notPosted(
-				"PR close-out",
-				`a close-out for this review is already on PR #${target.pr}`,
-			);
-		}
 		const body = card.render(
 			closeoutLinks(comments, target, card, round.runId, round.url),
 		);
+		// This review's card is there already (`comment` posted it, perhaps
+		// with ids open, or a crash lost the marker): edit it, under this
+		// claim, so the PR's one card is current.
+		const existing = closeoutCardOf(comments, target, card.reviewRunId);
+		if (existing !== undefined) {
+			const id = existing.id;
+			if (typeof id !== "number" || !Number.isSafeInteger(id) || id < 1) {
+				// No id to edit by: it is still there, so post no second one.
+				settleCloseout(claim, true);
+				return notPosted(
+					"PR close-out",
+					`a close-out for this review is already on PR #${target.pr}`,
+				);
+			}
+			const url = await updateComment(verify.gh, target, id, body);
+			settleCloseout(claim, true);
+			return replyLine(
+				`PR close-out: updated on #${target.pr}${url === "" ? "" : ` (${inert(url)})`}`,
+			);
+		}
 		const url = await createComment(verify.gh, target, body);
 		settleCloseout(claim, true);
 		return posted("PR close-out", target, url);

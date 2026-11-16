@@ -582,7 +582,7 @@ function validateCommentInput(
 ): CommentInput {
 	if (args.ownerApproved !== true) {
 		throw new Error(
-			"comment refused: ownerApproved must be true after the owner asked to post",
+			"comment refused: ownerApproved must be true: pass it once nothing is open, or when the owner stops the rounds with ids open; when the owner config asks for approval first, only after the owner's yes",
 		);
 	}
 	const priorRunId = validateNonEmptyString(args.priorRunId, "priorRunId");
@@ -1087,6 +1087,18 @@ export async function commentAction(
 	};
 	let links = chainNow();
 	let tip = links.at(-1);
+	// A review with no findings and no verify after it has no rounds to
+	// summarise: no card, no seat, no post. Once a verify follows, it has.
+	// A review where no seat voted checked nothing: it is not refused here.
+	if (
+		facts.run.findings.length === 0 &&
+		tip === undefined &&
+		facts.lost.length < facts.panel.seats.length
+	) {
+		throw new Error(
+			`comment refused: review "${facts.run.runId}" had no findings and no verify followed it, so there is no close-out card to post`,
+		);
+	}
 	if (valid.verifyRunId !== undefined) {
 		// A named verify is authenticated as a verify of this review, and
 		// must be the chain's latest: the card is about where the rounds
@@ -1188,6 +1200,7 @@ export async function commentAction(
 	const post = () =>
 		resolved.postComment({
 			repository: repoDir,
+			reviewRunId: facts.run.runId,
 			headOid,
 			body,
 			render: (listing) =>

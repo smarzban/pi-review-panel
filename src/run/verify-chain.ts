@@ -785,7 +785,8 @@ export function judgeRound(
  * The ids a verify checks when the caller names none: every id open after
  * the chain's last link, less what the caller dismisses or leaves as
  * low/advisory now. The first verify of a review has nothing open yet, so
- * it needs the caller's kept ids.
+ * it needs the caller's kept ids, unless the review had no findings: then
+ * there is nothing to keep.
  */
 export function defaultKeptIds(
 	prior: ChainPrior,
@@ -794,6 +795,9 @@ export function defaultKeptIds(
 	lowAdvisory: readonly string[],
 ): string[] {
 	if (prior.previous === undefined) {
+		if (state.items.size === 0) {
+			return [];
+		}
 		throw new Error(
 			`${REFUSED}: keptFindingIds is required for the first verify of a review (pass "" for none)`,
 		);

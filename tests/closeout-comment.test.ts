@@ -177,7 +177,6 @@ describe("renderCloseoutComment", () => {
 			baseRef: "origin/main",
 			baseOid: `5852b7e${"0".repeat(33)}`,
 			headOid: "baf4d30ec838837fc4921c6531dbebb9c0620b10",
-			heading: "## Review panel · close-out",
 			runIds: { review: "r-1", verify: "v-1" },
 			links: {
 				review: `${PR_URL}#issuecomment-11`,
@@ -285,7 +284,7 @@ describe("renderCloseoutComment", () => {
 
 		expect(text).toBe(
 			[
-				"## Review panel",
+				"## Review panel · close-out",
 				"",
 				"**5 findings** (2 high, 1 medium, 2 low) · **1 resolved** in 1 verify round · 2 dismissed · 2 left as low/advisory",
 				"**Review seats:** holistic (terra, glm)",
@@ -459,7 +458,6 @@ describe("renderCloseoutComment", () => {
 			baseRef: "main",
 			baseOid,
 			headOid,
-			heading: "## Review panel · close-out",
 			runIds: { review: "r-1", verify: "v-1000" },
 			links: {
 				review: `${PR_URL}#issuecomment-1`,
@@ -529,7 +527,6 @@ describe("renderCloseoutComment", () => {
 			baseRef: "main",
 			baseOid,
 			headOid,
-			heading: "## Review panel · close-out",
 			runIds: { review: "r-1", verify: "v-1" },
 		});
 		expect(text.length).toBeLessThan(65_536);
@@ -581,7 +578,7 @@ describe("renderCloseoutComment", () => {
 		});
 
 		expect(text.split("\n").filter((line) => /^## /.test(line))).toEqual([
-			"## Review panel",
+			"## Review panel · close-out",
 		]);
 		expect(text).not.toMatch(/^## Ready to merge$/m);
 		expect(text).not.toContain("@org");

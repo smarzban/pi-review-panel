@@ -141,7 +141,8 @@ Give the owner each finding with keep or skip and the reason, plus coverage and 
    places every other finding: dismiss each high or medium you skip with a reason (it is
    refused otherwise); a low you leave out is recorded as low/advisory. `<run>` is the review's
    run id: the last folder of the report's `Record:` line. The full record path on that line
-   also works; a relative path does not.
+   also works; a relative path does not. After a review with no findings, leave out
+   `--kept-finding-ids`.
 
 ```bash
 review-panel verify --prior-run-id <review run> --head <new head> --kept-finding-ids F-1,F-2 \
@@ -161,6 +162,12 @@ review-panel verify --prior-run-id <review run> --head <new head> --kept-finding
 review-panel verify --prior-run-id <latest verify run> --head <new head> \
   --dismissed '[{"id":"V1-R1","reason":"..."}]'
 ```
+
+4. Add `--close-out` to any verify you expect to leave nothing open, the first included: it
+   posts the close-out card once nothing is open (see section 8).
+5. Pass `--scoping-note` on each verify naming where each change came from, such as
+   `"fixes F-2; owner found X; outside re-check found Y"`. The verify comment shows it as
+   `Why this round:`, so a reader can tell why the round exists; the seats read it too.
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
@@ -213,18 +220,30 @@ Recommend landing only when every kept item is resolved, there is no new high/me
 regression on the fix, and lost coverage is named; or when the discovery report had nothing
 you would keep. Name who voted, who failed, and what you kept or skipped.
 
-The close-out card is posted once, at the end, and only when asked:
+The close-out card is posted once, at the end, as soon as nothing is open:
 
-- When the owner says to finish and the next verify should leave nothing open, add
-  `--close-out` to that verify. It posts the card only when nothing is open after it and no
-  seat was lost; otherwise the `PR close-out:` line says why.
-- When the owner stops the rounds with items still open, or the rounds ended without
-  `--close-out`, ask whether to post the card. Do not post until they say yes. After a yes:
+- Pass `--close-out` on every verify you expect to leave nothing open: every kept id fixed,
+  every finding you chose not to fix in `--dismissed` with a reason, every advisory low in
+  `--low-advisory`. It posts the card only when nothing is open after it and no seat was lost;
+  otherwise the `PR close-out:` line says why. If `comment` already posted this review's card (say
+  with ids open), it brings that card up to date instead: `PR close-out: updated on #N`.
+- If a verify left nothing open without `--close-out` (it cannot run again at the same head),
+  post the card straight away with `review-panel comment --prior-run-id <review run> --owner-approved`,
+  the command its `PR close-out:` line names: the card posts once everything is done; do not ask.
+- Ask the owner only to stop the rounds with items still open. After a yes, post the card; it
+  lists them as open:
 
 ```bash
 review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \
   --dismissed '[{"id":"F-2","reason":"..."}]'
 ```
+
+- Post the card before the PR is merged: `comment` posts only to an open PR at the card's head.
+- After a review with no findings and no verify, post no card: the review comment ends
+  `No findings · no close-out needed`, and `comment` refuses. Once a verify follows (later
+  pushes), the card posts at the end as usual.
+- When the owner config asks for approval first, every post needs a yes, the card's too: ask
+  before `--close-out` or `comment`.
 
 `comment` reads the whole verify chain itself and lists every id as resolved (with the round
 that resolved it), dismissed, low/advisory, or open. Before the card, `comment` and
@@ -235,5 +254,5 @@ line `Latest verify:` names the final check: verify against that run id next. Pa
 latest verify; an older one is refused. Pass `--dismissed` and `--low-advisory` only for ids
 still open (or, with no verify, never placed): comment refuses an id a round already resolved,
 dismissed or left as low/advisory, because the card shows it as that round left it. An open id
-you name here is dismissed (or low/advisory) on the card, not open. It updates the one existing panel card instead of opening a second
+you name here is dismissed (or low/advisory) on the card, not open. It updates this review's one close-out card, even one `--close-out` posted, instead of opening a second
 one. Never write ready to merge on the card.

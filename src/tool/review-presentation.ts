@@ -634,6 +634,10 @@ export function dispositionLabel(facts: VerifyFacts, id: string): string {
 	return states.length === 0 ? id : `${id} ${states.join("/")}`;
 }
 
+/** A verify's headline when nothing was open before it. */
+export const NOTHING_OPEN =
+	"Nothing was open; this round checked the new commits for regressions only";
+
 export function renderVerifyResult(
 	result: RunVerifyResult,
 	panel: readonly PlannedSeat[] = result.outcomes.map((facts) => facts.seat),
@@ -650,7 +654,11 @@ export function renderVerifyResult(
 	const keptSummary = keptIds.map((id) => dispositionLabel(facts, id));
 	const summary = [
 		`${voted.length}/${result.outcomes.length} voted`,
-		...(keptSummary.length > 0 ? [keptSummary.join(", ")] : ["no kept ids"]),
+		keptSummary.length > 0
+			? keptSummary.join(", ")
+			: result.nothingOpen === true && voted.length > 0
+				? NOTHING_OPEN
+				: "no kept ids",
 		regressions.length === 0
 			? "no regressions"
 			: `${regressions.length} regression${regressions.length === 1 ? "" : "s"}`,

@@ -207,7 +207,7 @@ async function runAction(
 ): Promise<number> {
 	if (action === "comment" && args.ownerApproved !== true) {
 		throw new RefusalError(
-			"comment refused: pass --owner-approved (ownerApproved: true) only after the owner asked to post",
+			"comment refused: pass --owner-approved (ownerApproved: true) once nothing is open, or when the owner stops the rounds with ids open; when the owner config asks for approval first, only after the owner's yes",
 		);
 	}
 	const context: ActionContext = {

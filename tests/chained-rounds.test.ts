@@ -29,15 +29,18 @@ import type { SeatSpec } from "../src/seat/sdk-session.js";
 import {
 	findCloseoutPr,
 	type PostCloseoutInput,
+	postCloseoutComment,
 } from "../src/tool/closeout-post.js";
+import { postedText } from "../src/tool/posted-text.js";
 import type { RoundGhRunner } from "../src/tool/round-post.js";
 import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 
 /**
  * The verify flow as rounds on one PR: each verify chains from the one
  * before, checks only what is still open, and posts a short delta. The
- * close-out card is posted once, only when asked: `verify --close-out` when
- * nothing is left open, or `comment` when the owner stops the rounds.
+ * close-out card is posted once nothing is open: `verify --close-out`, or
+ * `comment` after a verify that left nothing open without it, or when the
+ * owner stops the rounds with ids still open.
  * Nothing here reaches GitHub: gh is a script.
  */
 
@@ -72,10 +75,11 @@ const FINDINGS = [
 	finding("F-5", "medium", "log line prints the request body"),
 ];
 
-const config: Config = {
+const BASE_CONFIG: Config = {
 	roster: [{ id: "terra", provider: "openai-codex", model: "gpt-5.6-terra" }],
 	defaults: { seats: ["terra"] },
 };
+let config: Config = BASE_CONFIG;
 
 type Item = { id: string; disposition: "resolved" | "still present" };
 type Regression = {
@@ -101,6 +105,7 @@ let comments: Array<{
 }>;
 
 beforeEach(() => {
+	config = BASE_CONFIG;
 	root = mkdtempSync(path.join(tmpdir(), "chained-rounds-"));
 	repo = path.join(root, "repo");
 	mkdirSync(repo);
@@ -115,12 +120,25 @@ beforeEach(() => {
 		commits.push(git(repo, ["rev-parse", "HEAD"]));
 	}
 	repo = realpathSync(repo);
-	const recordPath = path.join(repo, ".review-panel", "runs", REVIEW);
+	writeReview(REVIEW, FINDINGS);
+	specs = [];
+	answers = [];
+	calls = [];
+	comments = [];
+});
+
+/** A signed, complete review record at commits[1]. */
+function writeReview(
+	runId: string,
+	findings: StampedFinding[],
+	allLost = false,
+): void {
+	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
 	writeFileSync(
 		path.join(recordPath, "meta.json"),
 		JSON.stringify({
-			runId: REVIEW,
+			runId: runId,
 			baseRef: "main",
 			baseOid: commits[0],
 			headOid: commits[1],
@@ -129,7 +147,7 @@ beforeEach(() => {
 	writeFileSync(
 		path.join(recordPath, "panel.json"),
 		JSON.stringify({
-			runId: REVIEW,
+			runId: runId,
 			baseRef: "main",
 			seats: [
 				{
@@ -143,19 +161,31 @@ beforeEach(() => {
 	);
 	writeFileSync(
 		path.join(recordPath, "findings.json"),
-		JSON.stringify(FINDINGS),
+		JSON.stringify(findings),
 	);
+	if (allLost) {
+		writeFileSync(
+			path.join(recordPath, "execution.json"),
+			JSON.stringify({
+				outcomes: [
+					{
+						seat: { rosterId: "terra", lens: "holistic" },
+						outcome: { kind: "failed" },
+					},
+				],
+			}),
+		);
+	}
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	signReviewRecord(recordPath);
-	specs = [];
-	answers = [];
-	calls = [];
-	comments = [];
-});
+}
 
 afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
+
+/** The head PR 12 was last asked about, for a lookup of the PR by number. */
+let prHead = "";
 
 /** gh as a script: PR 12 is open at whatever head is asked about. */
 const runGh: RoundGhRunner = (args, options) => {
@@ -172,6 +202,7 @@ const runGh: RoundGhRunner = (args, options) => {
 	}
 	const head = /commits\/([0-9a-f]+)\/pulls/.exec(joined);
 	if (head !== null) {
+		prHead = head[1] as string;
 		return JSON.stringify([
 			{ number: 12, state: "open", head: { sha: head[1] } },
 		]);
@@ -182,6 +213,18 @@ const runGh: RoundGhRunner = (args, options) => {
 		const html_url = `https://github.com/${REPO_SLUG}/pull/12#issuecomment-${id}`;
 		comments.push({ id, html_url, body, user: { login: "saeed" } });
 		return JSON.stringify({ id, html_url });
+	}
+	if (/repos\/[^/]+\/[^/]+\/pulls\/12$/.test(args[1] ?? "")) {
+		return JSON.stringify({ number: 12, state: "open", head: { sha: prHead } });
+	}
+	const patched = /issues\/comments\/(\d+)/.exec(joined);
+	if (patched !== null && joined.includes("PATCH")) {
+		const row = comments.find((entry) => entry.id === Number(patched[1]));
+		if (row === undefined) {
+			throw new Error(`no comment ${patched[1]}`);
+		}
+		row.body = (JSON.parse(options?.input ?? "{}") as { body: string }).body;
+		return JSON.stringify({ id: row.id, html_url: row.html_url });
 	}
 	if (/issues\/12\/comments/.test(joined)) {
 		return JSON.stringify(comments);
@@ -313,7 +356,12 @@ async function verify(args: Record<string, unknown>, answer: Answer) {
 			{ deps: deps() },
 		),
 	);
-	return { reply, runId: recordOf(reply), body: posted().at(-1) ?? "" };
+	return {
+		reply,
+		runId: recordOf(reply),
+		body: posted().at(-1) ?? "",
+		url: verifyComments().at(-1)?.html_url ?? "",
+	};
 }
 
 const NULL_CHECK: Regression = {
@@ -557,6 +605,306 @@ describe("one number per round (S-4)", () => {
 	});
 });
 
+const CLEAN = "2026-11-15T10-00-00-000Z-main-clean";
+const NOTHING_OPEN =
+	"Nothing was open; this round checked the new commits for regressions only";
+
+describe("a review with no findings (T510)", () => {
+	beforeEach(() => {
+		writeReview(CLEAN, []);
+	});
+
+	it("the first verify needs no kept ids", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [] },
+		);
+		expect(path.basename(v1.runId)).toMatch(/verify/u);
+		expect(specs).toHaveLength(1);
+		expect(specs[0]?.model).toBe("gpt-5.6-terra");
+	});
+
+	it("comment refuses the card while no verify has followed, before any seat or post", async () => {
+		await expect(
+			commentAction(
+				{
+					repoDir: repo,
+					ownerApproved: true,
+					priorRunId: CLEAN,
+					dismissed: [],
+					lowAdvisory: [],
+				},
+				{ deps: deps() },
+			),
+		).rejects.toThrow(
+			`comment refused: review "${CLEAN}" had no findings and no verify followed it, so there is no close-out card to post`,
+		);
+		expect(specs).toEqual([]);
+		expect(comments).toEqual([]);
+	});
+
+	it("comment does not refuse a review where no seat voted: nothing was checked", async () => {
+		writeReview(`${CLEAN}-lost`, [], true);
+		let refusal = "";
+		await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId: `${CLEAN}-lost`,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{ deps: deps() },
+		).catch((error: unknown) => {
+			refusal = String(error);
+		});
+		expect(refusal).not.toContain("had no findings and no verify followed it");
+	});
+
+	it("once a verify follows, --close-out posts the card for its rounds", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], closeOut: true },
+			{ items: [] },
+		);
+		expect(v1.reply).toContain("PR close-out: posted to #12");
+		expect(closeouts()).toHaveLength(1);
+	});
+
+	it("once a verify follows, comment posts the card", async () => {
+		await verify({ priorRunId: CLEAN, head: commits[2] }, { items: [] });
+		const card = await stopWith({ priorRunId: CLEAN });
+		expect(card.body).toMatch(/^## Review panel · close-out\n/u);
+	});
+});
+
+describe("a verify with nothing open (T510)", () => {
+	it("the first verify of a review with no findings says so plainly", async () => {
+		writeReview(CLEAN, []);
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [] },
+		);
+		const headline = `1/1 voted · ${NOTHING_OPEN} · no regressions`;
+		expect(v1.reply.split("\n")[1]).toBe(headline);
+		expect(v1.body.split("\n")[2]).toBe(headline);
+		expect(`${v1.reply}\n${v1.body}`).not.toContain("no kept ids");
+	});
+
+	it("a round whose every seat was lost does not say it checked anything", async () => {
+		writeReview(CLEAN, []);
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [], lost: true },
+		);
+		expect(v1.reply.split("\n")[1]).toBe(
+			"0/1 voted · no kept ids · no regressions",
+		);
+		expect(v1.body.split("\n")[2]).toBe(
+			"0/1 voted · no kept ids · no regressions",
+		);
+		expect(`${v1.reply}\n${v1.body}`).not.toContain(NOTHING_OPEN);
+	});
+
+	it("after the chain closed everything, says so plainly instead of no kept ids", async () => {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		const v3 = await verify(
+			{ priorRunId: v2.runId, head: commits[4] },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		expect(v3.reply).not.toContain(NOTHING_OPEN);
+		const v4 = await verify(
+			{ priorRunId: v3.runId, head: commits[5] },
+			{ items: [] },
+		);
+		expect(v4.reply.split("\n")[1]).toBe(
+			`1/1 voted · ${NOTHING_OPEN} · no regressions`,
+		);
+		expect(v4.body.split("\n")[2]).toBe(
+			`1/1 voted · ${NOTHING_OPEN} · no regressions`,
+		);
+	});
+
+	it("a round that names no ids while some are open keeps no kept ids", async () => {
+		const v1 = await round1();
+		const v2 = await verify(
+			{
+				priorRunId: v1.runId,
+				head: commits[3],
+				keptFindingIds: [],
+				dismissed: [
+					{ id: "F-2", reason: "by design" },
+					{ id: "F-5", reason: "redacted upstream" },
+					{ id: "V1-R1", reason: "not reachable" },
+				],
+			},
+			{ items: [] },
+		);
+		expect(v2.reply.split("\n")[1]).toBe(
+			"1/1 voted · no kept ids · no regressions",
+		);
+	});
+});
+
+/** `comment` posting through gh as a script, as it does for real. */
+async function commentForReal(priorRunId: string) {
+	return textOf(
+		await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{
+				deps: {
+					...deps(),
+					postComment: (input: PostCloseoutInput) =>
+						postCloseoutComment({ ...input, runGh: runGh as never }),
+				},
+			},
+		),
+	);
+}
+
+function verifyComments() {
+	return comments.filter((row) =>
+		row.body.startsWith("## Review panel · verify "),
+	);
+}
+
+describe("one close-out card per review, whichever path posts it (T510)", () => {
+	beforeEach(() => {
+		writeReview(CLEAN, []);
+	});
+
+	it("comment after a --close-out card and more verifies updates that card, linking every round", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], closeOut: true },
+			{ items: [] },
+		);
+		expect(closeouts()).toHaveLength(1);
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3] },
+			{ items: [] },
+		);
+		await verify({ priorRunId: v2.runId, head: commits[4] }, { items: [] });
+		const cardId = comments.find((row) =>
+			row.body.startsWith("## Review panel · close-out"),
+		)?.id;
+		const reply = await commentForReal(CLEAN);
+		expect(reply.split("\n")[0]).toBe("Posted comment on PR #12 (updated)");
+		expect(closeouts()).toHaveLength(1);
+		expect(
+			comments.filter((row) => row.body.startsWith("## Review panel")),
+		).toHaveLength(4);
+		const card = comments.find((row) => row.id === cardId)?.body ?? "";
+		expect(card.split("\n")[0]).toBe("## Review panel · close-out");
+		expect(card).toContain("3 verify rounds");
+		for (const round of verifyComments()) {
+			expect(card).toContain(`(${round.html_url})`);
+		}
+	});
+
+	it("--close-out after a comment card edits that card, so the PR's one card is current", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2] },
+			{ items: [] },
+		);
+		const reply = await commentForReal(CLEAN);
+		expect(reply.split("\n")[0]).toBe("Posted comment on PR #12 (created)");
+		const cardId = comments.find((row) =>
+			row.body.startsWith("## Review panel · close-out"),
+		)?.id;
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
+			{ items: [] },
+		);
+		expect(v2.reply).toContain(
+			`PR close-out: updated on #12 (https://github.com/${REPO_SLUG}/pull/12#issuecomment-${cardId})`,
+		);
+		expect(closeouts()).toHaveLength(1);
+		const card = comments.find((row) => row.id === cardId)?.body ?? "";
+		expect(card).toContain("2 verify rounds");
+		expect(card).toContain(`(${v2.url})`);
+		expect(card).toContain(`verify=${v2.runId} -->`);
+		expect(
+			comments.filter((row) => row.body.startsWith("## Review panel\n")),
+		).toEqual([]);
+	});
+
+	it("--close-out twice: the second posts and edits nothing", async () => {
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], closeOut: true },
+			{ items: [] },
+		);
+		expect(v1.reply).toContain("PR close-out: posted to #12");
+		const before = comments.map((row) => row.body);
+		const v2 = await verify(
+			{ priorRunId: v1.runId, head: commits[3], closeOut: true },
+			{ items: [] },
+		);
+		expect(v2.reply).toContain(
+			"PR close-out: not posted (this review's close-out is already posted)",
+		);
+		expect(closeouts()).toHaveLength(1);
+		expect(comments.slice(0, before.length).map((row) => row.body)).toEqual(
+			before,
+		);
+		expect(calls.some((call) => call.args.includes("PATCH"))).toBe(false);
+	});
+});
+
+describe("a comment card with ids open, then fixes and --close-out (T510)", () => {
+	it("the one card is brought up to date: every id resolved, the new round linked", async () => {
+		const v1 = await round1();
+		const v2 = await round2(v1.runId);
+		// The owner stops with F-2 open; comment's final check finds nothing.
+		answers.push({ items: [] });
+		const stopped = await commentForReal(REVIEW);
+		expect(stopped.split("\n")[0]).toBe("Posted comment on PR #12 (created)");
+		const cardId = comments.find((row) =>
+			row.body.startsWith("## Review panel · close-out"),
+		)?.id;
+		expect(comments.find((row) => row.id === cardId)?.body).toContain(
+			"### Open (not resolved)",
+		);
+		// The fix lands; the final check after it finds nothing.
+		const v4 = await verify(
+			{ priorRunId: latestOf(stopped), head: commits[4], closeOut: true },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		expect(v4.reply).toContain("PR close-out: updated on #12");
+		expect(closeouts()).toHaveLength(1);
+		const card = comments.find((row) => row.id === cardId)?.body ?? "";
+		expect(card).not.toContain("### Open (not resolved)");
+		expect(card).toContain("resolved in verify 4");
+		expect(card).toContain(`(${v4.url})`);
+	});
+});
+
+describe("why this round (T510)", () => {
+	it("the verify comment shows the caller's scoping note as one inert line under the range", async () => {
+		writeReview(CLEAN, []);
+		const note =
+			"fixes F-2; owner found @team's `bug`\nouter re-check found $x";
+		const v1 = await verify(
+			{ priorRunId: CLEAN, head: commits[2], scopingNote: note },
+			{ items: [] },
+		);
+		const lines = v1.body.split("\n");
+		expect(lines[1]).toMatch(/^`[0-9a-f]{7}` → `[0-9a-f]{7}`$/u);
+		expect(lines[2]).toBe(`**Why this round:** ${postedText(note)}`);
+		expect(lines[2]).not.toContain("@team");
+	});
+
+	it("no note, no line", async () => {
+		const v1 = await round1();
+		expect(v1.body).not.toContain("Why this round");
+	});
+});
+
 describe("--close-out", () => {
 	it("with ids still open: posts the verify comment, and says why the card is not posted", async () => {
 		const v1 = await round1();
@@ -583,7 +931,7 @@ describe("--close-out", () => {
 		expect(closeouts()).toEqual([]);
 	});
 
-	it("without it, a verify that leaves nothing open posts no card and says how to ask for one", async () => {
+	it("without it, a verify that leaves nothing open posts no card, names the command that posts it now and says to pass --close-out next time", async () => {
 		const v1 = await round1();
 		const v2 = await round2(v1.runId);
 		const v3 = await verify(
@@ -592,16 +940,38 @@ describe("--close-out", () => {
 		);
 		expect(closeouts()).toEqual([]);
 		expect(v3.reply).toContain(
-			`PR close-out: not posted (not asked for; nothing is open: once the owner says the rounds are done, post it with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`)`,
+			`PR close-out: not posted (not asked for; nothing is open: post it now at this head with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`, and pass \`--close-out\` on the last verify next time)`,
 		);
+		expect(v3.reply).not.toContain("once the owner says");
 		// The hinted step works as written (R-6).
 		const hinted = /`(review-panel comment [^`]+)`/u.exec(v3.reply)?.[1] ?? "";
 		const command = parseCommand(hinted.split(" ").slice(1));
 		expect(command.kind).toBe("action");
 		const args = (command as { args: Record<string, unknown> }).args;
 		const card = await stopWith(args);
-		expect(card.body).toMatch(/^## Review panel\n/u);
+		expect(card.body).toMatch(/^## Review panel · close-out\n/u);
 		expect(card.body).toContain("resolved in verify 3");
+	});
+
+	it("without it, under an owner config that asks for approval first, the hint posts the card only after the owner's yes", async () => {
+		config = {
+			...BASE_CONFIG,
+			defaults: { ...BASE_CONFIG.defaults, prComment: "ownerApproved" },
+		};
+		const v1 = await round1();
+		expect(v1.reply).toContain(
+			"PR comment: not posted (the owner config asks for approval first)",
+		);
+		const v2 = await round2(v1.runId, { ownerApproved: true });
+		const v3 = await verify(
+			{ priorRunId: v2.runId, head: commits[4], ownerApproved: true },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		expect(closeouts()).toEqual([]);
+		expect(v3.reply).toContain(
+			`PR close-out: not posted (not asked for; nothing is open: the owner config asks for approval first, so after the owner's yes post it at this head with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`, and pass \`--close-out\` on the last verify next time)`,
+		);
+		expect(v3.reply).not.toContain("post it now");
 	});
 
 	it("is taken by the parser and by a call object", () => {

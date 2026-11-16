@@ -63,15 +63,22 @@ one open PR whose head is the run's head, by default, as a new comment (`## Revi
 `## Review panel · verify N`). Verify rounds chain (see "Verify chain" below): each verify checks
 only what is open after the latest one. A verify posts the close-out card
 (`## Review panel · close-out`, once per review) only when asked with `--close-out`, and then only
-when nothing is open after a verify with no lost seat; never automatically mid-way. The card is
+when nothing is open after a verify with no lost seat; never automatically mid-way. The skill
+passes `--close-out` on every verify it expects to leave nothing open; without it, such a verify's
+reply names the `comment` command that posts the card now, at that head. The card is
 presentation, not a verdict: the agents judge and the owner merges.
 `--no-pr-comment` (`prComment: false` in a `call` object) turns posting off for a run, and owner config
 `defaults.prComment: "ownerApproved"` makes every post need `--owner-approved`. A post that
 cannot be made is one reply line, never a run failure.
-`comment` stays the manual path: it posts or updates one PR card after the owner says yes
-(`--owner-approved`), found later by author plus heading `## Review panel`. It posts only to an
-open PR whose head is the commit the card is about: the one `--pr` names, or the one open PR at
-that head. Both cards are built from the review and its whole verify chain (`comment` reads it
+`comment` stays the manual path: it posts or updates one PR card with `--owner-approved`
+(passed once nothing is open, or when the owner stops the rounds with ids open), found later
+by `isCloseoutCardFor` (`src/tool/closeout-post.ts`): author, heading `## Review panel · close-out`
+(or the old `## Review panel`) and this review's marker, so it updates the card a `--close-out`
+posted, and a later `--close-out` finds the card `comment` posted. Both paths render the one
+heading. A review with no findings and no verify after it has
+no card: its review comment ends `No findings · no close-out needed` (`NO_CLOSEOUT_NEEDED`; only when some seat voted, since a review where none did checked nothing), and
+`comment` refuses it right after loading the chain, before any seat or post. It posts only to an open PR whose head is the commit
+the card is about: the one `--pr` names, or the one open PR at that head. Both cards are built from the review and its whole verify chain (`comment` reads it
 itself; a `verifyRunId` it is given must be the latest link) and list each id as “resolved in
 verify N” (N the place in the chain of the link that resolved it, the same `verify N` its comment
 posts as, whether or not it posted),
@@ -163,7 +170,9 @@ verify exists, or a verify that is not the tip, naming the tip. `chainState` wal
 dismissals and low/advisory first, then each kept id resolved (every voting seat that answered
 said resolved, `resolvedIdsOf`, in a round that lost no seat) or open, then the link's regressions, open, with ids
 `V<link>-R<n>` numbered across its voting seats in order (`regressionsOf`; `runVerify` stamps the
-same ids into the record). A resolved, dismissed or low/advisory id is not judged again. The diff
+same ids into the record). A resolved, dismissed or low/advisory id is not judged again. A verify (not the final check)
+that keeps no ids when nothing was open and nothing was left to place returns `nothingOpen`, and
+its headline says so instead of `no kept ids` when at least one seat voted. Omitted kept ids (`defaultKeptIds`) are every open id on a chained verify and none on the first verify of a review with no findings; the first verify of a review with findings refuses without them. The diff
 base is the prior link's head, checked to be a commit here. The undo guard passes every resolved
 id to the seat (`undoableIds`, by closure like `expectedIds`, and in the replay spec); its title,
 file and the verifier's note go only in the data appendix through `inertLine` with caps, and a
@@ -181,6 +190,11 @@ is still the tip, naming the verify that chained from it, so the paused run is l
 chain goes on. The fork refusal in `loadVerifyChain` stays as a backstop for the one window
 left: two verifies that both pass that check before either signs. `comment` reads no claim; it
 takes one only through the final check it runs, and a live one refuses it with the holder named.
+
+A verify's `scopingNote` goes to its seats in the scope note and back on `RunVerifyResult`
+(never on the final check), and the verify comment shows it under the range as
+`**Why this round:**` through `githubSafe` (one line, `EVIDENCE_CHARS`). It is not in the signed
+record: verify has no resume, and the comment is posted by the run that took the note.
 
 The final check (S-6) is `runVerify` with `final: true`, from the tip at the tip's head: base is
 the review head, no kept ids, `undoableIds` = every resolved id, one seat
@@ -227,13 +241,16 @@ so its posted size has a fixed cap. The only links the tool writes are the close
 links to this PR's own comments (`postedLink`), whose URL must be exactly
 `https://<host>/<owner>/<repo>/pull/<n>#issuecomment-<id>`. File
 names and ids are code spans with a fence longer than any backtick run inside, with nothing
-escaped or joined in them, and a value with nothing visible renders as `(empty)`. Labels the
+escaped or joined in them, and a value with nothing visible renders as `(empty)`. The caller's verify `scopingNote` posts like seat text, as one line
+after `**Why this round:**`; the review comment's `No findings · no close-out needed` is the
+tool's own line. Labels the
 tool writes are bold (`**Seats:**`, `**F-1 [high]**`); seat text never is. No run id appears in
 visible text: each body ends with one hidden `<!-- review-panel review=<id> verify=<id> -->`
 marker holding only ids of the run-id character set (an id with `--`, from a base ref such as
 `HEAD^`, is safe: the marker is its own HTML block, which only `-->` ends), and the close-out
-duplicate check matches author, first-line heading and that exact marker as the last non-empty
-line, or, for a card posted before the marker, ``Review `<id>` `` on line 2.
+duplicate check (and `comment`'s lookup) matches author, first-line heading (`## Review panel ·
+close-out`, or the old `## Review panel`) and that exact marker as the last non-empty line, or,
+for a card posted before the marker, ``Review `<id>` `` on line 2.
 Bodies are cut by rows in order (`fitCommentBody`): a group that does not fit whole posts its
 header, first member and a cut line, later rows are still tried, and what is left then goes to
 that group's further members; a plain row, or a group that cannot fit even its first member,
@@ -254,7 +271,11 @@ verify's round (a POST `gh` reports as
 failed after GitHub accepted it gives its claim back; that repeat is set aside). The
 close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
 to the PR's comments, then to the next generation; only a generation's creator posts, and a
-posted card writes `closeout.posted` (`wx`), which stops every later verify. Every posted marker
+posted card writes `closeout.posted` (`wx`), which stops every later verify. A creator that finds
+this review's card already on the PR (`closeoutCardOf`, by `isCloseoutCardFor`: `comment`'s card,
+or one whose marker a crash lost) PATCHes that comment with the current card under its claim
+instead of posting, then writes `closeout.posted` (`PR close-out: updated on #N`); a stale
+generation that finds the card still only writes `closeout.posted`, with no claim to edit under. Every posted marker
 (`round-<N>.posted`, `closeout.posted`) holds a MAC from the owner's record key over the
 record's run id, the marker's file name and the verify that wrote it; an unsigned or copied
 marker, or one signed for another verify, is no marker for this verify, and the verify that

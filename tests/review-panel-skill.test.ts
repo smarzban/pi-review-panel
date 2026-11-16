@@ -221,12 +221,46 @@ describe("review-panel skill", () => {
 		expect(base).toBeGreaterThan(fetch);
 	});
 
-	it("posts the comment only after the owner says yes", () => {
-		const body = splitFrontmatter(readSkill()).body;
-		expect(body).toContain("review-panel comment --prior-run-id");
-		expect(body).toContain("--owner-approved");
-		expect(body).toContain("Do not post until they say yes");
+	it("posts the close-out card once nothing is open, and asks the owner only to stop with items open (T510)", () => {
+		const body = flat(splitFrontmatter(readSkill()).body);
+		expect(body).toContain(
+			"Pass `--close-out` on every verify you expect to leave nothing open",
+		);
+		expect(body).toContain(
+			"post the card straight away with `review-panel comment --prior-run-id <review run> --owner-approved`",
+		);
+		expect(body).toContain(
+			"the card posts once everything is done; do not ask",
+		);
+		expect(body).toContain(
+			"Ask the owner only to stop the rounds with items still open",
+		);
+		expect(body).toContain("Post the card before the PR is merged");
+		expect(body).toContain(
+			"When the owner config asks for approval first, every post needs a yes, the card's too",
+		);
+		expect(body).toContain("Never treat a posted close-out as an approval");
+		const atVerify = body.indexOf(
+			"Add `--close-out` to any verify you expect to leave nothing open, the first included",
+		);
+		expect(atVerify).toBeGreaterThan(body.indexOf("## 6. Fix and verify"));
+		expect(atVerify).toBeLessThan(body.indexOf("## 7. Resume"));
+		expect(body).toContain(
+			"After a review with no findings and no verify, post no card",
+		);
+		expect(body).not.toContain("Do not post until they say yes");
+		expect(body).not.toContain("When the owner says to finish");
 		expect(body).not.toMatch(/ready to merge\b(?! on the card)/i);
+	});
+
+	it("passes a verify scoping note that names where each change came from (T510)", () => {
+		const body = flat(splitFrontmatter(readSkill()).body);
+		const at = body.indexOf(
+			"Pass `--scoping-note` on each verify naming where each change came from",
+		);
+		expect(at).toBeGreaterThan(body.indexOf("## 6. Fix and verify"));
+		expect(at).toBeLessThan(body.indexOf("## 7. Resume"));
+		expect(body).toContain("`Why this round:`");
 	});
 
 	it("never treats an exit code as a pass", () => {

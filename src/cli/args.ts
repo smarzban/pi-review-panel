@@ -576,7 +576,7 @@ Actions:
                                [--dismissed <json> | --dismissed @<file> | --dismissed -] [--close-out]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]
   resume                       Run the unfinished seats of an interrupted run again: --prior-run-id <run>
-  comment                      Post or update the manual close-out PR card, after the owner said yes: --prior-run-id <run> --owner-approved
+  comment                      Post or update the manual close-out PR card, once nothing is open or when the owner stops the rounds: --prior-run-id <run> --owner-approved
                                [--pr <n>] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4]
                                [--dismissed <json> | --dismissed @<file> | --dismissed -]
   call '<json>'                Run one action from its argument object, e.g. '{"action":"diagnose"}' (- reads it from stdin)

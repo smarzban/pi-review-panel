@@ -41,12 +41,15 @@ What you get instead:
   ids you kept — not a second full discovery circus. Each later verify chains
   from the last one and checks only what is still open.
 - **Each round on the PR.** When the head is an open PR, the review and each
-  verify post a new comment there. The close-out card is posted once, at the end,
-  when asked (`verify --close-out` when nothing is left open, or `comment` when the
-  owner stops the rounds), after one final check of the whole change: counts by severity, each id with the verify round that
-  resolved it or listed as still open, the verify seats, dismissals with reasons,
+  verify post a new comment there. The close-out card is posted once, as soon as
+  nothing is left open (`verify --close-out`, or `comment` right after a verify that
+  left nothing open without it); the owner's say is needed only to stop the rounds with
+  ids still open (`comment` then lists them as open). One final check of the whole
+  change runs first. The card shows counts by severity, each id with the verify
+  round that resolved it or listed as still open, the verify seats, dismissals with reasons,
   leftover lows, and links to the review and verify comments. Never “fixed”, never
-  “ready to merge.” Turn it off per run
+  “ready to merge.” A review with no findings and no verify after it needs no card:
+  its comment says so. Turn it off per run
   with `--no-pr-comment`, or set `defaults.prComment: "ownerApproved"` so every
   post needs the owner's yes.
 
@@ -163,7 +166,9 @@ review-panel verify --prior-run-id <latest verify run-id> --head HEAD [--close-o
 
 Review and verify post their round to the open PR whose head is the run's head
 (see [Posting rounds](docs/configuration.md#posting-rounds-to-the-pull-request)).
-`comment` is the manual close-out card, posted or updated only after the owner says yes:
+Pass `--close-out` on the verify you expect to leave nothing open. `comment` is the manual
+close-out card: run it right after a verify that left nothing open without `--close-out`, or
+when the owner stops the rounds with ids still open:
 
 ```bash
 review-panel comment --prior-run-id <run-id> --owner-approved --pr 29

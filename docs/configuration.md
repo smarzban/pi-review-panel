@@ -412,7 +412,7 @@ Verify rounds form a chain. Each verify checks only what is still open after the
 it, against the diff from that verify's head:
 
 1. The first verify takes the review's run id as `priorRunId` and needs `keptFindingIds`
-   (`""` for none). It places every review finding: kept, dismissed with a reason, or left as
+   (`""` for none), except after a review with no findings, where it defaults to none. It places every review finding: kept, dismissed with a reason, or left as
    low/advisory. A high or medium it leaves out is refused before any seat runs, naming the
    ids; a low it leaves out is left as low/advisory and recorded so. It checks the kept ids
    against `<review head>...<head>`.
@@ -532,11 +532,16 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     across a sync. A claim with unreadable content is judged by its age on disk.
   - One case is set aside: when `gh` reports a POST as failed (it timed out or was interrupted)
     after GitHub had already accepted it, the claim is given back and no marker is written.
-  It is a short delta: an `Open after this round:` line naming every id still open after this
+  It is a short delta: under the commit range, `**Why this round:**` and the caller's
+  `scopingNote` as one line of inert plain text (cut at 1,000 characters, escaped like seat text;
+  no note, no line, and the final check shows none), then an `Open after this round:` line naming every id still open after this
   verify (or `none`), each kept id as resolved, still present or inconclusive with the panel's
   one-line evidence, each `dismissed` id with its reason, each `lowAdvisory` id as not kept,
   and the regressions as new findings, by their `V<link>-R<n>` id, with `· undoes F-1` when
-  one undoes an earlier fix. Verify checks `dismissed` and `lowAdvisory` against the review
+  one undoes an earlier fix. When nothing was open before the verify (no open id, and no
+  finding left to place) and at least one seat voted, its headline, in the comment and the
+  reply, says `Nothing was open; this round checked the new commits for regressions only`
+  instead of `no kept ids`. Verify checks `dismissed` and `lowAdvisory` against the review
   record and the chain before any seat runs.
 - A verify never posts the close-out card by itself. With `closeOut: true` (CLI `--close-out`),
   it posts the card as a separate comment, `## Review panel · close-out`, only when every verify
@@ -554,11 +559,17 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   the `Final check:` line names `review-panel comment`, which checks again. Otherwise
   only the verify comment is posted, and the reply says why, such as
   `PR close-out: not posted (F-2 is still present)`, `PR close-out: not posted (still open: F-2)`
-  or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. Without
-  `closeOut`, a verify that leaves nothing open names the command that posts the card:
-  `review-panel comment --prior-run-id <review> --owner-approved`, once the owner says the
-  rounds are done (a verify cannot be run again at the same head). When the owner
-  stops the rounds with ids still open, `comment` posts the card listing them as open. `comment`
+  or `PR close-out: not posted (lost verify coverage: glm/fix-verification)`. The card is
+  posted once everything is done: pass `closeOut` on every verify you expect to leave nothing
+  open. Without it, a verify that leaves nothing open says the card was not asked for, names the
+  command that posts it now at this head,
+  `review-panel comment --prior-run-id <review> --owner-approved` (a verify cannot be run again
+  at the same head), and says to pass `--close-out` on the last verify next time; run it then,
+  before the PR is merged, with no further ask. The owner's say is needed only to stop the
+  rounds with ids still open: `comment` then posts the card listing them as open. An owner who
+  wants to approve every post sets `defaults.prComment: "ownerApproved"`; a verify posts
+  nothing without the owner's yes then, and when the owner approved that round, its reply says
+  to post the card after the owner's yes too. `comment`
   runs the final check too, after its own refusals and before the card, when it is due, and
   the reply names it as the latest verify. When ids were already open, it only reports: what
   it finds is listed as open, and a lost seat is named on `Lost:` and on the
@@ -582,12 +593,15 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   - Otherwise the verify creates `closeout.claim-1` exclusively (`wx`), with the same contents as a
     round claim, and checks `closeout.posted` again after the create. Only the creator of a claim
     posts. Before posting it checks the PR's comments for a close-out of this review by the same
-    author: the first line is `## Review panel · close-out` and the last non-empty line is exactly
-    that review's hidden marker (the manual card does not count; its heading differs). Seat text
+    author: the first line is `## Review panel · close-out` (or `## Review panel`, the heading
+    `comment` used before) and the last non-empty line is exactly that review's hidden marker, so
+    a card `comment` posted counts too. Seat text
     cannot make that line, because posted text escapes `<`. A review whose id cannot be in a marker
-    is never found this way. If one is there it writes
-    `closeout.posted` and posts nothing: `PR close-out: not posted (a close-out for this review is
-    already on PR #12)`.
+    is never found this way. If one is there (a card `comment` posted, perhaps with ids still
+    open, or one whose marker a crash lost), the verify edits that card in place with the current
+    card, under its claim, writes `closeout.posted`, and posts nothing new:
+    `PR close-out: updated on #12 (<comment URL>)`. So the PR has one card, and it is current. It
+    never edits a comment that is not this review's card by this author.
   - A posted card writes `closeout.posted` exclusively, then deletes the claim. A failed post
     deletes the claim, so a later verify can post it.
   - A live claim means another verify is posting it:
@@ -600,7 +614,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
     stopped; delete them from the review's run record to post it)`.
   - One case is set aside: a verify that crashes after GitHub accepted the card but before it
     wrote `closeout.posted`. The PR-comment check catches it, so the next verify finds the card
-    and posts no second one.
+    and posts no second one (it edits it, or, after a stale claim, leaves it as it is).
   - Another is set aside: a verify that is still posting but whose claim looks stale to another
     verify can lead to a second card. That happens when it pauses for over 65 s mid-post, when
     its machine's clock runs over 65 s behind the other's, or when it runs in a container that
@@ -663,10 +677,19 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   running `gh` call. The reply then says `PR comment: not posted (the run was interrupted)`, and
   a claim the verify held is given back. Comment listings read every page.
 
-The `comment` action is the manual path. After the owner says yes (`ownerApproved: true`), it posts
-or updates its own card with the heading `## Review panel`, separate from the
-`## Review panel · close-out` comment a verify posts with `--close-out`. Its card is cut by whole
-rows below the same limit.
+A review with no findings and no verify after it has no close-out card: its review comment ends
+with `No findings · no close-out needed` (a lost seat is still named on `Lost:`; when no seat voted, nothing was checked, so that line is left out and `comment` does not refuse), and `comment`
+refuses it before any seat or post. Once a verify follows (later pushes, say), the rounds have
+something to summarise: `verify --close-out` posts the card when nothing is open after it, as
+for any review, and `comment` posts it too.
+
+The `comment` action is the manual path. With `ownerApproved: true`, passed once a verify left
+nothing open without `--close-out` or after the owner stops the rounds with ids open, it posts
+or updates the review's one close-out card, `## Review panel · close-out`, the same card a verify
+posts with `--close-out`: it updates the card of this review by this author (that heading, or the
+old `## Review panel`, and this review's marker as the last line) wherever it came from, never
+another review's or another author's, and creates one only when there is none. Its card is cut by
+whole rows below the same limit.
 
 ### The close-out card
 
