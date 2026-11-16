@@ -167,6 +167,8 @@ export type ScheduleInput = {
 	/** Frozen base commit OID, never a symbolic ref. */
 	baseRef: string;
 	scopingNote?: string;
+	/** Untrusted records every seat gets after its role prompt, as data. */
+	dataAppendix?: string;
 };
 
 /**
@@ -373,6 +375,9 @@ function seatSpecFor(
 		...(input.scopingNote === undefined
 			? {}
 			: { scopingNote: input.scopingNote }),
+		...(input.dataAppendix === undefined
+			? {}
+			: { dataAppendix: input.dataAppendix }),
 	};
 }
 

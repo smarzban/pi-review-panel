@@ -46,6 +46,33 @@ export type ChainRegression = {
 	undoes?: string;
 };
 
+/**
+ * A finding a link's recheck seats reported: a review lens over that round's
+ * diff. It has a stated severity, like a review finding, and opens like a
+ * regression.
+ */
+export type ChainRecheckFinding = {
+	/** `V<link>-F<k>`, numbered across the link's voting recheck seats in order. */
+	id: string;
+	title: string;
+	file: string;
+	line: number;
+	evidence: string;
+	severity: string;
+	/** The seat that reported it. */
+	seat: { provider: string; model: string; lens: string };
+};
+
+/** A link's recheck: the lenses asked for, what they found, who was lost. */
+export type ChainRecheck = {
+	lenses: string[];
+	findings: ChainRecheckFinding[];
+	/** Recheck seats that voted. */
+	seats: ChainSeat[];
+	/** Recheck seats that were lost, as `rosterId/lens`. */
+	lost: string[];
+};
+
 /** One verify of the chain, parsed from its signed bytes. */
 export type ChainLink = {
 	runId: string;
@@ -71,6 +98,12 @@ export type ChainLink = {
 	seats: ChainSeat[];
 	/** Seats that were lost, as `rosterId/lens`. */
 	lost: string[];
+	/**
+	 * This round's recheck (`verify --recheck`), when it asked for one. Its
+	 * seats never answer kept ids: a lost recheck seat leaves `resolved` as
+	 * the verify seats made it.
+	 */
+	recheck?: ChainRecheck;
 	/**
 	 * The final check before the card: the review head to this link's head,
 	 * no kept ids, every resolved id under the undo guard. What it finds is a
@@ -99,11 +132,16 @@ export type ChainItem = {
 	severity?: string;
 	/** For a regression: the link that reported it, and what it undoes. */
 	regression?: { link: number; undoes?: string };
+	/** For a recheck finding: the link whose recheck reported it. */
+	recheck?: { link: number };
 	state: ChainItemState;
 };
 
 export type ChainState = {
-	/** Review findings in record order, then regressions in chain order. */
+	/**
+	 * Review findings in record order, then per link its regressions and
+	 * its recheck findings.
+	 */
 	items: Map<string, ChainItem>;
 	/** Ids open after the last link, in the order of `items`. */
 	open: string[];
@@ -234,6 +272,82 @@ export function isRegressionId(id: string): boolean {
 	return /^V[1-9]\d*-R[1-9]\d*$/u.test(id);
 }
 
+/** The id of a link's `k`-th recheck finding (1-based), across its seats. */
+export function recheckFindingId(link: number, k: number): string {
+	return `V${link}-F${k}`;
+}
+
+type RecheckRow = {
+	seat?: {
+		rosterId?: unknown;
+		lens?: unknown;
+		provider?: unknown;
+		model?: unknown;
+	};
+	outcome?: { kind?: unknown; findings?: unknown };
+};
+
+function text(value: unknown): string {
+	return typeof value === "string" ? value : "";
+}
+
+/**
+ * A link's recheck from its signed `recheck` record, or undefined when it
+ * has none. Finding ids follow from the signed outcomes' order (voting
+ * seats in planned order, then row order), so they are the same wherever
+ * they are read; `runVerify` stamps the same ids.
+ */
+export function recheckOf(
+	raw: unknown,
+	link: number,
+): ChainRecheck | undefined {
+	if (!isRecord(raw)) {
+		return undefined;
+	}
+	const outcomes = Array.isArray(raw.outcomes)
+		? (raw.outcomes as Array<RecheckRow | null>)
+		: [];
+	const findings: ChainRecheckFinding[] = [];
+	const seats: ChainSeat[] = [];
+	const lost: string[] = [];
+	for (const row of outcomes) {
+		const rosterId = row?.seat?.rosterId;
+		const lens = row?.seat?.lens;
+		if (typeof rosterId !== "string" || typeof lens !== "string") {
+			continue;
+		}
+		if (row?.outcome?.kind === "failed") {
+			lost.push(`${rosterId}/${lens}`);
+			continue;
+		}
+		if (row?.outcome?.kind !== "voted") {
+			continue;
+		}
+		seats.push({ rosterId, lens });
+		const rows = row.outcome.findings;
+		for (const finding of Array.isArray(rows) ? rows : []) {
+			const value = isRecord(finding) ? finding : {};
+			findings.push({
+				id: recheckFindingId(link, findings.length + 1),
+				title: text(value.title),
+				file: text(value.file),
+				line:
+					typeof value.line === "number" && Number.isInteger(value.line)
+						? value.line
+						: 0,
+				evidence: text(value.evidence),
+				severity: text(value.severity),
+				seat: {
+					provider: text(row.seat?.provider),
+					model: text(row.seat?.model),
+					lens,
+				},
+			});
+		}
+	}
+	return { lenses: stringList(raw.lenses), findings, seats, lost };
+}
+
 /**
  * Every regression a link's voting seats reported, in seat order then row
  * order, each with its chain-stable id `V<link>-R<n>`. The ids follow from
@@ -320,6 +434,8 @@ export type LinkParts = {
 	dismissed?: readonly JudgmentRow[];
 	lowAdvisory?: readonly string[];
 	outcomes: unknown;
+	/** The signed `recheck` record (`verify --recheck`), when there is one. */
+	recheck?: unknown;
 	final?: true;
 };
 
@@ -347,8 +463,14 @@ export function makeLink(parts: LinkParts): ChainLink {
 		regressions: regressionsOf(parts.outcomes, parts.link),
 		seats: votedSeatsOf(parts.outcomes),
 		lost,
+		...recheckPart(parts.recheck, parts.link),
 		...(parts.final === true ? { final: true as const } : {}),
 	};
+}
+
+function recheckPart(raw: unknown, link: number): { recheck?: ChainRecheck } {
+	const recheck = recheckOf(raw, link);
+	return recheck === undefined ? {} : { recheck };
 }
 
 type RawLink = Omit<LinkParts, "link"> & { link?: number; legacy: boolean };
@@ -386,6 +508,9 @@ export function rawLinkOf(
 		dismissed: judgmentRows(verification.dismissed),
 		lowAdvisory: stringList(verification.lowAdvisory),
 		outcomes: verification.outcomes,
+		...(verification.recheck === undefined
+			? {}
+			: { recheck: verification.recheck }),
 		...(meta.final === true ? { final: true as const } : {}),
 	};
 }
@@ -593,7 +718,8 @@ function reviewItem(row: StampedFinding): ChainItem {
  * Where every review finding and every regression stands after the chain's
  * links, in order. Per link: its dismissals and low/advisory ids (a kept id
  * stays kept), then each kept id resolved (every voting seat that answered
- * said resolved) or open, then its regressions, open.
+ * said resolved) or open, then its regressions, open, then its recheck
+ * findings, open.
  */
 export function chainState(
 	findings: readonly StampedFinding[],
@@ -646,6 +772,18 @@ export function chainState(
 						? {}
 						: { undoes: regression.undoes }),
 				},
+				state: { status: "open", link: link.link },
+			});
+		}
+		for (const row of link.recheck?.findings ?? []) {
+			items.set(row.id, {
+				id: row.id,
+				title: row.title,
+				file: row.file,
+				line: row.line,
+				evidence: row.evidence,
+				severity: row.severity,
+				recheck: { link: link.link },
 				state: { status: "open", link: link.link },
 			});
 		}

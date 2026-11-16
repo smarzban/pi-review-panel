@@ -39,7 +39,8 @@ What you get instead:
   you may drop or promote.
 - **Verify the keep list.** After you fix, a new HEAD is checked against the
   ids you kept — not a second full discovery circus. Each later verify chains
-  from the last one and checks only what is still open.
+  from the last one and checks only what is still open. `--recheck tests,security`
+  also hunts for new problems in that round's commits, at a review's cost in seats.
 - **Each round on the PR.** When the head is an open PR, the review and each
   verify post a new comment there. The close-out card is posted once, as soon as
   nothing is left open (`verify --close-out`, or `comment` right after a verify that

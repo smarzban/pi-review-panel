@@ -157,7 +157,7 @@ export function loadResumable(
 		readRegularFile(path.join(recordPath, PLAN_FILE)) === undefined
 	) {
 		refuse(
-			`run "${runId}" is a verify run; start a new verify instead (verify runs one or two seats in sequence, so a fresh run costs the same as a resume)`,
+			`run "${runId}" is a verify run; start a new verify instead (an interrupted verify, recheck seats included, is never signed, so a new verify from the same latest verify runs every seat again)`,
 		);
 	}
 	const { plan, mac, text: planText } = readPlan(recordPath, runId, recordKey);

@@ -168,6 +168,20 @@ review-panel verify --prior-run-id <latest verify run> --head <new head> \
 5. Pass `--scoping-note` on each verify naming where each change came from, such as
    `"fixes F-2; owner found X; outside re-check found Y"`. The verify comment shows it as
    `Why this round:`, so a reader can tell why the round exists; the seats read it too.
+6. A verify checks only open ids and regressions. To have the panel hunt for new problems in
+   this round's commits too, add `--recheck <lenses>`: one seat per lens on the owner's
+   default seats (as in review; holistic only when you name it), over this round's diff only.
+   It costs a review's worth of seats, so use it when the round's diff touches security,
+   posting, parsing or other risky code, and skip it for a small fix. Pick each lens for a
+   reason and put the reasons in `--scoping-note` (`"fixes F-2; recheck security: the fix
+   rewrites token parsing"`). What the recheck finds gets ids such as `V2-F1` and is open like
+   any id: fix it or dismiss it with a reason on the next verify. A lost recheck seat is lost
+   coverage, never "nothing new", and blocks `--close-out` for that round.
+
+```bash
+review-panel verify --prior-run-id <latest verify run> --head <new head> \
+  --recheck security,tests --scoping-note "fixes F-2; recheck security: ...; tests: ..."
+```
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out

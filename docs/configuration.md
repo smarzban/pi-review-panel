@@ -353,8 +353,8 @@ section naming the seats kept, the seats run again and the seats lost, and `exec
 the re-run seats under `resumedSeats`. Resume refuses a complete record, an unknown run, a record
 whose `run.lock` names a live process, a record with no `plan.json` (a run that stopped before its
 plan was written, when no seat had run, or one from an earlier version), a head or base commit
-that no longer resolves, and verify runs: verify runs one or two seats in sequence, so a fresh
-verify costs the same as a resume.
+that no longer resolves, and verify runs: an interrupted verify is never signed, so a new verify
+from the same latest verify runs every seat again, `--recheck` seats included.
 
 A `run.lock` left by a process that has exited is replaced. The replacement happens only while
 holding `run.lock.takeover`, created exclusively, so two resumes can never both take over the same
@@ -447,11 +447,29 @@ it, against the diff from that verify's head:
    runs only when some round resolved an id, and not again while the chain ends in a final
    check that lost no seat. A clean final check posts no round of its own: the card names it
    on a `**Final check:**` line and leaves it out of the round count.
+7. The recheck (`verify --recheck <lenses>`, `recheck` in a `call` object): optional; without
+   it a verify is exactly as before. Each named review lens (holistic or a specialist extra)
+   runs on the owner's `defaults.seats` the way review plans it: holistic on every default
+   seat, a specialist on the first two, holistic only when named. The caller's `seats` pick the
+   verify seats only and never reach a recheck seat. The recheck seats run alongside the verify
+   seats, on the same pinned snapshot, with review's read-only tools and `submit_findings`,
+   over this round's diff only (the diff base above). Their prompt lists, as data, every id the
+   review and the chain hold, with its title, place and where it stands (open, resolved,
+   dismissed, low/advisory), and asks only for problems not listed. Each finding gets an id
+   `V<link>-F<k>`, numbered across the round's voting recheck seats in planned order, and keeps
+   its stated severity; it is open like any id: later verifies check it, and `keptFindingIds`,
+   `dismissed`, `lowAdvisory` (a low one), the undo guard, the final check and the card take
+   it. A lost recheck seat is lost coverage: it is named on `Lost:` (on the card as
+   `(recheck)`), it never makes the round say "nothing new", and it blocks `--close-out` for
+   that round; it does not change what the verify seats resolved. Recheck findings are not
+   grouped: G-ids come only from the review's signed grouping. The final check runs no
+   recheck seat. The cost is real: a review's worth of seats per round.
 
 Each verify records, in its signed `meta.json`, the review (`priorRunId`, as before), the record
 it chained from (`previousRunId`: the review for the first link) and its place (`link`), and in
-its signed `verification.json` its kept ids, `dismissed` with the reasons, `lowAdvisory` and
-the outcomes. The open set comes only from those signed records. A verify is refused, before
+its signed `verification.json` its kept ids, `dismissed` with the reasons, `lowAdvisory`,
+the outcomes and, with `--recheck`, a `recheck` record (its lenses and each recheck seat's
+outcome, replay input and lifecycle). The open set comes only from those signed records. A verify is refused, before
 any seat runs:
 
 - against the review once it has a verify, or against a verify that is not the latest: the

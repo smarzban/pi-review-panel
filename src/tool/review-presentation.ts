@@ -663,15 +663,19 @@ export function renderVerifyResult(
 			? "no regressions"
 			: `${regressions.length} regression${regressions.length === 1 ? "" : "s"}`,
 	];
+	const recheck = recheckView(result);
+	const seats = [...panel, ...(result.recheck?.seats ?? [])];
+	const lost = [
+		...failed.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`),
+		...(recheck?.lost ?? []),
+	];
 	const lines = [
 		"# Review panel verify",
 		summary.join(" · "),
-		...(panel.length === 0 ? [] : [renderSeatsLine(panel)]),
+		...(seats.length === 0 ? [] : [renderSeatsLine(seats)]),
 	];
-	if (failed.length > 0) {
-		lines.push(
-			`Lost: ${failed.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`).join(", ")}`,
-		);
+	if (lost.length > 0) {
+		lines.push(`Lost: ${lost.join(", ")}`);
 	}
 	lines.push(`Record: \`${result.recordPath}\``);
 	if (regressions.length > 0) {
@@ -686,8 +690,65 @@ export function renderVerifyResult(
 			}
 		}
 	}
+	if (recheck !== undefined) {
+		lines.push("");
+		if (recheck.findings.length > 0) {
+			lines.push(`New in this round (recheck: ${recheck.lenses.join(", ")}):`);
+			for (const entry of orderFindings(recheck.findings)) {
+				lines.push(...findingReplyRows(entry, recheck.seats));
+			}
+		} else {
+			lines.push(
+				`Recheck (${recheck.summaryLenses.join(", ")}): ${recheck.nothing}`,
+			);
+		}
+	}
 	if (result.cleanupError !== undefined) {
 		lines.push("", result.cleanupError);
 	}
 	return fitPresentation(lines, reserveBytes);
+}
+
+/** A round's recheck as the reply and the comment show it. */
+export type RecheckView = {
+	/** The lenses asked for. */
+	lenses: string[];
+	seats: PlannedSeat[];
+	findings: StampedFinding[];
+	/** Lost recheck seats, as `rosterId/lens`. */
+	lost: string[];
+	/**
+	 * With no findings: the lenses a seat voted for, then what that means.
+	 * A lens whose every seat was lost checked nothing, so it is never
+	 * "nothing new"; with every seat lost, the line says so.
+	 */
+	summaryLenses: string[];
+	nothing: string;
+};
+
+export const RECHECK_ALL_LOST =
+	"every recheck seat was lost, so nothing was checked";
+
+/** The recheck of a verify result, or undefined when it asked for none. */
+export function recheckView(result: RunVerifyResult): RecheckView | undefined {
+	const recheck = result.recheck;
+	if (recheck === undefined) {
+		return undefined;
+	}
+	const voted = new Set(
+		recheck.outcomes
+			.filter((facts) => facts.outcome.kind === "voted")
+			.map((facts) => facts.seat.lens),
+	);
+	const votedLenses = recheck.lenses.filter((lens) => voted.has(lens));
+	return {
+		lenses: recheck.lenses,
+		seats: recheck.seats,
+		findings: recheck.findings,
+		lost: recheck.outcomes
+			.filter((facts) => facts.outcome.kind === "failed")
+			.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`),
+		summaryLenses: votedLenses.length === 0 ? recheck.lenses : votedLenses,
+		nothing: votedLenses.length === 0 ? RECHECK_ALL_LOST : "nothing new",
+	};
 }
