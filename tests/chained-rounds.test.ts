@@ -127,7 +127,11 @@ beforeEach(() => {
 });
 
 /** A signed, complete review record at commits[1]. */
-function writeReview(runId: string, findings: StampedFinding[]): void {
+function writeReview(
+	runId: string,
+	findings: StampedFinding[],
+	allLost = false,
+): void {
 	const recordPath = path.join(repo, ".review-panel", "runs", runId);
 	mkdirSync(recordPath, { recursive: true });
 	writeFileSync(
@@ -158,6 +162,19 @@ function writeReview(runId: string, findings: StampedFinding[]): void {
 		path.join(recordPath, "findings.json"),
 		JSON.stringify(findings),
 	);
+	if (allLost) {
+		writeFileSync(
+			path.join(recordPath, "execution.json"),
+			JSON.stringify({
+				outcomes: [
+					{
+						seat: { rosterId: "terra", lens: "holistic" },
+						outcome: { kind: "failed" },
+					},
+				],
+			}),
+		);
+	}
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	signReviewRecord(recordPath);
 }
@@ -602,6 +619,24 @@ describe("a review with no findings (T510)", () => {
 		);
 		expect(specs).toEqual([]);
 		expect(comments).toEqual([]);
+	});
+
+	it("comment does not refuse a review where no seat voted: nothing was checked", async () => {
+		writeReview(`${CLEAN}-lost`, [], true);
+		let refusal = "";
+		await commentAction(
+			{
+				repoDir: repo,
+				ownerApproved: true,
+				priorRunId: `${CLEAN}-lost`,
+				dismissed: [],
+				lowAdvisory: [],
+			},
+			{ deps: deps() },
+		).catch((error: unknown) => {
+			refusal = String(error);
+		});
+		expect(refusal).not.toContain("had no findings and no verify followed it");
 	});
 
 	it("once a verify follows, --close-out posts the card for its rounds", async () => {

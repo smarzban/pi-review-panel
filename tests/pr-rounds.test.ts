@@ -3423,6 +3423,37 @@ describe("T498: readable PR comments", () => {
 		});
 	});
 
+	it("a review where no seat voted never says no close-out is needed", async () => {
+		await withRepository(async (repo, head) => {
+			const gh = fakeGh({ pulls: [openPr(12, head)] });
+			const voted = reviewRun(repo, REVIEW_RUN, []);
+			await reviewAction(
+				{ repoDir: repo, base: "main~1", head: "main" },
+				{
+					deps: deps(gh.runGh, {
+						runReview: async (runConfig: { seats: PlannedSeat[] }) => {
+							const result = await voted(runConfig);
+							return {
+								...result,
+								outcomes: result.outcomes.map((facts) => ({
+									...facts,
+									outcome: {
+										kind: "failed" as const,
+										class: "provider-error",
+										reason: "quota",
+									},
+								})),
+							} as unknown as RunReviewResult;
+						},
+					}),
+				},
+			);
+			const body = bodyOf(posts(gh.calls)[0]);
+			expect(body).toContain("0/2 voted");
+			expect(body).not.toContain("no close-out needed");
+		});
+	});
+
 	it("the review comment bolds the Suggest label of an untaken lens", async () => {
 		await withRepository(async (repo, head) => {
 			const gh = fakeGh({ pulls: [openPr(12, head)] });
