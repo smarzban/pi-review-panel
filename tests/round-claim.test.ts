@@ -15,12 +15,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
 	CLOSEOUT_GENERATIONS,
+	chainClaimFile,
+	claimChain,
 	claimCloseout,
 	claimRound,
 	closeoutClaimFile,
 	closeoutPostedFile,
 	isSignedMarker,
-	POST_RESERVE_MS,
 	ROUND_DEADLINE_MS,
 	releaseClaim,
 	roundClaimFile,
@@ -127,108 +128,36 @@ function postLines(file: string): string[] {
 		: [];
 }
 
-describe("round numbers across processes (regression-1-1)", () => {
-	it("a verify between its posted check and its create, while another posts and settles that round, takes the next number", async () => {
-		const dir = record();
-		const posts = path.join(dir, "posts");
-		const at = (name: string) => path.join(dir, `barrier-${name}`);
-		const [a, b] = await Promise.all([
-			child({
-				kind: "round",
-				dir,
-				id: "v-a",
-				posts,
-				claimed: at("a-claimed"),
-				postAfter: at("b-parked"),
-				settled: at("a-settled"),
-			}),
-			child({
-				kind: "round",
-				dir,
-				id: "v-b",
-				posts,
-				startAfter: at("a-claimed"),
-				parkAt: 1,
-				parked: at("b-parked"),
-				release: at("a-settled"),
-			}),
-		]);
-		expect(a).toEqual([{ round: 1 }]);
-		expect(b).toEqual([{ round: 2 }]);
-		expect(postLines(posts)).toEqual(["v-a verify 1", "v-b verify 2"]);
-		expect(claimsIn(dir)).toEqual([]);
-		expect(existsSync(roundPostedFile(dir, 1))).toBe(true);
-		expect(existsSync(roundPostedFile(dir, 2))).toBe(true);
-	}, 30_000);
-
-	it("several processes claiming many rounds, some posts failing, never post one number twice", async () => {
-		for (let trial = 0; trial < 3; trial += 1) {
-			const dir = record();
-			const posts = path.join(dir, "posts");
-			const go = path.join(dir, "go");
-			const runs = ["v-1", "v-2", "v-3", "v-4"].map((id, index) =>
-				child({
-					kind: "round",
-					dir,
-					id,
-					posts,
-					startAfter: go,
-					rounds: 3,
-					postMs: 1 + ((index * 3 + trial) % 4),
-					failPosts: index === trial ? [2] : [],
-				}),
-			);
-			writeFileSync(go, "");
-			await Promise.all(runs);
-			const numbers = postLines(posts).map((line) =>
-				Number(line.split(" ").at(-1)),
-			);
-			expect(numbers).toHaveLength(11);
-			expect(new Set(numbers).size).toBe(numbers.length);
-			expect(claimsIn(dir)).toEqual([]);
-		}
-	}, 60_000);
-});
-
-describe("claimRound", () => {
-	it("re-checks round-N.posted after its create, and moves on when it appeared", async () => {
-		const dir = record();
-		const claim = await claimRound(dir, 1, "v-2", {
+describe("claimRound: verify N is posted at most once (its number is its chain link)", () => {
+	const claim = (dir: string, signal?: AbortSignal) =>
+		claimRound(dir, 1, "v-2", {
 			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-			beforeCreate: (round) => {
-				if (round === 1) {
-					// Another verify posts and settles verify 1 just now.
-					writeSignedMarker(dir, "round-1.posted", "v-1");
-				}
-			},
+			...(signal === undefined ? {} : { signal }),
 		});
-		expect(claim).toMatchObject({ round: 2 });
-		expect(claimsIn(dir)).toEqual(["round-2.claim"]);
+	const LIVE = { reason: "another process is posting verify 1" };
+	const STALE = {
+		reason:
+			"round-1.claim was left by a post of verify 1 that stopped, so verify 1 is not on the PR; later rounds and the card still post",
+	};
+
+	it("a signed round-N.posted means it is on the PR already", async () => {
+		const dir = record();
+		writeSignedMarker(dir, "round-1.posted", "v-2");
+		expect(await claim(dir)).toEqual({
+			reason: "verify 1 is already on the PR",
+		});
+		expect(claimsIn(dir)).toEqual([]);
 	});
 
-	it("a stale round claim stays where it is and is skipped: a gap, no duplicate", async () => {
+	it("a stale claim stays where it is and is never taken over", async () => {
 		const dir = record();
 		seed(roundClaimFile(dir, 1), staleByAge());
 		const before = readFileSync(roundClaimFile(dir, 1), "utf8");
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
-		expect(claim).toMatchObject({ round: 2 });
+		expect(await claim(dir)).toEqual(STALE);
 		expect(readFileSync(roundClaimFile(dir, 1), "utf8")).toBe(before);
-		if ("reason" in claim) {
-			throw new Error(claim.reason);
-		}
-		settleRound(claim, true);
-		expect(existsSync(roundPostedFile(dir, 1))).toBe(false);
-		expect(existsSync(roundPostedFile(dir, 2))).toBe(true);
-		expect(claimsIn(dir)).toEqual(["round-1.claim"]);
 	});
 
-	it("a claim on this host whose process is gone is stale: skipped", async () => {
+	it("a claim on this host whose process is gone is stale", async () => {
 		const dir = record();
 		seed(roundClaimFile(dir, 1), {
 			verifyRunId: "v-0",
@@ -236,12 +165,7 @@ describe("claimRound", () => {
 			host: hostname(),
 			claimedAt: Date.now(),
 		});
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
-		expect(claim).toMatchObject({ round: 2 });
+		expect(await claim(dir)).toEqual(STALE);
 	});
 
 	it("a fresh claim from another host is not judged by its pid (L2)", async () => {
@@ -252,15 +176,7 @@ describe("claimRound", () => {
 			host: `not-${hostname()}`,
 			claimedAt: Date.now(),
 		});
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 150,
-			reserveMs: 0,
-			pollMs: 20,
-		});
-		expect(claim).toEqual({
-			reason: "another verify is still posting verify 1",
-		});
+		expect(await claim(dir)).toEqual(LIVE);
 	});
 
 	it("a fresh claim that names no host is judged by age alone", async () => {
@@ -270,15 +186,7 @@ describe("claimRound", () => {
 			pid: deadPid(),
 			claimedAt: Date.now(),
 		});
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 150,
-			reserveMs: 0,
-			pollMs: 20,
-		});
-		expect(claim).toMatchObject({
-			reason: "another verify is still posting verify 1",
-		});
+		expect(await claim(dir)).toEqual(LIVE);
 	});
 
 	it("an old claim from another host is stale by its age", async () => {
@@ -287,12 +195,7 @@ describe("claimRound", () => {
 			...staleByAge(),
 			host: `not-${hostname()}`,
 		});
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
-		expect(claim).toMatchObject({ round: 2 });
+		expect(await claim(dir)).toEqual(STALE);
 	});
 
 	it("EPERM from the pid probe counts as alive (L4)", async () => {
@@ -308,129 +211,31 @@ describe("claimRound", () => {
 				code: "EPERM",
 			});
 		});
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 150,
-			reserveMs: 0,
-			pollMs: 20,
-		});
-		expect(claim).toEqual({
-			reason: "another verify is still posting verify 1",
-		});
+		expect(await claim(dir)).toEqual(LIVE);
 	});
 
-	it("a fresh claim with unreadable content is held, judged by its age on disk", async () => {
+	it("a claim with unreadable content is judged by its age on disk", async () => {
 		const dir = record();
 		seed(roundClaimFile(dir, 1), "");
-		const held = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 150,
-			reserveMs: 0,
-			pollMs: 20,
-		});
-		expect(held).toMatchObject({
-			reason: "another verify is still posting verify 1",
-		});
+		expect(await claim(dir)).toEqual(LIVE);
 		const old = (Date.now() - ROUND_DEADLINE_MS - 10_000) / 1000;
 		utimesSync(roundClaimFile(dir, 1), old, old);
-		const skipped = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
-		expect(skipped).toMatchObject({ round: 2 });
+		expect(await claim(dir)).toEqual(STALE);
 	});
 
-	it("takes the live claim's number once that post fails and gives it back", async () => {
+	it("an interrupted run claims nothing, saying so", async () => {
 		const dir = record();
-		seed(roundClaimFile(dir, 1), liveHere());
-		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 60);
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-			pollMs: 20,
-		});
-		expect(claim).toMatchObject({ round: 1 });
-	});
-
-	it("stops waiting while 30 s of the round deadline remain (L3)", async () => {
-		expect(POST_RESERVE_MS).toBe(30_000);
-		const dir = record();
-		seed(roundClaimFile(dir, 1), liveHere());
-		const started = Date.now();
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + POST_RESERVE_MS + 200,
-			pollMs: 20,
-		});
-		expect(Date.now() - started).toBeLessThan(2_000);
-		expect(claim).toEqual({
-			reason: "another verify is still posting verify 1",
-		});
-		expect(claimsIn(dir)).toEqual(["round-1.claim"]);
-	});
-
-	it("a verify that waited takes no claim freed inside the last 30 s", async () => {
-		const dir = record();
-		seed(roundClaimFile(dir, 1), liveHere());
-		// Freed after the 30 s mark, between two polls.
-		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 200);
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + POST_RESERVE_MS + 150,
-			pollMs: 100,
-		});
-		expect(claim).toEqual({
-			reason: "another verify is still posting verify 1",
+		const controller = new AbortController();
+		controller.abort();
+		expect(await claim(dir, controller.signal)).toEqual({
+			reason: "the run was interrupted",
 		});
 		expect(claimsIn(dir)).toEqual([]);
 	});
 
-	it("with more than 30 s left it keeps waiting and takes the number", async () => {
-		const dir = record();
-		seed(roundClaimFile(dir, 1), liveHere());
-		setTimeout(() => rmSync(roundClaimFile(dir, 1), { force: true }), 300);
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + POST_RESERVE_MS + 5_000,
-			pollMs: 20,
-		});
-		expect(claim).toMatchObject({ round: 1 });
-	});
-
-	it("a claim it can take right away is taken even inside the last 30 s", async () => {
-		const dir = record();
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 1_000,
-			pollMs: 20,
-		});
-		expect(claim).toMatchObject({ round: 1 });
-	});
-
-	it("an interrupted run stops waiting, saying so", async () => {
-		const dir = record();
-		seed(roundClaimFile(dir, 1), liveHere());
-		const controller = new AbortController();
-		setTimeout(() => controller.abort(), 40);
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 10_000,
-			reserveMs: 0,
-			pollMs: 20,
-			signal: controller.signal,
-		});
-		expect(claim).toEqual({ reason: "the run was interrupted" });
-	});
-
 	it("the claim records the verify, its pid, this host and when", async () => {
 		const dir = record();
-		await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
+		await claim(dir);
 		const info = JSON.parse(readFileSync(roundClaimFile(dir, 1), "utf8"));
 		expect(info).toMatchObject({
 			verifyRunId: "v-2",
@@ -442,15 +247,11 @@ describe("claimRound", () => {
 
 	it("settling a posted round writes round-N.posted and removes the claim", async () => {
 		const dir = record();
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
-		if ("reason" in claim) {
-			throw new Error(claim.reason);
+		const held = await claim(dir);
+		if ("reason" in held) {
+			throw new Error(held.reason);
 		}
-		settleRound(claim, true);
+		settleRound(held, true);
 		expect(claimsIn(dir)).toEqual([]);
 		expect(
 			JSON.parse(readFileSync(roundPostedFile(dir, 1), "utf8")),
@@ -459,15 +260,11 @@ describe("claimRound", () => {
 
 	it("settling a failed post removes the claim and writes nothing", async () => {
 		const dir = record();
-		const claim = await claimRound(dir, 1, "v-2", {
-			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
-		});
-		if ("reason" in claim) {
-			throw new Error(claim.reason);
+		const held = await claim(dir);
+		if ("reason" in held) {
+			throw new Error(held.reason);
 		}
-		settleRound(claim, false);
+		settleRound(held, false);
 		expect(readdirSync(dir)).toEqual([]);
 	});
 });
@@ -477,8 +274,6 @@ describe("releaseClaim only removes this verify's own claim (L4)", () => {
 		const dir = record();
 		const claim = await claimRound(dir, 1, "v-1", {
 			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
 		});
 		if ("reason" in claim) {
 			throw new Error(claim.reason);
@@ -690,8 +485,6 @@ describe("posted markers are signed (T502)", () => {
 		seed(roundPostedFile(dir, 1), { verifyRunId: "v-0", postedAt: 1 });
 		const claim = await claimRound(dir, 1, "v-2", {
 			key: TEST_RECORD_KEY,
-			deadline: Date.now() + 5_000,
-			reserveMs: 0,
 		});
 		if ("reason" in claim) {
 			throw new Error(claim.reason);
@@ -701,12 +494,10 @@ describe("posted markers are signed (T502)", () => {
 		expect(isSignedMarker(roundPostedFile(dir, 1), TEST_RECORD_KEY)).toBe(true);
 		expect(claimsIn(dir)).toEqual([]);
 		expect(
-			await claimRound(dir, 1, "v-3", {
+			await claimRound(dir, 1, "v-2", {
 				key: TEST_RECORD_KEY,
-				deadline: Date.now() + 5_000,
-				reserveMs: 0,
 			}),
-		).toMatchObject({ round: 2 });
+		).toEqual({ reason: "verify 1 is already on the PR" });
 	});
 
 	it("a signed marker is bound to its round, its record and the key", async () => {
@@ -758,5 +549,68 @@ describe("posted markers are signed (T502)", () => {
 		expect(
 			await claimCloseout(dir, "v-2", nothingOnPr, { key: TEST_RECORD_KEY }),
 		).toEqual({ kind: "posted", onPr: false });
+	});
+});
+
+describe("claimChain (S-2)", () => {
+	it("checks the chain again after the create, and gives the claim back when a verify finished in between", () => {
+		const dir = record();
+		expect(() =>
+			claimChain(dir, "prior", "verify-b", () => {
+				throw new Error(
+					'Verify refused: review "prior" has been verified already; verify against the latest verify, "verify-a"',
+				);
+			}),
+		).toThrow('verify against the latest verify, "verify-a"');
+		expect(existsSync(chainClaimFile(dir, "prior", 1))).toBe(false);
+	});
+
+	it("a live claim is checked against the chain too, so a finished verify is named as the latest", () => {
+		const dir = record();
+		const first = claimChain(dir, "prior", "verify-a", () => undefined);
+		expect(() =>
+			claimChain(dir, "prior", "verify-b", () => {
+				throw new Error('verify against the latest verify, "verify-a"');
+			}),
+		).toThrow('verify against the latest verify, "verify-a"');
+		first.release();
+		expect(readdirSync(dir)).toEqual([]);
+	});
+
+	it("past 100 stale claims it refuses, saying to delete them (F-5)", () => {
+		const dir = record();
+		for (let generation = 1; generation <= 100; generation += 1) {
+			writeFileSync(
+				chainClaimFile(dir, "prior", generation),
+				JSON.stringify({
+					verifyRunId: `v-${generation}`,
+					pid: 1,
+					host: "elsewhere",
+					claimedAt: 1,
+				}),
+			);
+		}
+		expect(() => claimChain(dir, "prior", "verify-b", () => undefined)).toThrow(
+			'Verify refused: 100 stale chain-prior.claim files are in the review\'s run record; delete them to verify from "prior"',
+		);
+	});
+
+	it("refreshes only its own claim, and releases only its own", () => {
+		const dir = record();
+		const held = claimChain(dir, "prior", "verify-a", () => undefined);
+		const file = chainClaimFile(dir, "prior", 1);
+		const before = JSON.parse(readFileSync(file, "utf8")).claimedAt as number;
+		vi.spyOn(Date, "now").mockReturnValue(before + 30_000);
+		held.refresh();
+		expect(JSON.parse(readFileSync(file, "utf8")).claimedAt).toBe(
+			before + 30_000,
+		);
+		writeFileSync(
+			file,
+			JSON.stringify({ verifyRunId: "other", pid: 1, host: "x", claimedAt: 1 }),
+		);
+		held.refresh();
+		held.release();
+		expect(JSON.parse(readFileSync(file, "utf8")).verifyRunId).toBe("other");
 	});
 });

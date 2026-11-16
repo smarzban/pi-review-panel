@@ -153,6 +153,7 @@ const ACTION_FLAGS: Record<ActionName, Record<string, FlagSpec>> = {
 		"scoping-note": STRING("scopingNote"),
 		dismissed: STRING("dismissed"),
 		"low-advisory": LIST("lowAdvisory"),
+		"close-out": BOOLEAN("closeOut"),
 		...ROUND_FLAGS,
 	},
 	resume: {
@@ -570,8 +571,9 @@ Actions:
   suggest                      Suggest lenses for base...head, each with its reason; runs no seat: --base <ref> --head <ref>
   review                       Review base...head: --base <ref> --head <ref> [--seats a,b] [--lenses x,y] [--scoping-note <text>]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]
-  verify                       Check fixes against a prior run: --prior-run-id <run> --head <ref> --kept-finding-ids F-1,G-2 [--seats a,b] [--scoping-note <text>]
-                               [--low-advisory F-3,F-4] [--dismissed <json> | --dismissed @<file> | --dismissed -]
+  verify                       Check fixes: --prior-run-id <review, or its latest verify> --head <ref> [--kept-finding-ids F-1,G-2]
+                               [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4]
+                               [--dismissed <json> | --dismissed @<file> | --dismissed -] [--close-out]
                                [--no-pr-comment] [--pr <n>] [--owner-approved]
   resume                       Run the unfinished seats of an interrupted run again: --prior-run-id <run>
   comment                      Post or update the manual close-out PR card, after the owner said yes: --prior-run-id <run> --owner-approved
@@ -618,7 +620,8 @@ Other:
 
 Seats come only from the owner config (~/.pi-review-panel/config.json, or PI_REVIEW_PANEL_CONFIG).
 Review and verify post each round to the open PR whose head is the run's head, as a new comment, through gh;
-a clean verify also posts the close-out card. --no-pr-comment turns that off for one run. A post that cannot
-be made ends the report with one line saying why, and never changes the exit code.
+--no-pr-comment turns that off for one run. Each verify chains from the one before and checks only what is
+still open. The close-out card posts only when asked: verify --close-out (when nothing is left open) or
+comment. A post that cannot be made ends the report with one line saying why, and never changes the exit code.
 The report goes to stdout, progress to stderr. Exit codes: 0 the command completed (whatever the
 report says), 1 refused or failed, 2 usage error. No exit code reports findings.`;

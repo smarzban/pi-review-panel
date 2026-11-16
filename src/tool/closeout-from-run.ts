@@ -12,10 +12,9 @@ import type { PanelRecord } from "../run/types.js";
 import {
 	dispositionsOf,
 	resolvedIdsOf,
-	type SignedVerifyRound,
-	unresolvedIdsOf,
 	votedSeatsOf,
-} from "./closeout-rounds.js";
+} from "../run/verify-chain.js";
+import type { SignedVerifyRound } from "./closeout-rounds.js";
 
 export type CloseoutRunFacts = {
 	run: PriorRun;
@@ -198,7 +197,6 @@ export function assertFixedResolved(
 		runId,
 		seats: votedSeatsOf(outcomes),
 		resolved: resolvedIdsOf(dispositions),
-		unresolved: unresolvedIdsOf(dispositions),
 		...(typeof meta?.headOid === "string" ? { headOid: meta.headOid } : {}),
 	};
 }

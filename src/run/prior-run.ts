@@ -223,26 +223,3 @@ function parseSigned(
 		throw new Error(`Verify refused: prior run "${runId}" ${name} is invalid`);
 	}
 }
-
-export function selectKeptFindings(
-	findings: StampedFinding[],
-	keptFindingIds: readonly string[],
-): StampedFinding[] {
-	const byId = new Map(findings.map((row) => [row.id, row]));
-	const seen = new Set<string>();
-	const kept: StampedFinding[] = [];
-	for (const id of keptFindingIds) {
-		if (seen.has(id)) {
-			throw new Error(`Verify refused: duplicate kept finding id "${id}"`);
-		}
-		seen.add(id);
-		const row = byId.get(id);
-		if (row === undefined) {
-			throw new Error(
-				`Verify refused: kept finding "${id}" is not in the prior run`,
-			);
-		}
-		kept.push(row);
-	}
-	return kept;
-}

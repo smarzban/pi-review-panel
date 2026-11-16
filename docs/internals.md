@@ -60,32 +60,32 @@ may omit `repository`, or pass `/`, to use the current folder's Git top-level; `
 explicit real path wins. `audit` (command or `call` action) is refused with a message that the
 repository audit was removed, not as an unknown command. Review and verify post each round to the
 one open PR whose head is the run's head, by default, as a new comment (`## Review panel · review`,
-`## Review panel · verify N`); a verify where every verify seat voted, each marked every kept id resolved, and none reported a
-regression also posts the close-out card on its own (`## Review panel · close-out`, once per
-review). The card is presentation, not a verdict: the agents judge and the owner merges.
+`## Review panel · verify N`). Verify rounds chain (see "Verify chain" below): each verify checks
+only what is open after the latest one. A verify posts the close-out card
+(`## Review panel · close-out`, once per review) only when asked with `--close-out`, and then only
+when nothing is open after a verify with no lost seat; never automatically mid-way. The card is
+presentation, not a verdict: the agents judge and the owner merges.
 `--no-pr-comment` (`prComment: false` in a `call` object) turns posting off for a run, and owner config
 `defaults.prComment: "ownerApproved"` makes every post need `--owner-approved`. A post that
 cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card after the owner says yes
 (`--owner-approved`), found later by author plus heading `## Review panel`. It posts only to an
 open PR whose head is the commit the card is about: the one `--pr` names, or the one open PR at
-that head. Both cards list each
-kept id as “resolved in verify N” (N the earliest counted round that marked it resolved after
-which every later counted round that answered for it also said resolved; round numbers only from
-the review record's signed `round-<N>.posted` file names; plain “resolved” for a verify that never
-posted), presentation only: never the word “fixed”, no “ready to merge.” They show counts by
-severity and hide zero counts, `Review seats:` and `Verified by:` (the seats that voted in each
-counted round, from signed verify records; a lost seat is not named), `Lost:` only when a seat
-was lost, the base ref only when it is not itself a commit id, the head as one short SHA, and
-links to the review and the last 10 verify comments on the same PR when they can be found
-(author, first-line heading and marker as the last line, at the `html_url` gh gave for that
-comment on this PR; a comment not found has no link and never stops the post). A card counts its
-own verify and the posted rounds before it (by round number, or for an unposted `comment`
-`verifyRunId` by the time in each run id, which `record.mac` binds). `comment` authenticates and
-uses a supplied `verifyRunId` whenever one is given, and requires one only when ids are left
-resolved. Remaining high/medium ids count as resolved only when a verify
-run whose `priorRunId` is this review marks them resolved. Every agent's skill runs the
-`review-panel` command directly; it never starts another agent session.
+that head. Both cards are built from the review and its whole verify chain (`comment` reads it
+itself; a `verifyRunId` it is given must be the latest link) and list each id as “resolved in
+verify N” (N the place in the chain of the link that resolved it, the same `verify N` its comment
+posts as, whether or not it posted),
+dismissed, low/advisory, or under `### Open (not resolved)` (still open in the chain; the first
+verify places every finding, and `comment` with no verify refuses a high or medium it is not told
+to dismiss): presentation only, never the word “fixed”, no “ready to
+merge.” They show counts by severity and hide zero counts, `Review seats:` and `Verified by:` (the
+seats that voted in each link, from signed verify records; a lost seat is not named there),
+`Lost:` only when a seat was lost (verify seats marked `(verify)`), the base ref only when it is
+not itself a commit id, the head as one short SHA, and links to the review and the last 10 verify
+comments on the same PR when they can be found (author, first-line heading and marker as the
+last line, at the `html_url` gh gave for that comment on this PR; a comment not found has no link
+and never stops the post). Every agent's skill runs the `review-panel` command directly; it never
+starts another agent session.
 
 Setup needs no Pi install. `auth providers` lists every provider of the bundled SDK's model
 runtime (built-ins and `models.json`) with its login kinds and `getProviderAuthStatus`, after one
@@ -147,13 +147,70 @@ the grouping the review's signed `execution.json` records (the one its reply sho
 when it grouped every F-id once; no grouping step or a lost grouping refuses G-ids. Verify itself
 sees F-ids. Resume always runs the grouping step again and rewrites `execution.json`.
 
+## Verify chain
+
+`src/run/verify-chain.ts`. `verify --prior-run-id` names the review (first verify only) or the
+latest verify of it. Each verify record's signed `meta.json` keeps `priorRunId` as the review
+(so the round numbering, claims, markers and older readers are unchanged) and adds
+`previousRunId` (the record it chained from; the review for link 1) and `link` (1-based); its
+signed `verification.json` adds `dismissed` (with reasons) and `lowAdvisory`. `loadVerifyChain`
+reads every complete verify record of the review signed with the owner's key and links them from
+the review: one child per record, places 1, 2, …; a fork (see the claim below), a gap (a link whose parent is not a
+signed verify of this review) or a link out of place refuses the chain with "run a new review".
+A verify record with neither field was written before chaining: its review is refused, by verify
+and comment, with "run a new review". `loadChainPrior` refuses a prior that is the review once a
+verify exists, or a verify that is not the tip, naming the tip. `chainState` walks the links:
+dismissals and low/advisory first, then each kept id resolved (every voting seat that answered
+said resolved, `resolvedIdsOf`, in a round that lost no seat) or open, then the link's regressions, open, with ids
+`V<link>-R<n>` numbered across its voting seats in order (`regressionsOf`; `runVerify` stamps the
+same ids into the record). A resolved, dismissed or low/advisory id is not judged again. The diff
+base is the prior link's head, checked to be a commit here. The undo guard passes every resolved
+id to the seat (`undoableIds`, by closure like `expectedIds`, and in the replay spec); its title,
+file and the verifier's note go only in the data appendix through `inertLine` with caps, and a
+regression's `undoes` must be one of those ids. No forks: after `reserve` and before any seat,
+`runVerify` takes `claimChain` (`src/tool/round-claim.ts`) on `chain-<previousRunId>.claim-<g>`
+in the review's record (`wx`), then runs `loadChainPrior` again so a verify that finished in
+between is named as the latest; a live claim refuses naming its holder after the same re-read.
+The holder rewrites its `claimedAt` every 15 s (`refresh`, only while the file is still its own)
+and releases the claim in a `finally`, signed or not. Staleness is the posting-claim rule (65 s,
+or this host's pid gone); a stale generation stays and the next is tried (at most 100), so a
+crash never ends the chain. A verify paused for over 65 s (a sleeping laptop, a stopped process)
+has a claim that looks stale, so a second verify can claim the next generation; just before
+`sealRecord`, `assertStillTip` reads the chain again and refuses to sign unless `previousRunId`
+is still the tip, naming the verify that chained from it, so the paused run is lost and the
+chain goes on. The fork refusal in `loadVerifyChain` stays as a backstop for the one window
+left: two verifies that both pass that check before either signs. `comment` reads no claim; it
+takes one only through the final check it runs, and a live one refuses it with the holder named.
+
+The final check (S-6) is `runVerify` with `final: true`, from the tip at the tip's head: base is
+the review head, no kept ids, `undoableIds` = every resolved id, one seat
+(`planVerifySeats(config).slice(0, 1)`, never the caller's), the package-owned
+`buildFinalCheckScope` note, and `final: true` in the signed meta (`ChainLink.final`).
+`chainState` needs no new transition: its regressions are open, and resolved ids keep their
+round. `verify --close-out` runs it inside `postVerifyRound`, through `facts.finalCheck`, after
+every refusal that costs no seat; a regression or a lost seat posts the final round and blocks
+the card, a clean one posts no round and the card is built and claimed after it (its marker names
+the final check; the card's links still use the round's own comment URL). `commentAction`
+builds the card once first (its refusals), then runs it when `finalCheckDue` (something resolved,
+and the tip is not a final check that lost no seat), reloads the chain, and rebuilds the card.
+With ids open before the check it only reports; with none open, a lost seat or anything open
+after it refuses the card (the owner approved a card with nothing open), naming the step that
+goes on: run `comment` again (it checks again after a lost seat, and posts the card with the ids
+open after a finding) or verify a fix from the final link. Before the check, `findCloseoutPr`
+(the same lookup `postCloseoutComment` makes, a dependency so tests script it) finds the PR the
+card would post to; no PR refuses before any seat or link, and the card then posts to that PR.
+A post that still fails after the check (the PR closed or moved in between) names the final
+check as the latest verify. The card shows `**Final check:** verify N` when its last round is final (or that
+it lost its seat), and leaves that round out of the round count.
+
 ## Posted text
 
 Review and verify post each round to the open PR by default, always as a new comment that is
-never edited or deleted; resume never posts. The automatic close-out posts only after
-a verify with no lost seat, every voting seat marking every kept id resolved, and no
-regressions. An explicit `pr` must be open with the run's head as its head.
-Every posted body (review, verify, the automatic close-out and the manual `comment` card) goes
+never edited or deleted; resume never posts. A verify posts the close-out only with
+`closeOut` (`--close-out`), after a verify with no lost seat, every voting seat marking every id
+it checked resolved, no regressions, and nothing open in the chain after it.
+An explicit `pr` must be open with the run's head as its head.
+Every posted body (review, verify, the close-out and the manual `comment` card) goes
 through `src/tool/posted-text.ts`: seat text, record fields and refs are one line of plain
 text with only what can form Markdown or HTML backslash-escaped (`\` `` ` `` `*` `_` `[` `]` `<`
 `>` `|` `~` `&`, `!` before `[`, and at the start of the text `#`, `-`, `+`, `=` and the `.` or
@@ -189,23 +246,22 @@ within one deadline per round, and an interrupt kills it.
 Posting claims (`src/tool/round-claim.ts`) are fresh exclusive creates (`wx`) in the review's
 run record, and nothing else: no claim is ever taken over, renamed or put back. A verify claims
 `round-<N>.claim`, checks `round-<N>.posted` again after the create, and on a post writes
-`round-<N>.posted` (`wx`) and then deletes its claim. A stale claim (older than the round
-deadline plus 5 s, or made on this host by a process that is gone) stays where it is and is
-skipped, so a crash can leave a gap in the verify numbering, never a duplicate (a POST `gh`
-reports as failed after GitHub accepted it gives its number back; that repeat is set aside). The
+`round-<N>.posted` (`wx`) and then deletes its claim. N is the verify's chain link, never chosen
+by the claim: the claim and the marker only stop a second post of that round. A stale claim
+(older than the round deadline plus 5 s, or made on this host by a process that is gone) stays
+where it is and leaves that round unposted, and the reply says so; nothing re-posts a finished
+verify's round (a POST `gh` reports as
+failed after GitHub accepted it gives its claim back; that repeat is set aside). The
 close-out uses `closeout.claim-1`, `-2`, … (at most five): a stale generation sends the verify
 to the PR's comments, then to the next generation; only a generation's creator posts, and a
 posted card writes `closeout.posted` (`wx`), which stops every later verify. Every posted marker
-(`round-<N>.posted`, `closeout.posted`, a verify's own `round.posted`) holds a MAC from the
-owner's record key over the record's run id, the marker's file name and the verify that wrote
-it; an unsigned or copied marker is no marker, and the verify that posts replaces it. `verify N`
-counts only complete verify records signed with that key (`record.mac`) whose signed meta names
-the review and that hold a signed `round.posted`. Claims are not signed: a planted stale-looking
-`round-<N>.claim` is skipped and bumps `verify N`, a planted live-looking claim can stop an
-automatic post, as can five planted stale-looking close-out claims (`comment` still works; never
-forge one or post a second card), deleting genuine markers can repeat a `verify N`, and markers
-written before signing count as none, so a PR reviewed before this change can see its `verify N`
-numbering start again; these are documented limits. The close-out posts
+(`round-<N>.posted`, `closeout.posted`) holds a MAC from the owner's record key over the
+record's run id, the marker's file name and the verify that wrote it; an unsigned or copied
+marker, or one signed for another verify, is no marker for this verify, and the verify that
+posts replaces it. Claims are not signed: a planted claim can stop a post, as can five planted
+stale-looking close-out claims (`comment` still works; never forge one or post a second card),
+and deleting a genuine `round-<N>.posted` changes nothing, because a verify posts its round only
+during its own run; these are documented limits. The close-out posts
 at most once per review, with two exceptions set aside: a crash between GitHub accepting the
 card and `closeout.posted` being written (the PR-comment check catches it), and a live verify
 whose claim looks stale to another (paused over 65 s mid-post, a clock over 65 s behind, or a

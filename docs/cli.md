@@ -226,7 +226,7 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 | `review-panel diagnose` | `{"action":"diagnose"}` |
 | `review-panel suggest --base main --head HEAD` | `base`, `head` |
 | `review-panel review --base main --head HEAD [--seats a,b] [--lenses tests,security] [--scoping-note <text>] [--no-pr-comment] [--pr 22] [--owner-approved]` | `base`, `head`, `seats`, `lenses`, `scopingNote`, `prComment: false`, `pr`, `ownerApproved` |
-| `review-panel verify --prior-run-id <run> --head HEAD --kept-finding-ids F-1,G-2 [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `prComment: false`, `pr`, `ownerApproved` |
+| `review-panel verify --prior-run-id <run> --head HEAD [--kept-finding-ids F-1,G-2] [--seats a,b] [--scoping-note <text>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -] [--close-out] [--no-pr-comment] [--pr 22] [--owner-approved]` | `priorRunId`, `head`, `keptFindingIds` (`""` for none; leave it out on a chained verify for every open id), `seats`, `scopingNote`, `lowAdvisory`, `dismissed`, `closeOut`, `prComment: false`, `pr`, `ownerApproved` |
 | `review-panel resume --prior-run-id <run>` | `priorRunId` |
 | `review-panel comment --prior-run-id <run> --owner-approved [--pr 22] [--verify-run-id <run>] [--head <ref>] [--low-advisory F-3,F-4] [--dismissed <json> \| @<file> \| -]` | `priorRunId`, `ownerApproved`, `pr`, `verifyRunId`, `head`, `lowAdvisory`, `dismissed` |
 | `review-panel call '<json>'` | One action's whole argument object, for example `'{"action":"review","base":"main","head":"HEAD"}'`. `-` reads it from stdin. |
@@ -235,16 +235,33 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   reads for `defaults.lenses`. It prints each lens the diff's rules
   suggest, with its reason and evidence, and marks the owner's `defaults.lenses` as
   already on. You choose the lenses and pass them to `review --lenses`.
+- `verify` chains. The first verify of a review takes the review's run id as
+  `--prior-run-id` and needs `--kept-finding-ids`; it must place every finding (a high or
+  medium it neither keeps nor dismisses is refused; a low it leaves out is low/advisory). Every later verify takes the latest
+  verify's run id, checks only what is still open after it (its still-present ids and its
+  regressions, which get ids such as `V1-R1`) from that verify's head, and with no
+  `--kept-finding-ids` checks every open id. An id an earlier round resolved, dismissed or left
+  as low/advisory is refused, and so is a verify against the review or an older verify once a
+  newer one exists: the refusal names the latest verify. See
+  [Verify rounds chain](../docs/configuration.md#verify-rounds-chain).
 - `review` and `verify` post their round to the open pull request whose head is the run's
-  head, as a new comment, through `gh`; a verify where every seat voted and resolved every
-  kept id, with no regressions, also posts the close-out card once per review. `--no-pr-comment` turns that
+  head, as a new comment, through `gh`. A verify posts the close-out card only with
+  `--close-out`, and then only when nothing is open after it and no seat was lost, and after one
+  final check from the review head (one seat, the owner's) reports nothing; the reply says why
+  otherwise, and names the final check as the latest verify. `--no-pr-comment` turns posting
   off for one run, and `--pr` names the PR. When the owner config sets
   `defaults.prComment: "ownerApproved"`, a round posts only with `--owner-approved`. A post
   that cannot be made ends the report with one line saying why, and the exit code does not
   change. See [Posting rounds to the pull request](../docs/configuration.md#posting-rounds-to-the-pull-request).
-- `comment` posts or updates the manual close-out card on the pull request. It is refused
+- `comment` posts or updates the manual close-out card on the pull request, from the
+  review's whole verify chain: each id resolved (with the round that resolved it), dismissed,
+  low/advisory, or still open when the owner stops the rounds. When a round resolved an id, it
+  first runs the final check (one seat, the owner's, minutes like a verify) and lists what it
+  finds as open; when nothing was open before it, what it finds (or a lost seat) refuses the card
+  and says what to run next. `--verify-run-id`, when given,
+  must be the latest verify. It is refused
   without `--owner-approved`: pass that flag only after the owner said to post. It posts only to an
-  open pull request whose head is the commit the card is about (the verify's, or else the review's):
+  open pull request whose head is the commit the card is about (the latest verify's, or else the review's):
   the one `--pr` names, or with no `--pr` the one open PR at that head. Anything else is refused with
   the reason. After a commit pushed since the last verify, run `verify` at the new head and pass
   that verify to `comment`. The card shows the

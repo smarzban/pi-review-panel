@@ -274,6 +274,41 @@ function openPrAtHead(
 	return open[0] as number;
 }
 
+/**
+ * The PR the card would post to, or a refusal saying why there is none: the
+ * one `pr` names (open, with the card's head as its head), or with none named
+ * the one open PR at that head. `comment` asks before it spends a seat.
+ */
+export function findCloseoutPr(
+	input: Pick<PostCloseoutInput, "repository" | "headOid" | "pr" | "runGh">,
+): number {
+	const runGh = input.runGh ?? defaultRunGh;
+	const call = (args: readonly string[]): string =>
+		runGh(args, { cwd: input.repository });
+	return resolvePr(call, input.headOid, input.pr).pr;
+}
+
+/** The repository, and the PR at the card's head (see {@link findCloseoutPr}). */
+function resolvePr(
+	call: (args: readonly string[]) => string,
+	headOid: string,
+	pr: number | string | undefined,
+): { repo: string; pr: number } {
+	const repo = trimOutput(
+		call(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]),
+	);
+	if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+		throw new Error("comment refused: could not resolve GitHub repository");
+	}
+	return {
+		repo,
+		pr:
+			pr === undefined
+				? openPrAtHead(call, repo, headOid)
+				: namedPr(call, repo, parsePositiveInt(pr, "pr"), headOid),
+	};
+}
+
 /** Find-or-update the one owner comment whose body has heading `## Review panel`. */
 export function postCloseoutComment(
 	input: PostCloseoutInput,
@@ -289,16 +324,7 @@ export function postCloseoutComment(
 	const call = (args: readonly string[], stdin?: string): string =>
 		runGh(args, stdin === undefined ? { cwd } : { cwd, input: stdin });
 
-	const repo = trimOutput(
-		call(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]),
-	);
-	if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-		throw new Error("comment refused: could not resolve GitHub repository");
-	}
-	const pr =
-		input.pr === undefined
-			? openPrAtHead(call, repo, input.headOid)
-			: namedPr(call, repo, parsePositiveInt(input.pr, "pr"), input.headOid);
+	const { repo, pr } = resolvePr(call, input.headOid, input.pr);
 	const author = trimOutput(call(["api", "user", "--jq", ".login"]));
 	if (author === "") {
 		throw new Error("comment refused: could not resolve the GitHub author");

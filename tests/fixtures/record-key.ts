@@ -223,9 +223,26 @@ export function signVerifyRecord(
 	readOrWrite(path.join(recordPath, "panel.json"), () =>
 		JSON.stringify({ runId, baseRef: "main", seats: [] }),
 	);
-	readOrWrite(path.join(recordPath, "meta.json"), () =>
-		JSON.stringify({ runId, kind: "verify" }),
-	);
+	// A real verify's meta names its review, as its verification does.
+	readOrWrite(path.join(recordPath, "meta.json"), () => {
+		const verification = existsSync(path.join(recordPath, "verification.json"))
+			? (JSON.parse(
+					readFileSync(path.join(recordPath, "verification.json"), "utf8"),
+				) as { priorRunId?: unknown })
+			: {};
+		// The first link of its review's chain, as a real first verify is.
+		return JSON.stringify({
+			runId,
+			kind: "verify",
+			...(typeof verification.priorRunId === "string"
+				? {
+						priorRunId: verification.priorRunId,
+						previousRunId: verification.priorRunId,
+						link: 1,
+					}
+				: {}),
+		});
+	});
 	writeFileSync(
 		path.join(recordPath, "record.mac"),
 		testRecordMac(

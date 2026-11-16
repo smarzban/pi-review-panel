@@ -310,6 +310,31 @@ describe("review-panel skill", () => {
 		expect(raw).not.toMatch(/audit/i);
 	});
 
+	it("passes comment only ids no round judged, and says so the way comment enforces it (R-7)", () => {
+		const commands = fencedCommands(splitFrontmatter(readSkill()).body);
+		const named = (command: string): string[] => [
+			...[...command.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1] as string),
+			...(/--low-advisory (\S+)/.exec(command)?.[1]?.split(",") ?? []),
+		];
+		const judged = new Set(
+			commands
+				.filter((command) => command.startsWith("review-panel verify "))
+				.flatMap(named),
+		);
+		const comment = commands.find((command) =>
+			command.startsWith("review-panel comment "),
+		);
+		expect(comment).toBeDefined();
+		for (const id of named(comment as string)) {
+			expect(judged.has(id), `${id} was judged by a verify already`).toBe(
+				false,
+			);
+		}
+		expect(flat(readSkill())).toContain(
+			"Pass `--dismissed` and `--low-advisory` only for ids still open (or, with no verify, never placed): comment refuses an id a round already resolved, dismissed or left as low/advisory",
+		);
+	});
+
 	it("verifies with the owner's verify seats and refuses unsigned records", () => {
 		const body = flat(splitFrontmatter(readSkill()).body);
 		expect(flat(body)).toContain(

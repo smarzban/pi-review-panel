@@ -26,6 +26,13 @@ type FakeResponse =
 			kind: "verification";
 			disposition?: "resolved" | "still present" | "inconclusive";
 			afterNudge?: boolean;
+			/**
+			 * Regressions for each submit_verification call, in order, with the
+			 * items answered as `disposition`. A refused call is kept in
+			 * `refusals` and the next one is tried, as a model would after a
+			 * tool error.
+			 */
+			attempts?: Array<{ regressions: unknown[] }>;
 	  }
 	| {
 			kind: "grouping";
@@ -189,8 +196,18 @@ export function createSdkSeatFake(
 						(value): value is SubmissionTool =>
 							isSubmissionTool(value) && value.name.startsWith("submit_"),
 					);
-					if (response.kind === "grouping" && response.attempts !== undefined) {
-						for (const attempt of response.attempts) {
+					const attempts =
+						response.kind === "grouping"
+							? response.attempts
+							: response.kind === "verification" &&
+									response.attempts !== undefined
+								? response.attempts.map((attempt) => ({
+										...responseForProfile(input, response),
+										regressions: attempt.regressions,
+									}))
+								: undefined;
+					if (attempts !== undefined) {
+						for (const attempt of attempts) {
 							try {
 								await tool?.execute(
 									"injected-sdk-seat",

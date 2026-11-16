@@ -42,6 +42,8 @@ Before touching these, read the matching section of `docs/internals.md`:
 - `src/tool/round-claim.ts`, `round-post.ts` or a `.claim` / `.posted` file → "Posting claims and markers".
 - `src/seat/`, or anything that calls the Pi SDK → "Pi behaviours this repo depends on".
 - `src/run/grouping.ts` or G-ids → "Grouping".
+- `src/run/verify-chain.ts`, `run-verify.ts`, or a verify record's `meta.json` / `verification.json`
+  → "Verify chain".
 
 ### Review invariants
 
@@ -56,10 +58,21 @@ Before touching these, read the matching section of `docs/internals.md`:
   shown as agreement or used to rank.
 - A dead seat is lost coverage, named in the report, never a clean vote.
 - Verify pins a committed snapshot and refuses when head matches the prior run.
+- Verify rounds chain: each verify chains from the latest signed verify of the review (the review
+  itself only for the first), diffs from that verify's head, and checks only what is still open.
+  The open set comes only from signed records; an id a round resolved, dismissed or left as
+  low/advisory is not judged again. A fork, a gap, a foreign or unsigned link, or a prior that is
+  not the latest is refused before any seat runs.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR at the run's head by default, always as a new
-  comment; resume never posts; `comment` is the manual, owner-approved card and posts only to an
+  comment (a final check posts its round only when it blocks the `--close-out` card; the card
+  names it otherwise); resume never posts; `comment` is the manual, owner-approved card and posts only to an
   open PR at the card's head. A post that cannot be made is one reply line, never a run failure.
+- The close-out card is never posted automatically: only by `verify --close-out` when nothing is
+  open after a verify with no lost seat, or by `comment`, which lists what is still open. Both
+  first run one final check (one owner seat, review head → final head, every resolved id under
+  the undo guard), a signed link of the chain; what it finds is a regression, open. It blocks the
+  `--close-out` card, and `comment`'s card only when nothing was open before the check.
 - Every posted body goes through `src/tool/posted-text.ts`; seat text is one line of inert plain
   text. Posting claims are exclusive creates and are never taken over.
 - Fixed operational bounds may halt work, but they never make a quality claim.

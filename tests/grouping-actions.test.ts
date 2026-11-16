@@ -23,6 +23,7 @@ import type { Config } from "../src/config/schema.js";
 import type { RunVerifyInput } from "../src/run/run-verify.js";
 import type { RunConfig } from "../src/run/types.js";
 import type { PostCloseoutInput } from "../src/tool/closeout-post.js";
+import { unrecordedFinalCheck } from "./fixtures/final-check.js";
 import {
 	signReviewRecord,
 	signVerifyRecord,
@@ -331,6 +332,11 @@ describe("verify takes G-ids as well as F-ids", () => {
 					priorRunId: "review-1",
 					head: "HEAD",
 					keptFindingIds: ["F-1"],
+					// The first verify places every finding.
+					dismissed: [
+						{ id: "F-3", reason: "not in this test" },
+						{ id: "F-4", reason: "not in this test" },
+					],
 				},
 				{ deps: deps({ runVerify: capture.runVerify }) },
 			);
@@ -571,6 +577,8 @@ describe("comment takes G-ids as well as F-ids", () => {
 					runId: "v-1",
 					kind: "verify",
 					priorRunId: "review-1",
+					previousRunId: "review-1",
+					link: 1,
 				}),
 			);
 			writeFileSync(
@@ -608,14 +616,14 @@ describe("comment takes G-ids as well as F-ids", () => {
 					lowAdvisory: ["G-3"],
 					pr: 7,
 				},
-				{ deps: deps({ postComment }) },
+				{ deps: deps({ postComment, ...unrecordedFinalCheck() }) },
 			);
 			const body = bodies[0] ?? "";
 			expect(
 				body.split("\n").filter((line) => line.includes("· resolved")),
 			).toEqual([
-				"- **F-1 [high]** F-1 title · resolved",
-				"- **F-3 [medium]** F-3 title · resolved",
+				"- **F-1 [high]** F-1 title · resolved in verify 1",
+				"- **F-3 [medium]** F-3 title · resolved in verify 1",
 			]);
 			expect(body).toContain("**2 resolved** in 1 verify round");
 			expect(body).toContain("**Verified by:** fix-verification (terra)");

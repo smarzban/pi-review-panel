@@ -30,6 +30,7 @@ import {
 	MAX_PRESENTATION_BYTES,
 	renderReviewProgress,
 } from "../src/tool/review-presentation.js";
+import { unrecordedFinalCheck } from "./fixtures/final-check.js";
 import { createPanelCaller } from "./fixtures/panel-call.js";
 import {
 	signPlan,
@@ -1134,7 +1135,9 @@ describe("the comment action", () => {
 					undefined,
 					{},
 				),
-			).rejects.toThrow(/verifyRunId/);
+			).rejects.toThrow(
+				"comment refused: F-1 was never verified: verify it, or dismiss it with a reason",
+			);
 			expect(posted).toBe(0);
 		});
 	});
@@ -1150,6 +1153,8 @@ describe("the comment action", () => {
 			writeVerifyRecord(repository, "verify-1", ["F-1"]);
 			let body = "";
 			const tool = toolWith({
+				runVerify: unrecordedFinalCheck().runVerify,
+				findCloseoutPr: unrecordedFinalCheck().findCloseoutPr,
 				postComment: (input) => {
 					body = input.body;
 					return {
@@ -1185,8 +1190,10 @@ describe("the comment action", () => {
 			);
 			expect(body).not.toContain("### Dismissed");
 			expect(body).toContain("- **F-2** nit");
-			// verify-1 posted no round, so it has no number.
-			expect(body).toMatch(/^- \*\*F-1 \[high\]\*\* auth bypass · resolved$/m);
+			// verify-1 posted no round, and is still verify 1: its chain link.
+			expect(body).toMatch(
+				/^- \*\*F-1 \[high\]\*\* auth bypass · resolved in verify 1$/m,
+			);
 			expect(body).not.toMatch(/fixed/i);
 			// A verify run given as its record path is named by its id.
 			expect(body.split("\n").at(-1)).toBe(

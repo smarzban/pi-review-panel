@@ -137,30 +137,51 @@ Give the owner each finding with keep or skip and the reason, plus coverage and 
 
 1. The builder fixes the kept findings and commits, so `head` is a new commit. Verify pins a
    committed snapshot and refuses when head matches the prior run.
-2. Verify only the kept ids, including any promoted low. `<run>` is the review's run id: the
-   last folder of the report's `Record:` line. The full record path on that line also works;
-   a relative path does not.
+2. The first verify checks the kept ids, including any promoted low, against the review, and
+   places every other finding: dismiss each high or medium you skip with a reason (it is
+   refused otherwise); a low you leave out is recorded as low/advisory. `<run>` is the review's
+   run id: the last folder of the report's `Record:` line. The full record path on that line
+   also works; a relative path does not.
 
 ```bash
-review-panel verify --prior-run-id <run> --head <new head> --kept-finding-ids F-1,F-2 \
+review-panel verify --prior-run-id <review run> --head <new head> --kept-finding-ids F-1,F-2 \
   --low-advisory F-3 --dismissed '[{"id":"F-4","reason":"..."}]'
+```
+
+3. Verify rounds chain. Every later verify runs against the latest verify, not the review:
+   `--prior-run-id <latest verify run>`, from that verify's `Record:` line. It checks only what
+   is still open after that verify (its still-present ids and its regressions, which get ids
+   like `V1-R1`) against the diff from that verify's head, and asks whether the new commits undo
+   an earlier fix. Leave out `--kept-finding-ids` to check everything still open, or pass only
+   open ids. An id an earlier round resolved, dismissed or left as low/advisory is refused, and
+   so is a verify against the review, or an older verify, once a newer verify exists: the
+   refusal names the latest one to use.
+
+```bash
+review-panel verify --prior-run-id <latest verify run> --head <new head> \
+  --dismissed '[{"id":"V1-R1","reason":"..."}]'
 ```
 
 Pass `--dismissed` with your one-line reason for every finding you chose not to fix, and
 `--low-advisory` for the lows you left as advisory, so the verify comment and the close-out
-carry your reasons. Verify runs the owner's `defaults.verifySeats`, or the first
-`defaults.seats` row when that is unset. Verify and `comment` take only a record signed with
-the owner's record key; when one is refused, run a new review.
+carry your reasons; each round records them, so name each id once. A regression has no
+severity: dismiss it with a reason instead of listing it as low/advisory. Verify runs the
+owner's `defaults.verifySeats`, or the first `defaults.seats` row when that is unset. Verify and
+`comment` take only records signed with the owner's record key; when one is refused, or the
+chain is refused as forked or broken, run a new review. Run one verify at a time: a second
+verify from the same record is refused while the first runs, naming it; verify against it once
+it finishes.
 
 Do not start a new full discovery review on the same change.
 
 ### Posting to the PR
 
 Posting is on by default. When the run's head is the head of exactly one open PR, `review`
-and each `verify` post their round there as a new comment, and a clean verify also posts the
-close-out card; a kept low counts as resolved and need not be listed in `--low-advisory`. The
-report's `PR comment:` and `PR close-out:` lines say where it posted or why
-it did not.
+and each `verify` post their round there as a new comment. Each verify comment is a short
+delta: the ids it checked, what was dismissed now, its regressions, and what is still open; a
+kept low counts as resolved and need not be listed in `--low-advisory`. A verify never posts
+the close-out card by itself. The report's `PR comment:` and
+`PR close-out:` lines say where it posted or why it did not.
 
 - Add `--no-pr-comment` to keep a run off the PR, and `--pr <n>` to name the PR.
 - If the report says `the owner config asks for approval first`, ask the owner, and after a
@@ -190,16 +211,29 @@ is pass 3. A dirty third pass stops and asks the owner. Never review-fix-review-
 
 Recommend landing only when every kept item is resolved, there is no new high/medium
 regression on the fix, and lost coverage is named; or when the discovery report had nothing
-you would keep. Name who voted, who failed, and what you kept or skipped. When the automatic
-close-out was not posted (the report's `PR close-out:` line says why, or nothing was kept), ask
-whether to post the close-out comment. Do not post until they say yes. After a yes:
+you would keep. Name who voted, who failed, and what you kept or skipped.
+
+The close-out card is posted once, at the end, and only when asked:
+
+- When the owner says to finish and the next verify should leave nothing open, add
+  `--close-out` to that verify. It posts the card only when nothing is open after it and no
+  seat was lost; otherwise the `PR close-out:` line says why.
+- When the owner stops the rounds with items still open, or the rounds ended without
+  `--close-out`, ask whether to post the card. Do not post until they say yes. After a yes:
 
 ```bash
 review-panel comment --prior-run-id <review run> --owner-approved --pr <n> \
-  --verify-run-id <verify run> --low-advisory F-3 --dismissed '[{"id":"F-4","reason":"..."}]'
+  --dismissed '[{"id":"F-2","reason":"..."}]'
 ```
 
-Run ids here come from each report's `Record:` line, as in step 6. Pass `--verify-run-id`
-only when a kept item was fixed, and `--dismissed` for every high or
-medium you dropped. It updates the one existing panel card instead of opening a second one.
-Never write ready to merge on the card.
+`comment` reads the whole verify chain itself and lists every id as resolved (with the round
+that resolved it), dismissed, low/advisory, or open. Before the card, `comment` and
+`verify --close-out` run one final check of the whole change (the owner's seat, minutes like a
+verify); what it finds is open, `--close-out` posts no card then, and `comment` refuses the card
+when nothing was open before the check, saying what to run next. Its reply
+line `Latest verify:` names the final check: verify against that run id next. Pass `--verify-run-id` only to name the
+latest verify; an older one is refused. Pass `--dismissed` and `--low-advisory` only for ids
+still open (or, with no verify, never placed): comment refuses an id a round already resolved,
+dismissed or left as low/advisory, because the card shows it as that round left it. An open id
+you name here is dismissed (or low/advisory) on the card, not open. It updates the one existing panel card instead of opening a second
+one. Never write ready to merge on the card.

@@ -26,14 +26,18 @@ import {
 	groupedView,
 	groupingLostLine,
 } from "../run/grouping.js";
-import { discoverPriorRecords } from "../run/prior-records.js";
-import { NEW_REVIEW_FIX, type PriorRun } from "../run/prior-run.js";
-import { readSignedRecord } from "../run/record.js";
+import type { PriorRun } from "../run/prior-run.js";
 import { renderSeatsLine } from "../run/render.js";
 import type { RunReviewResult } from "../run/run-review.js";
 import type { RunVerifyResult } from "../run/run-verify.js";
 import type { Suggestion, SuggestionsUnavailable } from "../run/suggest.js";
 import type { PlannedSeat, StampedFinding } from "../run/types.js";
+import {
+	type ChainLink,
+	type ChainState,
+	chainState,
+	makeLink,
+} from "../run/verify-chain.js";
 import {
 	accountCloseoutFindings,
 	assembleCloseoutParts,
@@ -44,14 +48,9 @@ import {
 import { type CloseoutRunFacts, closeoutFactsOf } from "./closeout-from-run.js";
 import { parseJsonPages } from "./closeout-post.js";
 import {
-	cardRounds,
-	dispositionsOf,
-	postedVerifyRounds,
+	chainRounds,
 	REVIEW_ROUND_HEADING,
-	resolvedIdsOf,
 	roundCommentLinks,
-	unresolvedIdsOf,
-	votedSeatsOf,
 } from "./closeout-rounds.js";
 import {
 	type CommentGroupRow,
@@ -67,13 +66,13 @@ import {
 	CLOSEOUT_POSTED_FILE,
 	claimCloseout,
 	claimRound,
+	closeoutPostedFile,
 	type HeldClaim,
 	isSignedMarker,
 	ROUND_DEADLINE_MS,
 	type RoundClaim,
 	settleCloseout,
 	settleRound,
-	writeSignedMarker,
 } from "./round-claim.js";
 
 export { fitCommentBody, GITHUB_COMMENT_LIMIT } from "./posted-text.js";
@@ -113,12 +112,6 @@ export const CLOSEOUT_ROUND_HEADING = "## Review panel · close-out";
  * first with `closeout.claim-<g>` (see `round-claim.ts`).
  */
 export const CLOSEOUT_POSTED_MARKER = CLOSEOUT_POSTED_FILE;
-/**
- * Written in a verify's run record once its comment is on the PR, signed
- * with the owner's record key like every posted marker (see
- * `round-claim.ts`). The review's record also gets `round-<N>.posted`.
- */
-export const ROUND_POSTED_MARKER = "round.posted";
 
 /**
  * Runs `gh`. It may answer synchronously or with a promise; the round awaits
@@ -650,53 +643,6 @@ export async function postReviewRound(
 	];
 }
 
-/**
- * Which verify of this review a run is: 1 + the other verify runs of the
- * same review whose comment reached the PR. Only the owner's own records
- * count: a complete verify record signed with `key` (`record.mac`, kind
- * verify), whose signed `meta.json` names this review, holding a
- * {@link ROUND_POSTED_MARKER} signed with `key` for that record. The run
- * records live in the reviewed repository, so a planted or unsigned record
- * or marker changes nothing. A verify that posted nothing is not a round on
- * the PR, so the PR never shows `verify 2` without a `verify 1`.
- */
-export function verifyRoundNumber(
-	repoDir: string,
-	reviewRunId: string,
-	verifyRunId: string,
-	key: Buffer,
-): number {
-	let earlier = 0;
-	for (const record of discoverPriorRecords(repoDir)) {
-		const name = path.basename(record.path);
-		if (
-			name === verifyRunId ||
-			!isSignedMarker(path.join(record.path, ROUND_POSTED_MARKER), key)
-		) {
-			continue;
-		}
-		try {
-			const signed = readSignedRecord(
-				record.path,
-				"verify",
-				key,
-				`run "${name}"`,
-				NEW_REVIEW_FIX,
-			);
-			const meta = JSON.parse(signed.get("meta.json") as string) as {
-				kind?: unknown;
-				priorRunId?: unknown;
-			} | null;
-			if (meta?.kind === "verify" && meta.priorRunId === reviewRunId) {
-				earlier += 1;
-			}
-		} catch {
-			// Not the owner's verify record: it is not a round of this review.
-		}
-	}
-	return earlier + 1;
-}
-
 export type VerifyRoundFacts = {
 	result: RunVerifyResult;
 	panel: readonly PlannedSeat[];
@@ -718,10 +664,58 @@ export type VerifyRoundFacts = {
 	 * markers are signed with it.
 	 */
 	recordKey: Buffer;
+	/**
+	 * The review's verify chain before this verify, as verify loaded it
+	 * from signed records before any seat ran: what is open after this
+	 * verify follows from it and this verify's own result.
+	 */
+	chain?: readonly ChainLink[];
+	/**
+	 * Post the close-out card after this verify, only when nothing is open
+	 * after it. Never automatic: the owner asks for it.
+	 */
+	closeOut?: boolean;
+	/**
+	 * Runs the final check from this verify (see `RunVerifyInput.final`).
+	 * Called only after every refusal that costs no seat, when the card
+	 * would otherwise post and a round resolved something.
+	 */
+	finalCheck?: () => Promise<RunVerifyResult>;
 };
 
 function runIdOf(recordPath: string): string {
 	return path.basename(recordPath);
+}
+
+/** This verify's round number: its place in the review's chain. */
+function roundOf(facts: VerifyRoundFacts): number {
+	return facts.result.link ?? (facts.chain?.length ?? 0) + 1;
+}
+
+/** The chain with this verify as its last link. */
+function chainWithOwn(facts: VerifyRoundFacts): ChainLink[] {
+	const { result } = facts;
+	const chain = facts.chain ?? [];
+	return [
+		...chain,
+		makeLink({
+			runId: runIdOf(result.recordPath),
+			link: roundOf(facts),
+			previousRunId:
+				result.previousRunId ?? chain.at(-1)?.runId ?? result.priorRunId,
+			headOid: result.headOid,
+			keptFindingIds: result.kept.map((row) => row.id),
+			dismissed: facts.dismissed,
+			lowAdvisory: facts.lowAdvisory,
+			outcomes: result.outcomes,
+			...(result.final === true ? { final: true as const } : {}),
+		}),
+	];
+}
+
+/** Where every id stands after this verify, from the review and the chain. */
+function stateAfter(facts: VerifyRoundFacts): ChainState {
+	return chainState(facts.review.findings, chainWithOwn(facts));
 }
 
 /** The verify comment: fixed, not fixed and why, and what is new. */
@@ -731,7 +725,11 @@ export function renderVerifyRound(
 ): string {
 	const { result } = facts;
 	const seen = verifyFacts(result);
+	const state = stateAfter(facts);
 	const titles = new Map<string, string>();
+	for (const item of state.items.values()) {
+		titles.set(item.id, item.title);
+	}
 	for (const row of [...(facts.reviewFindings ?? []), ...result.kept]) {
 		titles.set(row.id, row.finding.title);
 	}
@@ -760,11 +758,21 @@ export function renderVerifyRound(
 		...(facts.panel.length === 0
 			? []
 			: [boldLabel(ownLine(renderSeatsLine([...facts.panel])))]),
+		...(result.final === true
+			? [
+					"**Final check:** the whole change, from the reviewed head, for fixes that no longer hold or conflict",
+				]
+			: []),
 		...(failed.length === 0
 			? []
 			: [
 					`**Lost:** ${failed.map((row) => githubSafe(`${row.seat.rosterId}/${row.seat.lens}`, 120)).join(", ")}`,
 				]),
+		`**Open after this round:** ${
+			state.open.length === 0
+				? "none"
+				: state.open.map((id) => githubSafe(id, 40)).join(", ")
+		}${failed.length === 0 ? "" : " · a verify seat was lost, so this round resolved nothing"}`,
 	];
 	const rows: string[][] = [];
 	const section = (title: string, items: string[][]) => {
@@ -800,8 +808,9 @@ export function renderVerifyRound(
 	section(
 		"### New findings (regressions)",
 		seen.regressions.map((row) => {
+			const undoes = state.items.get(row.id)?.regression?.undoes;
 			const lines = [
-				`- **${githubSafe(row.id, 40)}** ${githubSafe(row.title)} (${safeCode(`${row.file}:${row.line}`)})`,
+				`- **${githubSafe(row.id, 40)}** ${githubSafe(row.title)} (${safeCode(`${row.file}:${row.line}`)})${undoes === undefined ? "" : ` · undoes ${safeCode(undoes, 40)}`}`,
 			];
 			const evidence = githubSafe(row.evidence, EVIDENCE_CHARS);
 			if (evidence !== "") {
@@ -822,8 +831,8 @@ export function renderVerifyRound(
 }
 
 /**
- * Why a verify does not earn the automatic close-out, or undefined when it
- * does: every verify seat voted (no lost coverage), every voting seat marks
+ * Why a verify is not clean enough for the close-out, or undefined when it
+ * is: every verify seat voted (no lost coverage), every voting seat marks
  * every kept id resolved, and no seat reported a regression.
  */
 export function closeoutBlocker(result: RunVerifyResult): string | undefined {
@@ -879,7 +888,7 @@ export function closeoutBlocker(result: RunVerifyResult): string | undefined {
 		: inert(truncateCodePoints(reasons.join("; "), 300));
 }
 
-/** True when the verify earns the automatic close-out; see {@link closeoutBlocker}. */
+/** True when the verify is clean; see {@link closeoutBlocker}. */
 export function verifyIsClean(result: RunVerifyResult): boolean {
 	return closeoutBlocker(result) === undefined;
 }
@@ -904,14 +913,13 @@ type CloseoutCard = {
 };
 
 /**
- * The close-out card for this review, or why it cannot be built. Its
- * rounds are this verify (`round`, from its claim) and the posted rounds
- * before it, from signed records only.
+ * The close-out card for this review after this verify, or why it cannot be
+ * built: it lists every id from where the chain, ending with this verify,
+ * left it, and is refused while any id is open. Its rounds are the chain's
+ * links, numbered by their posted rounds (this verify's from its claim).
  */
 function buildCloseout(
 	facts: VerifyRoundFacts,
-	repoDir: string,
-	round: number,
 ): CloseoutCard | { reason: string } {
 	const { result } = facts;
 	let review: CloseoutRunFacts;
@@ -925,58 +933,43 @@ function buildCloseout(
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}
-	const kept = verifyFacts(result).keptIds;
+	const verifyRunId = runIdOf(result.recordPath);
+	const links = chainWithOwn(facts);
+	const state = chainState(review.run.findings, links);
+	const rounds = chainRounds(links);
 	let accounted: ReturnType<typeof accountCloseoutFindings>;
 	try {
 		accounted = accountCloseoutFindings({
 			findings: review.run.findings,
-			dismissed: facts.dismissed,
-			lowAdvisory: facts.lowAdvisory,
-			kept,
+			state,
+			rounds,
+			dismissed: [],
+			lowAdvisory: [],
 		});
 	} catch (error) {
 		return { reason: commentRefusal(error) };
 	}
-	const resolved = new Set(kept);
-	const unaccounted = accounted.resolved
-		.map((row) => row.id)
-		.filter((id) => !resolved.has(id));
-	if (unaccounted.length > 0) {
+	if (accounted.open.length > 0) {
 		return {
 			reason: inert(
 				truncateCodePoints(
-					`${unaccounted.join(", ")} ${unaccounted.length === 1 ? "was" : "were"} neither kept and resolved nor dismissed with a reason`,
+					`still open: ${accounted.open.map((row) => row.id).join(", ")}`,
 					300,
 				),
 			),
 		};
 	}
-	const verifyLost = result.outcomes
-		.filter((row) => row.outcome.kind === "failed")
-		.map((row) => `${row.seat.rosterId}/${row.seat.lens}`);
-	const verifyRunId = runIdOf(result.recordPath);
-	const dispositions = dispositionsOf(result.outcomes);
-	const rounds = cardRounds(
-		postedVerifyRounds(repoDir, review.run, facts.recordKey),
-		{
-			runId: verifyRunId,
-			round,
-			seats: votedSeatsOf(result.outcomes),
-			resolved: resolvedIdsOf(dispositions),
-			unresolved: unresolvedIdsOf(dispositions),
-		},
-	);
 	const render = (links?: CloseoutLinks) => {
 		const parts = assembleCloseoutParts({
 			findings: review.run.findings,
+			state,
+			rounds,
+			dismissed: [],
+			lowAdvisory: [],
 			panel: review.panel,
 			lost: review.lost,
-			verifyLost,
+			verifyLost: rounds.flatMap((row) => row.lost ?? []),
 			meta: { ...review.run.meta, headOid: result.headOid },
-			dismissed: facts.dismissed,
-			lowAdvisory: facts.lowAdvisory,
-			kept,
-			rounds,
 			heading: CLOSEOUT_ROUND_HEADING,
 			runIds: { review: review.run.runId, verify: verifyRunId },
 			...(links === undefined ? {} : { links }),
@@ -1112,57 +1105,159 @@ async function claimReviewCloseout(
 	}
 }
 
-/** Records in the verify's run record, signed, that its comment is on the PR. */
-function recordPosted(
-	recordPath: string,
-	target: PrTarget,
-	round: number,
-	key: Buffer,
-): void {
-	try {
-		writeSignedMarker(
-			path.join(recordPath, ROUND_POSTED_MARKER),
-			key,
-			runIdOf(recordPath),
-			{ pr: target.pr, round },
-		);
-	} catch {
-		// Without it the review's round-<N>.posted still moves the next verify on.
-	}
-}
-
 /**
- * Posts the verify round and, after a verify that earns it, the close-out
- * card as a separate comment. Returns the reply lines; never throws.
+ * Posts the verify round and, when the caller asked for it (`closeOut`) and
+ * nothing is open after a clean verify, the close-out card as a separate
+ * comment. Returns the reply lines; never throws.
  */
 export async function postVerifyRound(
 	ctx: RoundContext,
 	facts: VerifyRoundFacts,
 ): Promise<string[]> {
 	const { result } = facts;
-	const verifyRunId = runIdOf(result.recordPath);
-	let round = 1;
-	const verify = await postOne(ctx, async (gh) => {
-		const floor = verifyRoundNumber(
-			ctx.repoDir,
-			result.priorRunId,
-			verifyRunId,
-			facts.recordKey,
+	const verify = await postRoundComment(ctx, facts);
+	const lines = [verify.line];
+	if (verify.target === undefined) {
+		// The `PR comment:` line already says why nothing was posted.
+		return lines;
+	}
+	const blocker = closeoutBlocker(result);
+	if (facts.closeOut !== true) {
+		// Never automatic: say so only when it could have been asked for.
+		if (blocker === undefined && stateAfter(facts).open.length === 0) {
+			lines.push(
+				notPosted(
+					"PR close-out",
+					`not asked for; nothing is open: once the owner says the rounds are done, post it with ${commentCommand(facts)}`,
+				),
+			);
+		}
+		return lines;
+	}
+	if (blocker !== undefined) {
+		lines.push(notPosted("PR close-out", blocker));
+		return lines;
+	}
+	let card = buildCloseout(facts);
+	if ("reason" in card) {
+		lines.push(notPosted("PR close-out", card.reason));
+		return lines;
+	}
+	// The card is claimed by the verify it is built after (the final check,
+	// when one ran); it links this round's comment by the URL gh gave.
+	const roundRunId = runIdOf(result.recordPath);
+	let cardRunId = roundRunId;
+	const resolvedSome = [...stateAfter(facts).items.values()].some(
+		(item) => item.state.status === "resolved",
+	);
+	if (facts.finalCheck !== undefined && resolvedSome) {
+		if (
+			isSignedMarker(closeoutPostedFile(card.reviewRecord), facts.recordKey)
+		) {
+			lines.push(
+				notPosted("PR close-out", "this review's close-out is already posted"),
+			);
+			return lines;
+		}
+		// The final check, after every refusal that costs no seat.
+		let checked: RunVerifyResult;
+		try {
+			checked = await facts.finalCheck();
+		} catch (error) {
+			lines.push(
+				notPosted(
+					"PR close-out",
+					`the final check could not run: ${inert(truncateCodePoints(oneLine(errorText(error)), 200))}`,
+				),
+			);
+			return lines;
+		}
+		const finalFacts: VerifyRoundFacts = {
+			...facts,
+			result: checked,
+			panel: checked.outcomes.map((row) => row.seat),
+			dismissed: [],
+			lowAdvisory: [],
+			chain: chainWithOwn(facts),
+		};
+		const finalRunId = runIdOf(checked.recordPath);
+		lines.push(
+			replyLine(finalCheckLine(finalFacts)),
+			replyLine(
+				`Latest verify: \`${finalRunId}\` (the final check); verify against it next`,
+			),
 		);
+		const finalBlocker = closeoutBlocker(checked);
+		if (finalBlocker !== undefined) {
+			// What blocks the card is posted like any round: its regressions
+			// with their ids, or its lost seat. A clean check posts no round
+			// of its own; the card names it.
+			lines.push(
+				(await postRoundComment(ctx, finalFacts)).line,
+				notPosted("PR close-out", finalBlocker),
+			);
+			return lines;
+		}
+		card = buildCloseout(finalFacts);
+		if ("reason" in card) {
+			lines.push(notPosted("PR close-out", card.reason));
+			return lines;
+		}
+		cardRunId = finalRunId;
+	}
+	return [
+		...lines,
+		await postCloseoutCard(
+			card,
+			cardRunId,
+			{ runId: roundRunId, url: verify.url },
+			verify,
+			facts.recordKey,
+		),
+	];
+}
+
+/** The command that posts the card by hand, for the owner to run. */
+function commentCommand(facts: VerifyRoundFacts): string {
+	return `\`review-panel comment --prior-run-id ${facts.result.priorRunId} --owner-approved\``;
+}
+
+/** What the final check reported, for the reply. */
+function finalCheckLine(facts: VerifyRoundFacts): string {
+	const round = roundOf(facts);
+	if (facts.result.outcomes.some((row) => row.outcome.kind === "failed")) {
+		return `Final check: verify ${round} lost its seat, so it checked nothing; check again and post the card with ${commentCommand(facts)}`;
+	}
+	const open = stateAfter(facts).open.filter((id) =>
+		id.startsWith(`V${round}-`),
+	);
+	return open.length === 0
+		? `Final check: verify ${round} reported nothing`
+		: `Final check: verify ${round} reported ${open.join(", ")}, now open`;
+}
+
+/** Posts one verify round's comment, claimed so it posts at most once. */
+async function postRoundComment(
+	ctx: RoundContext,
+	facts: VerifyRoundFacts,
+): Promise<{ line: string; target?: PrTarget; url?: string; gh: Gh }> {
+	const { result } = facts;
+	const verifyRunId = runIdOf(result.recordPath);
+	// One number per round: the verify's place in the review's chain.
+	const round = roundOf(facts);
+	return await postOne(ctx, async () => {
 		const claim: RoundClaim | { reason: string } = await claimRound(
 			path.join(ctx.repoDir, ".review-panel", "runs", result.priorRunId),
-			floor,
+			round,
 			verifyRunId,
 			{
 				key: facts.recordKey,
-				deadline: gh.deadline,
 				...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
 			},
 		);
 		if ("reason" in claim) {
 			throw new RoundSkip(claim.reason);
 		}
-		round = claim.round;
 		let body: string;
 		try {
 			body = renderVerifyRound(facts, round);
@@ -1173,131 +1268,60 @@ export async function postVerifyRound(
 		return {
 			body,
 			settle: (postedTo) => {
-				if (postedTo !== undefined) {
-					// The verify's own marker first, then the review's: a
-					// verify counting rounds meanwhile sees one or the other.
-					recordPosted(result.recordPath, postedTo, round, facts.recordKey);
-					settleRound(claim, true);
-					return undefined;
-				}
-				settleRound(claim, false);
-				return `verify ${round} is left for the next verify`;
+				settleRound(claim, postedTo !== undefined);
+				return undefined;
 			},
 		};
 	});
-	const lines = [verify.line];
-	if (verify.target === undefined) {
-		// The `PR comment:` line already says why nothing was posted.
-		return lines;
-	}
-	const blocker = closeoutBlocker(result);
-	if (blocker !== undefined) {
-		lines.push(notPosted("PR close-out", blocker));
-		return lines;
-	}
-	const card = buildCloseout(facts, ctx.repoDir, round);
-	if ("reason" in card) {
-		lines.push(notPosted("PR close-out", card.reason));
-		return lines;
-	}
+}
+
+/**
+ * Claims and posts the close-out card on the PR the round posted to, once
+ * per review, linking the rounds whose comments were found. Returns the
+ * reply line; never throws.
+ */
+async function postCloseoutCard(
+	card: CloseoutCard,
+	verifyRunId: string,
+	round: { runId: string; url?: string | undefined },
+	verify: { target?: PrTarget; gh: Gh },
+	key: Buffer,
+): Promise<string> {
+	const target = verify.target as PrTarget;
 	let claim: HeldClaim | { reason: string };
 	try {
 		claim = await claimReviewCloseout(
 			card,
 			verifyRunId,
 			verify.gh,
-			verify.target,
-			facts.recordKey,
+			target,
+			key,
 		);
 	} catch (error) {
-		lines.push(notPosted("PR close-out", ghReason(error)));
-		return lines;
+		return notPosted("PR close-out", ghReason(error));
 	}
 	if ("reason" in claim) {
-		lines.push(notPosted("PR close-out", claim.reason));
-		return lines;
+		return notPosted("PR close-out", claim.reason);
 	}
 	try {
-		const comments = await listComments(verify.gh, verify.target);
-		if (hasCloseoutFor(comments, verify.target, card.reviewRunId)) {
+		const comments = await listComments(verify.gh, target);
+		if (hasCloseoutFor(comments, target, card.reviewRunId)) {
 			// An automatic close-out is there already (one whose marker a
 			// crash lost): record it, and post nothing.
 			settleCloseout(claim, true);
-			lines.push(
-				notPosted(
-					"PR close-out",
-					`a close-out for this review is already on PR #${verify.target.pr}`,
-				),
+			return notPosted(
+				"PR close-out",
+				`a close-out for this review is already on PR #${target.pr}`,
 			);
-			return lines;
 		}
 		const body = card.render(
-			closeoutLinks(comments, verify.target, card, verifyRunId, verify.url),
+			closeoutLinks(comments, target, card, round.runId, round.url),
 		);
-		const url = await createComment(verify.gh, verify.target, body);
+		const url = await createComment(verify.gh, target, body);
 		settleCloseout(claim, true);
-		lines.push(posted("PR close-out", verify.target, url));
+		return posted("PR close-out", target, url);
 	} catch (error) {
 		settleCloseout(claim, false);
-		lines.push(notPosted("PR close-out", ghReason(error)));
-	}
-	return lines;
-}
-
-/**
- * Refuses `dismissed` and `lowAdvisory` rows that do not fit the review
- * record, before any verify seat runs: an unknown id, an id listed twice, a
- * kept id also dismissed, an empty reason, or a high/medium id listed as
- * low/advisory. A kept low may also be listed as low/advisory; it counts as
- * kept.
- */
-export function assertVerifyJudgment(
-	findings: readonly StampedFinding[],
-	keptFindingIds: readonly string[],
-	dismissed: readonly CloseoutJudgmentRow[],
-	lowAdvisory: readonly string[],
-): void {
-	const byId = new Map(findings.map((row) => [row.id, row]));
-	const kept = new Set(keptFindingIds);
-	const claimed = new Set(keptFindingIds);
-	for (const row of dismissed) {
-		if (!byId.has(row.id)) {
-			throw new Error(
-				`Verify refused: dismissed ${row.id} is not in the review record`,
-			);
-		}
-		if (claimed.has(row.id)) {
-			throw new Error(`Verify refused: ${row.id} is listed more than once`);
-		}
-		if (row.reason.trim() === "") {
-			throw new Error(`Verify refused: dismissed ${row.id} needs a reason`);
-		}
-		claimed.add(row.id);
-	}
-	for (const id of lowAdvisory) {
-		const entry = byId.get(id);
-		if (entry === undefined) {
-			throw new Error(
-				`Verify refused: low/advisory ${id} is not in the review record`,
-			);
-		}
-		if (kept.has(id)) {
-			if (entry.finding.severity !== "low") {
-				throw new Error(
-					`Verify refused: ${id} is ${entry.finding.severity} and kept; only a low finding can also be listed as low/advisory`,
-				);
-			}
-			// A kept low counts as kept; listing it here as well is harmless.
-			continue;
-		}
-		if (claimed.has(id)) {
-			throw new Error(`Verify refused: ${id} is listed more than once`);
-		}
-		if (entry.finding.severity !== "low") {
-			throw new Error(
-				`Verify refused: ${id} is ${entry.finding.severity}; a high/medium finding that is not kept must be dismissed with a reason`,
-			);
-		}
-		claimed.add(id);
+		return notPosted("PR close-out", ghReason(error));
 	}
 }

@@ -28,6 +28,9 @@ export function replaySeat<T>(
 		...(input.expectedIds === undefined
 			? {}
 			: { expectedIds: [...input.expectedIds] }),
+		...(input.undoableIds === undefined
+			? {}
+			: { undoableIds: [...input.undoableIds] }),
 	};
 	return runner === undefined ? runSeatForReplay(replay) : runner(replay);
 }

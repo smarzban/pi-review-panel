@@ -19,6 +19,8 @@ export type SeatSpec<P extends SeatProfile = typeof DEFAULT_SEAT_PROFILE> = {
 	profile?: P;
 	expectedIds?: string[];
 	cycle?: number;
+	/** Ids an earlier verify round resolved, which a regression may name as undone. */
+	undoableIds?: string[];
 };
 
 export type SeatTool = { name: string };
