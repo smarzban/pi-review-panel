@@ -22,7 +22,11 @@ import { coerceCallArguments } from "../src/actions/call.js";
 import { parseCommand } from "../src/cli/args.js";
 import type { Config } from "../src/config/schema.js";
 import { COMPLETE_MARKER } from "../src/run/record.js";
-import { planRecheckSeats, runVerify } from "../src/run/run-verify.js";
+import {
+	planRecheckSeats,
+	runVerify,
+	VerifyCancelledError,
+} from "../src/run/run-verify.js";
 import type { StampedFinding } from "../src/run/types.js";
 import { loadVerifyChain } from "../src/run/verify-chain.js";
 import type { SdkSessionFactory } from "../src/seat/run-seat.js";
@@ -91,7 +95,18 @@ type Row = {
 };
 
 /** What each recheck seat submits, by lens; `lost` makes it fail. */
-let recheckScript: Map<string, Row[] | "lost" | { tries: unknown[][] }>;
+let recheckScript: Map<
+	string,
+	Row[] | "lost" | "hold" | { tries: unknown[][] }
+>;
+/** Called when a `hold` seat starts waiting, with how many wait now. */
+let onHold: (waiting: number) => void;
+/** Lenses of the sessions the runner aborted. */
+let abortedLenses: string[];
+/** Prompts still running, across every session. */
+let activePrompts: number;
+/** Sessions waiting in a `hold`. */
+let holding: number;
 /** Each verify seat's disposition per id; resolved when not named. */
 let verifyScript: Map<string, "resolved" | "still present">;
 /** Every session the runner opened, with its spec and its prompt. */
@@ -105,7 +120,7 @@ let repo: string;
 let pinned: string;
 /** The head each pin was asked for. */
 let pins: string[];
-/** The session count when each snapshot was released. */
+/** The prompts still running when each snapshot was released. */
 let releases: number[];
 let commits: string[];
 let comments: Array<{
@@ -167,6 +182,10 @@ beforeEach(() => {
 	writeFileSync(path.join(recordPath, COMPLETE_MARKER), "");
 	signReviewRecord(recordPath);
 	recheckScript = new Map();
+	onHold = () => undefined;
+	abortedLenses = [];
+	activePrompts = 0;
+	holding = 0;
 	verifyScript = new Map();
 	sessions = [];
 	refusals = [];
@@ -199,72 +218,91 @@ const factory: SdkSessionFactory = async (input) => {
 	const entry = { spec, prompt: "", tools: tools.map((tool) => tool.name) };
 	sessions.push(entry);
 	let submitted = false;
+	let release: (() => void) | undefined;
+	const prompt = async (text: string) => {
+		entry.prompt ||= text;
+		if (submitted) {
+			return;
+		}
+		if (recheckScript.get(spec.lens) === "hold") {
+			// Waits until the runner aborts this session.
+			const waiting = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			holding += 1;
+			onHold(holding);
+			await waiting;
+			return;
+		}
+		const tool = tools.find((row) => row.name.startsWith("submit_"));
+		if (tool === undefined) {
+			throw new Error("no submit tool");
+		}
+		let tries: Array<Record<string, unknown>>;
+		if (
+			(spec.profile as { kind?: string } | undefined)?.kind === "verification"
+		) {
+			tries = [
+				{
+					items: (spec.expectedIds ?? []).map((id) => {
+						const disposition = verifyScript.get(id) ?? "resolved";
+						return {
+							id,
+							disposition,
+							...(disposition === "resolved"
+								? {
+										evidence: {
+											file: "src/cache.ts",
+											explanation: `${id} holds at line 3`,
+										},
+									}
+								: {}),
+						};
+					}),
+					regressions: [],
+				},
+			];
+		} else {
+			const script = recheckScript.get(spec.lens) ?? [];
+			if (script === "lost" || script === "hold") {
+				throw new Error("injected provider failure");
+			}
+			tries = Array.isArray(script)
+				? [{ findings: script }]
+				: script.tries.map((findings) => ({ findings }));
+		}
+		// Each try is a submission; a refused one is followed by the
+		// next, as a model would after a tool error.
+		for (const args of tries) {
+			try {
+				await tool.execute(
+					"scripted",
+					args,
+					new AbortController().signal,
+					() => undefined,
+					{},
+				);
+				submitted = true;
+				return;
+			} catch (error) {
+				refusals.push(error instanceof Error ? error.message : String(error));
+			}
+		}
+	};
 	return {
 		session: {
 			async prompt(text: string) {
-				entry.prompt ||= text;
-				if (submitted) {
-					return;
-				}
-				const tool = tools.find((row) => row.name.startsWith("submit_"));
-				if (tool === undefined) {
-					throw new Error("no submit tool");
-				}
-				let tries: Array<Record<string, unknown>>;
-				if (
-					(spec.profile as { kind?: string } | undefined)?.kind ===
-					"verification"
-				) {
-					tries = [
-						{
-							items: (spec.expectedIds ?? []).map((id) => {
-								const disposition = verifyScript.get(id) ?? "resolved";
-								return {
-									id,
-									disposition,
-									...(disposition === "resolved"
-										? {
-												evidence: {
-													file: "src/cache.ts",
-													explanation: `${id} holds at line 3`,
-												},
-											}
-										: {}),
-								};
-							}),
-							regressions: [],
-						},
-					];
-				} else {
-					const script = recheckScript.get(spec.lens) ?? [];
-					if (script === "lost") {
-						throw new Error("injected provider failure");
-					}
-					tries = Array.isArray(script)
-						? [{ findings: script }]
-						: script.tries.map((findings) => ({ findings }));
-				}
-				// Each try is a submission; a refused one is followed by the
-				// next, as a model would after a tool error.
-				for (const args of tries) {
-					try {
-						await tool.execute(
-							"scripted",
-							args,
-							new AbortController().signal,
-							() => undefined,
-							{},
-						);
-						submitted = true;
-						return;
-					} catch (error) {
-						refusals.push(
-							error instanceof Error ? error.message : String(error),
-						);
-					}
+				activePrompts += 1;
+				try {
+					await prompt(text);
+				} finally {
+					activePrompts -= 1;
 				}
 			},
-			async abort() {},
+			async abort() {
+				abortedLenses.push(spec.lens);
+				release?.();
+			},
 			dispose() {},
 			getSessionStats() {
 				return {
@@ -316,6 +354,21 @@ const runGh: RoundGhRunner = (args, options) => {
 	throw new Error(`unexpected gh ${joined}`);
 };
 
+/**
+ * A pinned snapshot apart from the repository, so a seat run in the host
+ * checkout instead is seen. A release records the prompts still running.
+ */
+function pin(_repoDir: string, head?: string) {
+	pins.push(head ?? "");
+	return {
+		worktreePath: pinned,
+		release: () => {
+			releases.push(activePrompts);
+			return { ok: true as const };
+		},
+	};
+}
+
 function deps(): ActionDependencies {
 	return {
 		env: {},
@@ -329,18 +382,7 @@ function deps(): ActionDependencies {
 			runVerify(input, {
 				...options,
 				sessionFactory: factory,
-				// A pinned snapshot apart from the repository, so a seat run in
-				// the host checkout instead is seen.
-				pinSnapshot: (_repoDir: string, head?: string) => {
-					pins.push(head ?? "");
-					return {
-						worktreePath: pinned,
-						release: () => {
-							releases.push(sessions.length);
-							return { ok: true };
-						},
-					};
-				},
+				pinSnapshot: pin,
 			}),
 	};
 }
@@ -728,6 +770,41 @@ describe("verify --recheck", () => {
 			"- **V1-F1 [low]** backoff constant is unnamed (`src/retry.ts:2`) — terra/tests",
 		);
 		expect(v1.body).not.toContain("the new retry log prints the token");
+	});
+});
+
+describe("cancelling verify --recheck", () => {
+	it("an abort while recheck seats run reaches them; the snapshot is released after they settle, and no link is signed", {
+		timeout: 15_000,
+	}, async () => {
+		recheckScript.set("tests", "hold");
+		const controller = new AbortController();
+		onHold = (waiting) => {
+			if (waiting === 2) {
+				controller.abort();
+			}
+		};
+		await expect(
+			runVerify(
+				{
+					repoDir: repo,
+					config: CONFIG,
+					priorRunId: REVIEW,
+					headRevision: commits[2] as string,
+					keptFindingIds: ["F-1", "F-2"],
+					recheck: ["tests"],
+				},
+				{
+					recordKey: TEST_RECORD_KEY,
+					sessionFactory: factory,
+					pinSnapshot: pin,
+					abortSignal: controller.signal,
+				},
+			),
+		).rejects.toBeInstanceOf(VerifyCancelledError);
+		expect(abortedLenses.filter((lens) => lens === "tests")).toHaveLength(2);
+		expect(releases).toEqual([0]);
+		expect(loadVerifyChain(repo, REVIEW, TEST_RECORD_KEY)).toEqual([]);
 	});
 });
 
