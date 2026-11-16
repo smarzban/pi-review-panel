@@ -1124,12 +1124,17 @@ export async function postVerifyRound(
 	const blocker = closeoutBlocker(result);
 	if (facts.closeOut !== true) {
 		// Never automatic: say so only when it could have been asked for, with
-		// the command that posts it now (this verify cannot run again here).
+		// the command that posts it at this head (this verify cannot run again
+		// here): now, or after a yes when the owner approves every post.
 		if (blocker === undefined && stateAfter(facts).open.length === 0) {
+			const when =
+				ctx.mode === "ownerApproved"
+					? "the owner config asks for approval first, so after the owner's yes post it"
+					: "post it now";
 			lines.push(
 				notPosted(
 					"PR close-out",
-					`not asked for; nothing is open: post it now at this head with ${commentCommand(facts)}, and pass \`--close-out\` on the last verify next time`,
+					`not asked for; nothing is open: ${when} at this head with ${commentCommand(facts)}, and pass \`--close-out\` on the last verify next time`,
 				),
 			);
 		}

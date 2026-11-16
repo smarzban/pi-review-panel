@@ -36,8 +36,9 @@ import { signReviewRecord, TEST_RECORD_KEY } from "./fixtures/record-key.js";
 /**
  * The verify flow as rounds on one PR: each verify chains from the one
  * before, checks only what is still open, and posts a short delta. The
- * close-out card is posted once, only when asked: `verify --close-out` when
- * nothing is left open, or `comment` when the owner stops the rounds.
+ * close-out card is posted once nothing is open: `verify --close-out`, or
+ * `comment` after a verify that left nothing open without it, or when the
+ * owner stops the rounds with ids still open.
  * Nothing here reaches GitHub: gh is a script.
  */
 
@@ -72,10 +73,11 @@ const FINDINGS = [
 	finding("F-5", "medium", "log line prints the request body"),
 ];
 
-const config: Config = {
+const BASE_CONFIG: Config = {
 	roster: [{ id: "terra", provider: "openai-codex", model: "gpt-5.6-terra" }],
 	defaults: { seats: ["terra"] },
 };
+let config: Config = BASE_CONFIG;
 
 type Item = { id: string; disposition: "resolved" | "still present" };
 type Regression = {
@@ -101,6 +103,7 @@ let comments: Array<{
 }>;
 
 beforeEach(() => {
+	config = BASE_CONFIG;
 	root = mkdtempSync(path.join(tmpdir(), "chained-rounds-"));
 	repo = path.join(root, "repo");
 	mkdirSync(repo);
@@ -603,6 +606,27 @@ describe("--close-out", () => {
 		const card = await stopWith(args);
 		expect(card.body).toMatch(/^## Review panel\n/u);
 		expect(card.body).toContain("resolved in verify 3");
+	});
+
+	it("without it, under an owner config that asks for approval first, the hint posts the card only after the owner's yes", async () => {
+		config = {
+			...BASE_CONFIG,
+			defaults: { ...BASE_CONFIG.defaults, prComment: "ownerApproved" },
+		};
+		const v1 = await round1();
+		expect(v1.reply).toContain(
+			"PR comment: not posted (the owner config asks for approval first)",
+		);
+		const v2 = await round2(v1.runId, { ownerApproved: true });
+		const v3 = await verify(
+			{ priorRunId: v2.runId, head: commits[4], ownerApproved: true },
+			{ items: [{ id: "F-2", disposition: "resolved" }] },
+		);
+		expect(closeouts()).toEqual([]);
+		expect(v3.reply).toContain(
+			`PR close-out: not posted (not asked for; nothing is open: the owner config asks for approval first, so after the owner's yes post it at this head with \`review-panel comment --prior-run-id ${REVIEW} --owner-approved\`, and pass \`--close-out\` on the last verify next time)`,
+		);
+		expect(v3.reply).not.toContain("post it now");
 	});
 
 	it("is taken by the parser and by a call object", () => {

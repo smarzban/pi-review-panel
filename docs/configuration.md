@@ -562,7 +562,8 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   at the same head), and says to pass `--close-out` on the last verify next time; run it then,
   before the PR is merged, with no further ask. The owner's say is needed only to stop the
   rounds with ids still open: `comment` then posts the card listing them as open. An owner who
-  wants to approve every post sets `defaults.prComment: "ownerApproved"`. `comment`
+  wants to approve every post sets `defaults.prComment: "ownerApproved"`; that reply then says
+  to post the card after the owner's yes. `comment`
   runs the final check too, after its own refusals and before the card, when it is due, and
   the reply names it as the latest verify. When ids were already open, it only reports: what
   it finds is listed as open, and a lost seat is named on `Lost:` and on the
