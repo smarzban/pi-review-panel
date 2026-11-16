@@ -6,14 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-17
+
 ### Changed
 
-- The review, verify and close-out comments are easier to read. Results and findings are tables, evidence is folded under a toggle, reasons stand on their own as quotes, review findings sit under High, Medium and Low headings, and seat names, vote counts, time and cost move to small text at the end.
-- The verify comment gives a table row for each checked id with what the seats said, and a `### Not resolved` section with the seat's reason for each id that was not resolved, instead of listing every id with its evidence.
-- A verify with `--recheck` counts its seats apart, `verify 1/1 · recheck 2/2`, instead of `1/1 voted`, which left the recheck seats out.
-- Seats now get a writing rule: the title names the problem, not the fix, and the evidence says what goes wrong first, in plain words. The submit tools refuse a title over 120 characters, evidence over 800 or a verify explanation over 500, and the seat writes it again.
-- The verify comment shows the caller's scoping note as `This round:` instead of `Why this round:`.
-- The skill passes `--scoping-note` on a verify only when it adds something (a change from outside the panel, or why each recheck lens), not on every round.
+- Review, verify and close-out comments are easier to read: tables, folded evidence, quoted reasons, severity headings, and seats, votes, time and cost in small text.
+- The verify comment shows a row per checked id with what the seats said, and a `Not resolved` section with the reason for each id still open.
+- With `--recheck`, the verify comment counts seats apart: `verify 1/1 · recheck 2/2`.
+- Seats name the problem in the title and say what goes wrong first. A title over 120 characters, evidence over 800 or a verify explanation over 500 is refused, and the seat rewrites it.
+- The verify comment labels the scoping note `This round:`.
+- The skill passes `--scoping-note` on a verify only when it adds something.
 
 ## [1.0.0] - 2026-11-16
 
@@ -95,7 +97,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Owner-controlled reviewer rosters, package-owned lenses, pinned review snapshots, structured findings, and persisted run records.
 - The `review-panel` skill and owner configuration guide.
 
-[Unreleased]: https://github.com/smarzban/pi-review-panel/compare/v1.0.0...main
+[Unreleased]: https://github.com/smarzban/pi-review-panel/compare/v1.1.0...main
+[1.1.0]: https://github.com/smarzban/pi-review-panel/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/smarzban/pi-review-panel/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/smarzban/pi-review-panel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/smarzban/pi-review-panel/compare/v0.1.0...v0.2.0
