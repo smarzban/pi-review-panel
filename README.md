@@ -13,6 +13,11 @@ Review panel does not judge. It seats the models you named, runs the lenses the
 change warrants, and hands you evidence. You keep or skip. You fix. It verifies
 the keep list. **You merge.**
 
+![Timeline of one PR with two fix rounds: review 1 finds issues; verify 1 and verify 2 each check only what is still open in the new commits; one final check of the whole change runs before the close-out card; you merge.](docs/images/review-flow.svg)
+
+One PR with two fix rounds. Each verify compares only the commits since the last
+round. The final check runs once, over the whole change, before the close-out card.
+
 ## Why this, not another “please review this”
 
 **Nothing else in this stack is a panel.** A chat review is prose. A

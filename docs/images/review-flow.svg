@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 262" width="740" height="262" role="img" aria-label="Timeline of one pull request with two fix rounds: review 1, verify 1, verify 2, then one final check over the whole change, the close-out card, and the merge">
+  <style>
+    .t{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#1f2328}
+    .m{fill:#59636e}
+    .lane{font-size:11px;font-weight:600;fill:#59636e}
+    .c{font-size:11px}
+    .h{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:600}
+    .s{font-size:10.5px}
+    .w{font-size:11.5px;font-weight:600;fill:#ffffff}
+    .guide{stroke:#d0d7de}
+    .axis{stroke:#1f2328}
+    .dot{fill:#ffffff;stroke:#1f2328}
+    .agent{stroke:#bf8700}
+    .panel{fill:#8250df}
+    .panelline{stroke:#8250df}
+    .paneltext{fill:#8250df}
+    .card{fill:#1a7f37}
+    .you{fill:#0969da}
+    @media (prefers-color-scheme: dark){
+      .t{fill:#e6edf3}
+      .m,.lane{fill:#9198a1}
+      .guide{stroke:#3d444d}
+      .axis{stroke:#e6edf3}
+      .dot{fill:#0d1117;stroke:#e6edf3}
+      .agent{stroke:#d29922}
+      .panel{fill:#8957e5}
+      .panelline{stroke:#a371f7}
+      .paneltext{fill:#a371f7}
+      .card{fill:#238636}
+      .you{fill:#1f6feb}
+    }
+  </style>
+
+  <g class="guide" stroke-dasharray="3 4">
+    <line x1="120" y1="44" x2="120" y2="250"/><line x1="300" y1="44" x2="300" y2="250"/>
+    <line x1="460" y1="44" x2="460" y2="250"/><line x1="620" y1="44" x2="620" y2="250"/>
+  </g>
+
+  <line class="axis" x1="120" y1="36" x2="620" y2="36" stroke-width="2"/>
+  <g class="dot" stroke-width="2">
+    <circle cx="120" cy="36" r="6"/><circle cx="300" cy="36" r="6"/><circle cx="460" cy="36" r="6"/><circle cx="620" cy="36" r="6"/>
+  </g>
+  <text class="t h" x="120" y="13" text-anchor="middle">a1f3c09</text>
+  <text class="t m c" x="120" y="25" text-anchor="middle">main</text>
+  <text class="t h" x="300" y="13" text-anchor="middle">4e7b2d1</text>
+  <text class="t m c" x="300" y="25" text-anchor="middle">PR opened</text>
+  <text class="t h" x="460" y="13" text-anchor="middle">9c05e8a</text>
+  <text class="t m c" x="460" y="25" text-anchor="middle">after fix 1</text>
+  <text class="t h" x="620" y="13" text-anchor="middle">d27f6b3</text>
+  <text class="t m c" x="620" y="25" text-anchor="middle">after fix 2</text>
+
+  <text class="t lane" x="0" y="80">CODING AGENT</text>
+  <text class="t lane" x="0" y="124">REVIEW PANEL</text>
+  <text class="t lane" x="0" y="136">(posts to the PR)</text>
+  <text class="t lane" x="0" y="243">YOU</text>
+
+  <g class="agent" stroke-width="2" fill="none">
+    <path d="M306 76 H450"/><path d="M444 71 L452 76 L444 81"/>
+    <path d="M466 76 H610"/><path d="M604 71 L612 76 L604 81"/>
+  </g>
+  <text class="t m s" x="380" y="68" text-anchor="middle">fixes what is open</text>
+  <text class="t m s" x="540" y="68" text-anchor="middle">fixes what is open</text>
+
+  <g class="panel">
+    <rect x="124" y="112" width="172" height="22" rx="5"/>
+    <rect x="304" y="112" width="152" height="22" rx="5"/>
+    <rect x="464" y="112" width="152" height="22" rx="5"/>
+  </g>
+  <text class="t w" x="210" y="127" text-anchor="middle">review 1</text>
+  <text class="t w" x="380" y="127" text-anchor="middle">verify 1</text>
+  <text class="t w" x="540" y="127" text-anchor="middle">verify 2</text>
+  <text class="t m s" x="210" y="149" text-anchor="middle">finds issues F-1, F-2…</text>
+  <text class="t m s" x="380" y="149" text-anchor="middle">were the open ids fixed?</text>
+  <text class="t m s" x="380" y="161" text-anchor="middle">did the fix break anything?</text>
+  <text class="t m s" x="540" y="149" text-anchor="middle">were the open ids fixed?</text>
+  <text class="t m s" x="540" y="161" text-anchor="middle">did the fix break anything?</text>
+
+  <rect class="panelline" x="304" y="176" width="312" height="22" rx="5" fill="none" stroke-width="2"/>
+  <text class="t paneltext" x="460" y="191" text-anchor="middle" font-size="11.5" font-weight="600">final check (once)</text>
+  <text class="t m s" x="460" y="213" text-anchor="middle">whole change: do all the fixes still hold together?</text>
+  <rect class="card" x="630" y="172" width="108" height="30" rx="6"/>
+  <text class="t w" x="684" y="191" text-anchor="middle">close-out card</text>
+
+  <rect class="you" x="630" y="226" width="108" height="26" rx="6"/>
+  <text class="t w" x="684" y="243" text-anchor="middle">you merge</text>
+</svg>
