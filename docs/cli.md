@@ -210,7 +210,9 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   recorded relative to the agent folder, and a source with a credential is printed redacted:
   that form removes the one recorded source it matches), or a local path from the working
   folder. It deletes a
-  git clone or npm install, keeps a local folder, and exits 1 when nothing matches. Remove the
+  git clone or npm install, keeps a local folder, and exits 1 when nothing matches. A source
+  that `install` would refuse and that is not recorded exactly as given is not looked up and
+  not repeated: the command says nothing matches and points to `extension list`. Remove the
   path from every roster row too.
 
 ## Commands
@@ -282,8 +284,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
   digits), in case it is a key typed in the wrong place. Values you give on purpose can still
   appear in an error: the value of any flag (for example `--repo`, `--lenses` or `--scoping-note`),
   any value in a `call` object, such as `repository` or `priorRunId`, and the source of
-  `extension install` or `remove` (a source that `install` refuses is never repeated; one it
-  accepts can be). `extension install` decides on what Pi's own package
+  `extension install` or `remove` (a source that `install` refuses is never repeated, by
+  `install` or by `remove`; one it accepts can be). `extension install` decides on what Pi's own package
   manager parses from the source (the same parse `pi install` runs) and refuses, before
   anything is cloned or recorded:
   - a git source with any user info other than the SSH user `git`: a password, any user name

@@ -1073,6 +1073,16 @@ export async function removeExtension(input: {
 		);
 	} else {
 		source = absoluteSource(input.source, input.cwd, input.home);
+		// A source install would refuse names nothing recorded as given, and
+		// any part of it may be a token: neither the package manager's progress
+		// nor the answer repeats it.
+		if (
+			sourceProblem(source, await input.sdk.parseSource(source)) !== undefined
+		) {
+			throw new SetupError(
+				`No installed extension matches the source in ${input.agentDir.dir}. review-panel does not repeat it here, since install would refuse it and it may hold a token. review-panel extension list prints the installed sources; remove one by the form it prints.`,
+			);
+		}
 	}
 	const removed = await untilAborted(
 		input.sdk.removeExtension({

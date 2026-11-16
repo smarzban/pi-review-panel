@@ -1301,6 +1301,28 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 		]);
 	});
 
+	// A source install would refuse is not repeated by remove either, unless it
+	// is recorded exactly (R-3).
+	it.each([
+		`git:h.invalid/o/r?t=${S}`,
+		`git:h.invalid/o/r#${S}`,
+		`git:user:${S}@h.invalid/o/r`,
+		`npm:${S}@h.invalid/a.tgz`,
+		`HTTPS://${S}@h.invalid/o/r`,
+	])(
+		"remove repeats no part of %s, which matches nothing installed",
+		async (source) => {
+			const removed = await removal(source);
+			expect(removed.code).toBe(EXIT_FAILED);
+			expect(removed.removals).toEqual([]);
+			expect(removed.out).toBe("");
+			expect(removed.err).toBe(
+				`review-panel: No installed extension matches the source in ${OWN_FOLDER.dir}. review-panel does not repeat it here, since install would refuse it and it may hold a token. review-panel extension list prints the installed sources; remove one by the form it prints.\n`,
+			);
+			expect(removed.out + removed.err).not.toContain(S);
+		},
+	);
+
 	it.each(REFUSED)(
 		"%s is refused with one of the fixed messages",
 		async (source) => {
