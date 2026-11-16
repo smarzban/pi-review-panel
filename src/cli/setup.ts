@@ -537,7 +537,8 @@ function withinBound<T>(
 
 /**
  * A local source (anything that is not `npm:`, `git:` or a URL) as an
- * absolute path: a leading `~` is the home folder, a `file:` URL is decoded,
+ * absolute path: a leading `~` is the home folder, a `file:` URL with a path
+ * (any case) is decoded,
  * and anything else is resolved from `cwd`, as Pi resolves one from the folder
  * it runs in. Other sources pass through. An SSH source written the scp way
  * (`git@host:owner/repo`) is refused: Pi would take it for a local path, and
@@ -557,7 +558,12 @@ export function absoluteSource(
 	if (/^[^\s/:@]+@[^\s/:]+:/.test(trimmed)) {
 		throw new SetupError(REFUSED_SCP);
 	}
-	if (trimmed.startsWith("file:")) {
+	if (/^file:/i.test(trimmed)) {
+		// Only a URL with a path (file:/..., file:///...) names a folder:
+		// `file:name` would become /name.
+		if (!/^file:\//i.test(trimmed)) {
+			throw new SetupError(REFUSED_FILE_URL);
+		}
 		try {
 			return fileURLToPath(trimmed);
 		} catch {

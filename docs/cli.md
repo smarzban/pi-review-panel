@@ -182,7 +182,7 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   `<agent folder>/git/<host>/<owner>/<repo>`, then `npm install` there), `npm:name` (a registry
   package only, into
   `<agent folder>/npm`), or a local folder (recorded, not copied; a leading `~` and a `file:`
-  URL work, and a relative path is taken from the working folder). An SSH source needs the
+  URL with a path (`file:///full/path`, any case) work, and a relative path is taken from the working folder). An SSH source needs the
   prefix: `git:git@github.com:owner/repo`; without it the command refuses and says so. It records the source in the
   agent folder's `settings.json` `packages`, keeping every other setting. It needs `git` (and
   `npm` for a package with dependencies) on PATH, and the network for a remote source. Their
@@ -307,8 +307,8 @@ both: `--seats sol,opus` is the same as `--seats sol --seats opus`.
 
   A refusal names no part of the source, since any part of it can hold a token: it says why the
   source was refused and what to write instead. The same holds for an scp-style source written
-  without the `git:` prefix (`git@host:owner/repo`) and a `file:` URL that names no local path,
-  which `extension install` and `remove` refuse before Pi parses them.
+  without the `git:` prefix (`git@host:owner/repo`) and a `file:` URL (in any case) that names no local path, such as
+  `file://user@host/x` or `file:name`, which `extension install` and `remove` refuse before Pi parses them.
 
   Pi would store such a source in `settings.json`, name the clone folder after the credential,
   and git would print that folder, so the refusal is what keeps a credential out of git's and

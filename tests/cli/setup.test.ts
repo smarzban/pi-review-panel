@@ -1263,10 +1263,14 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 	}
 
 	// The refusals made before Pi parses a source are shared with remove (F-1,
-	// F-2).
+	// F-2), and take the file: scheme in any case (R-2).
 	it.each([
 		[`${S}@host.com:o/r`, SCP],
 		[`file://${S}@host.example/x`, FILE_URL],
+		[`FILE://${S}@host.example/x`, FILE_URL],
+		[`File://user:${S}@host.example/x`, FILE_URL],
+		[`File:${S}`, FILE_URL],
+		[`file:${S}/x`, FILE_URL],
 	])(
 		"install and remove refuse %s with a fixed message",
 		async (source, message) => {
@@ -1285,6 +1289,17 @@ describe("an install refusal never repeats the source (N4-1)", () => {
 			).not.toContain(S);
 		},
 	);
+
+	it("a file: URL in any case names the same folder (R-2)", async () => {
+		const { sdk, installs } = fakeSdk();
+		const h = harness({ sdk });
+		expect(
+			await h.run(["extension", "install", "FILE:///home/user/my-ext"]),
+		).toBe(EXIT_OK);
+		expect(installs.map((entry) => entry.source)).toEqual([
+			"/home/user/my-ext",
+		]);
+	});
 
 	it.each(REFUSED)(
 		"%s is refused with one of the fixed messages",
