@@ -1094,15 +1094,18 @@ export async function removeExtension(input: {
 			);
 		}
 	}
+	// The source's own credential parts are hidden, as list prints it: the
+	// source may be the full recorded one the printed form matched.
+	const redact = await redactorFor(input.sdk, source);
 	const removed = await untilAborted(
 		input.sdk.removeExtension({
 			agentDir: input.agentDir.dir,
 			source,
-			progress: (line) => input.progress(redactSecrets(line)),
+			progress: (line) => input.progress(redact(line)),
 		}),
 		input.signal,
 	);
-	const shownSource = redactSecrets(source);
+	const shownSource = redact(source);
 	if (!removed) {
 		throw new SetupError(
 			`No installed extension matches ${shownSource} in ${input.agentDir.dir}. review-panel extension list prints the installed sources.`,

@@ -1383,4 +1383,28 @@ describe("a recorded source's credential never shows in list or remove (R-4, R-5
 			expect(h.out() + h.err(), argv.join(" ")).not.toContain(S);
 		}
 	});
+
+	// Remove by the printed form or the exact source shows the printed form,
+	// in Pi's progress line and the answer (R-4).
+	describe.each([
+		[`git:h.invalid/o/r?t=${S}`, "git:h.invalid/o/r?***"],
+		[`git:user:${S}@h.invalid/o/r`, "git:***@h.invalid/o/r"],
+		[`ssh://deploy@h.invalid/o/r`, "ssh://***@h.invalid/o/r"],
+		[`git:h.invalid/o/r#${S}`, "git:h.invalid/o/r#***"],
+		[`https://h.invalid/o/r@v1#${S}`, "https://h.invalid/o/r@v1#***"],
+	])("remove of the recorded %s", (source, printed) => {
+		it.each([
+			["the printed form", printed],
+			["the exact source", source],
+		])("by %s shows only the printed form", async (_how, argument) => {
+			const { sdk, removed } = recorded(source);
+			const h = harness({ sdk });
+			expect(await h.run(["extension", "remove", argument])).toBe(EXIT_OK);
+			expect(removed).toEqual([source]);
+			expect(h.err()).toBe(`Removing ${printed}...\n`);
+			expect(h.out()).toContain(`Removed ${printed} from ${OWN_FOLDER.dir}.`);
+			expect(h.out() + h.err()).not.toContain(S);
+			expect(h.out() + h.err()).not.toContain("deploy");
+		});
+	});
 });

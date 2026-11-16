@@ -842,6 +842,39 @@ describe("credentials in an extension source (N-1, regression-1-1)", () => {
 				.packages,
 		).toEqual([]);
 	}, 120_000);
+
+	it.each([
+		["the printed form", "git:h.invalid/o/r?***"],
+		["the exact source", `git:h.invalid/o/r?t=${SECRET}`],
+	])(
+		"a recorded source with a query token, removed by %s, shows only the printed form (R-4)",
+		(_how, argument) => {
+			const home = tempHome();
+			const agent = path.join(home, "agent");
+			mkdirSync(agent, { recursive: true });
+			writeFileSync(
+				path.join(agent, "settings.json"),
+				JSON.stringify({ packages: [`git:h.invalid/o/r?t=${SECRET}`] }),
+			);
+			const env = { PI_CODING_AGENT_DIR: agent };
+			const listed = cli(home, ["extension", "list"], { env });
+			expect(listed.code).toBe(0);
+			expect(listed.stdout).toContain("git:h.invalid/o/r?***");
+			expect(listed.stdout + listed.stderr).not.toContain(SECRET);
+
+			const removed = cli(home, ["extension", "remove", argument], { env });
+			expect(removed.code).toBe(0);
+			expect(removed.stdout).toContain(
+				`Removed git:h.invalid/o/r?*** from ${agent}.`,
+			);
+			expect(removed.stdout + removed.stderr).not.toContain(SECRET);
+			expect(
+				JSON.parse(readFileSync(path.join(agent, "settings.json"), "utf8"))
+					.packages,
+			).toEqual([]);
+		},
+		120_000,
+	);
 });
 
 describe("an install stopped by Ctrl-C (N-3)", () => {

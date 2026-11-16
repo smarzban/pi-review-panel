@@ -208,7 +208,8 @@ review-panel extension remove git:github.com/earendil-works/pi-claude-code
   `.pi/` folder in the working folder, so a repository cannot add a package to the list.
 - `extension remove <source>` takes the source as `extension list` prints it (a local folder is
   recorded relative to the agent folder, and a source with a credential is printed redacted:
-  that form removes the one recorded source it matches), or a local path from the working
+  that form removes the one recorded source it matches, and the output, Pi's progress line
+  included, shows only that form), or a local path from the working
   folder. It deletes a
   git clone or npm install, keeps a local folder, and exits 1 when nothing matches. A source
   that `install` would refuse and that is not recorded exactly as given is not looked up and
