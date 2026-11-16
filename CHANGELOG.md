@@ -13,7 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - pi-review-panel is now a standalone command, `review-panel`, that works with any coding agent; it no longer runs as a Pi tool. To upgrade: `pi remove npm:pi-review-panel`, `npm install -g pi-review-panel`, then `review-panel skill install`.
 - The `pi-review` host skill is removed. Delete old copies under `~/.claude/skills/pi-review`, `~/.codex/skills/pi-review` and `~/.grok/skills/pi-review`.
 - The repository audit (the `audit` action) is removed.
-- Verify rounds chain: each `verify` takes the latest verify's run id and checks only what is still open ([verify rounds](docs/configuration.md#verify-rounds-chain)).
+- Review records from 0.3.0 are refused by `verify` and `comment`; run a new review.
+- Verify rounds chain: each `verify` takes the latest verify's run id and checks only what is still open. The first verify must keep or dismiss every high and medium finding ([verify rounds](docs/configuration.md#verify-rounds-chain)).
+- `comment` posts only to an open pull request whose head is the card's commit.
 
 ### Added
 
