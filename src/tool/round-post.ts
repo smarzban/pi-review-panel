@@ -607,6 +607,10 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 			? orderFindings(findings).map((entry) => findingRow(entry, facts.panel))
 			: groups.map((group) => groupRow(group, facts.panel));
 	const clean = rows.length === 0;
+	// No seat voted: nothing was checked, so it is lost coverage, never clean.
+	const checked = facts.result.outcomes.some(
+		(row) => row.outcome.kind === "voted",
+	);
 	if (clean) {
 		// The closing line below stands in for the empty list.
 		head.pop();
@@ -630,7 +634,7 @@ export function renderReviewRound(facts: ReviewRoundFacts): string {
 			);
 		}
 	}
-	if (clean) {
+	if (clean && checked) {
 		// No findings, so nothing for a close-out card to summarise; once a
 		// verify round follows, the card posts at the end as usual.
 		tail.push("", NO_CLOSEOUT_NEEDED);

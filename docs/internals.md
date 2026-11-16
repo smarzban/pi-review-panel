@@ -73,7 +73,7 @@ cannot be made is one reply line, never a run failure.
 `comment` stays the manual path: it posts or updates one PR card with `--owner-approved`
 (passed once nothing is open, or when the owner stops the rounds with ids open), found later
 by author plus heading `## Review panel`. A review with no findings and no verify after it has
-no card: its review comment ends `No findings · no close-out needed` (`NO_CLOSEOUT_NEEDED`), and
+no card: its review comment ends `No findings · no close-out needed` (`NO_CLOSEOUT_NEEDED`; only when some seat voted, since a review where none did checked nothing), and
 `comment` refuses it right after loading the chain, before any seat or post. It posts only to an open PR whose head is the commit
 the card is about: the one `--pr` names, or the one open PR at that head. Both cards are built from the review and its whole verify chain (`comment` reads it
 itself; a `verifyRunId` it is given must be the latest link) and list each id as “resolved in

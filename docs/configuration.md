@@ -675,7 +675,7 @@ posts that round to it as a new comment when the run finishes. It finds the PR w
   a claim the verify held is given back. Comment listings read every page.
 
 A review with no findings and no verify after it has no close-out card: its review comment ends
-with `No findings · no close-out needed` (a lost seat is still named on `Lost:`), and `comment`
+with `No findings · no close-out needed` (a lost seat is still named on `Lost:`; when no seat voted, nothing was checked, so that line is left out and `comment` does not refuse), and `comment`
 refuses it before any seat or post. Once a verify follows (later pushes, say), the rounds have
 something to summarise: `verify --close-out` posts the card when nothing is open after it, as
 for any review, and `comment` posts it too.

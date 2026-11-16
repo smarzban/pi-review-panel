@@ -1089,7 +1089,12 @@ export async function commentAction(
 	let tip = links.at(-1);
 	// A review with no findings and no verify after it has no rounds to
 	// summarise: no card, no seat, no post. Once a verify follows, it has.
-	if (facts.run.findings.length === 0 && tip === undefined) {
+	// A review where no seat voted checked nothing: it is not refused here.
+	if (
+		facts.run.findings.length === 0 &&
+		tip === undefined &&
+		facts.lost.length < facts.panel.seats.length
+	) {
 		throw new Error(
 			`comment refused: review "${facts.run.runId}" had no findings and no verify followed it, so there is no close-out card to post`,
 		);
