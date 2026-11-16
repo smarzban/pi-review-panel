@@ -275,7 +275,11 @@ const factory: SdkSessionFactory = async (input) => {
 				},
 			];
 		} else {
-			const script = recheckScript.get(spec.lens) ?? [];
+			// A script for one seat (`<model>/<lens>`) wins over its lens's.
+			const script =
+				recheckScript.get(`${spec.model}/${spec.lens}`) ??
+				recheckScript.get(spec.lens) ??
+				[];
 			if (script === "lost" || script === "hold") {
 				throw new Error("injected provider failure");
 			}
@@ -869,11 +873,28 @@ describe("verify --recheck", () => {
 		);
 	});
 
-	it("one lens lost, one voted with nothing: nothing new names only the lens that voted", async () => {
+	it("one lens lost, one voted with nothing: nothing new names the lens that voted and the seats lost", async () => {
 		recheckScript.set("tests", "lost");
 		const v1 = await first({ recheck: ["tests", "security"] });
-		expect(v1.body).toContain("**Recheck (security):** nothing new");
+		expect(v1.body).toContain(
+			"**Recheck (security):** nothing new (2 tests seats lost)",
+		);
+		expect(v1.reply).toContain(
+			"Recheck (security): nothing new (2 tests seats lost)",
+		);
 		expect(v1.body).toContain("**Lost:** terra/tests, opus/tests");
+	});
+
+	it("a lens with one seat lost and one voting with nothing never reads as plain nothing new", async () => {
+		recheckScript.set("gpt-5.6-terra/tests", "lost");
+		const v1 = await first({ recheck: ["tests"] });
+		expect(v1.body).toContain(
+			"**Recheck (tests):** nothing new (1 tests seat lost)",
+		);
+		expect(v1.reply).toContain(
+			"Recheck (tests): nothing new (1 tests seat lost)",
+		);
+		expect(v1.body).toContain("**Lost:** terra/tests");
 	});
 
 	it("the recheck prompt lists, as data, what is open and what is settled, and asks only for what is not listed", async () => {

@@ -728,8 +728,9 @@ export type RecheckView = {
 	lost: string[];
 	/**
 	 * With no findings: the lenses a seat voted for, then what that means.
-	 * A lens whose every seat was lost checked nothing, so it is never
-	 * "nothing new"; with every seat lost, the line says so.
+	 * "Nothing new" names every lost seat by lens count (`nothing new (1
+	 * tests seat lost)`), so lost coverage never reads as a clean check;
+	 * with every seat lost, the line says nothing was checked.
 	 */
 	summaryLenses: string[];
 	nothing: string;
@@ -750,6 +751,24 @@ export function recheckView(result: RunVerifyResult): RecheckView | undefined {
 			.map((facts) => facts.seat.lens),
 	);
 	const votedLenses = recheck.lenses.filter((lens) => voted.has(lens));
+	// A lost seat is lost coverage: "nothing new" says how many were lost,
+	// by lens, so a partly lost lens never reads as fully checked.
+	const lostBy = new Map<string, number>();
+	for (const facts of recheck.outcomes) {
+		if (facts.outcome.kind === "failed") {
+			lostBy.set(facts.seat.lens, (lostBy.get(facts.seat.lens) ?? 0) + 1);
+		}
+	}
+	const lostNote =
+		lostBy.size === 0
+			? ""
+			: ` (${recheck.lenses
+					.filter((lens) => lostBy.has(lens))
+					.map((lens) => {
+						const count = lostBy.get(lens) ?? 0;
+						return `${count} ${lens} seat${count === 1 ? "" : "s"} lost`;
+					})
+					.join(", ")})`;
 	return {
 		lenses: recheck.lenses,
 		seats: recheck.seats,
@@ -758,6 +777,7 @@ export function recheckView(result: RunVerifyResult): RecheckView | undefined {
 			.filter((facts) => facts.outcome.kind === "failed")
 			.map((facts) => `${facts.seat.rosterId}/${facts.seat.lens}`),
 		summaryLenses: votedLenses.length === 0 ? recheck.lenses : votedLenses,
-		nothing: votedLenses.length === 0 ? RECHECK_ALL_LOST : "nothing new",
+		nothing:
+			votedLenses.length === 0 ? RECHECK_ALL_LOST : `nothing new${lostNote}`,
 	};
 }

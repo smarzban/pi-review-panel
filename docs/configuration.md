@@ -460,7 +460,9 @@ it, against the diff from that verify's head:
    its stated severity; it is open like any id: later verifies check it, and `keptFindingIds`,
    `dismissed`, `lowAdvisory` (a low one), the undo guard, the final check and the card take
    it. A lost recheck seat is lost coverage: it is named on `Lost:` (on the card as
-   `(recheck)`), it never makes the round say "nothing new", and it blocks `--close-out` for
+   `(recheck)`), it is counted on the recheck line (`Recheck (tests): nothing new (1 tests
+   seat lost)`; with every recheck seat lost, the line says nothing was checked), so it never
+   reads as a plain "nothing new", and it blocks `--close-out` for
    that round; it does not change what the verify seats resolved. Recheck findings are not
    grouped: G-ids come only from the review's signed grouping. The final check runs no
    recheck seat. The cost is real: a review's worth of seats per round.

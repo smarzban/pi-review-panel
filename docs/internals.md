@@ -210,7 +210,8 @@ are kept apart from `outcomes`: a lost one is not a lost verify seat (`ChainLink
 empties `resolved`), but it is named on `Lost:`, on the card as `(recheck)`
 (`CloseoutVerifyRound.recheckLost`), and in `closeoutBlocker`, so it blocks `--close-out` for
 that round. The comment's `**Recheck (<lenses>):** nothing new` names only lenses that had a
-voting seat; with none, it says every recheck seat was lost. Not grouped: G-ids expand only from
+voting seat and appends the lost seats by lens (`nothing new (1 tests seat lost)`, from
+`recheckView`); with none voting, it says every recheck seat was lost. Not grouped: G-ids expand only from
 the review's signed `execution.json`, and a per-round grouping would need its own id space in
 every id argument. The final check refuses `recheck`. Resume still refuses a verify run: an
 interrupted verify is never signed, so a new verify from the same tip runs every seat again.

@@ -65,8 +65,9 @@ Before touching these, read the matching section of `docs/internals.md`:
   not the latest is refused before any seat runs.
 - `verify --recheck` is opt-in: its seats come only from the owner's `defaults.seats`, cover
   only the round's diff, and what they find (`V<N>-F<k>`) is an open id from the signed record
-  like any other. A lost recheck seat is lost coverage, never "nothing new". The final check
-  runs no recheck seat.
+  like any other. A lost recheck seat is lost coverage: named on `Lost:` and counted on the
+  recheck line (`nothing new (1 tests seat lost)`), never shown as a plain "nothing new". The
+  final check runs no recheck seat.
 - Run-local finding IDs become unique as `<run-id>/<finding-id>`.
 - Review and verify post each round to the open PR at the run's head by default, always as a new
   comment (a final check posts its round only when it blocks the `--close-out` card; the card
